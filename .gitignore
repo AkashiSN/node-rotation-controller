@@ -1,0 +1,28 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.test
+*.out
+
+# Go
+vendor/
+*.prof
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.envrc
+
+# Helm
+charts/*/charts/
+charts/*/Chart.lock

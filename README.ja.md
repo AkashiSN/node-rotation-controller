@@ -1,0 +1,59 @@
+# node-rotation-controller
+
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-specification-orange.svg)](docs/ja/specification.md)
+
+Karpenter 配下の Node を、設定可能なメンテナンスウィンドウ内で **make-before-break（surge）** 型に先回り置換し、Karpenter の Forceful な `expireAfter` 発火を実質起こさないようにする Kubernetes コントローラ。
+
+EKS Auto Mode をはじめ、Node Expiration が Forceful で Disruption Budgets が効かない Karpenter v1+ 環境向け。
+
+## Status
+
+**仕様策定フェーズ。** 実装は未着手。設計の全体は [docs/ja/specification.md](docs/ja/specification.md) を参照。
+
+English: [README.md](README.md) / [docs/specification.md](docs/specification.md)
+
+## なぜ必要か
+
+Karpenter は Node の disruption を 2 種類に分類している。
+
+| 分類 | 例 | NodePool Disruption Budgets | 代替 Node の事前起動 |
+|------|-----|------------------------------|-----------------------|
+| Graceful | Drift, Consolidation | 適用される | する（make-before-break）|
+| **Forceful** | **Expiration**, Spot Interruption | **適用されない** | **しない** |
+
+Expiration は意図的に Forceful とされている（参照: 公式 [forceful-expiration design](https://github.com/kubernetes-sigs/karpenter/blob/main/designs/forceful-expiration.md)）。AMI パッチやセキュリティ更新を Budgets で無期限延期させないため。同 design は「運用者が独自に graceful rotation を実装する」ことも妥当解として明示している。EKS Auto Mode はさらに **21 日 hard cap** を強制する。
+
+帰結: Node は **必ず Force drain される瞬間が来る**（PDB 無視可、`terminationGracePeriod` でキャップ）。Karpenter は drain 開始の **後から** 代替を立ち上げるため、ピーク時間と衝突した瞬間に Pod Pending が発生する。
+
+本コントローラはこのギャップを以下で埋める。
+
+1. `expireAfter` 接近の `NodeClaim` を watch
+2. 設定可能な **メンテナンスウィンドウ**（例: 土曜 02:00–06:00）に置換を閉じ込める
+3. 代替 `NodeClaim` を先に作成、`Ready` を待ってから旧を delete（**surge**）
+4. 旧 Node の drain は Karpenter 標準の termination controller に委ねる（**PDB が効く voluntary 経路**）
+
+## スコープ外
+
+- Karpenter Consolidation / Drift / Disruption Budgets の置き換え（共存）
+- Spot 中断（[AWS Node Termination Handler](https://github.com/aws/aws-node-termination-handler) を使う）
+- OS パッチ起因の Node 再起動（[kured](https://github.com/kubereboot/kured) を使う）
+- Pod 再配置（[descheduler](https://github.com/kubernetes-sigs/descheduler) を使う）
+- アプリケーション側 warm-up（`readinessProbe` / `readinessGate` / `slow_start` の領分）
+
+## プロジェクト構成
+
+```
+.
+├── docs/
+│   ├── specification.md       仕様書（英語）
+│   └── ja/specification.md    日本語訳
+├── charts/                    Helm chart（予定）
+├── cmd/                       Controller エントリポイント（予定）
+├── api/                       CRD types（必要なら）（予定）
+└── internal/                  Reconciler 実装（予定）
+```
+
+## ライセンス
+
+Apache 2.0 — [LICENSE](LICENSE) を参照。
