@@ -58,6 +58,8 @@ This controller closes that gap by:
 
 This project is in the specification phase. Feedback on the design is welcome via GitHub Issues. Implementation contributions will be accepted once v1 scope is locked.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
