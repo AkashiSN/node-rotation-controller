@@ -45,7 +45,7 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 | **NodeClaim** | Karpenter v1 CRD; a 1:1 representation of an underlying instance (e.g., EC2) |
 | **surge** | Creating a replacement node and waiting until it is `Ready` before draining the old one (make-before-break) |
 | **maintenance window** | The **union** of one or more configured weekday/time-of-day ranges during which the controller may *start* a rotation. In-flight rotations are allowed to complete past the window boundary |
-| **age threshold** | The `creationTimestamp` age beyond which a `NodeClaim` becomes a rotation candidate. **Derived** per NodePool from the schedule and the target rotation chances (`minRotationChances`), not set directly (§3.2) |
+| **age threshold** | The `creationTimestamp` age beyond which a `NodeClaim` becomes a rotation candidate. **Derived** per NodePool from the schedule and the target rotation chances (`minRotationChances`), not set directly (§3.2). The actual per-node trigger anchors on each NodeClaim's own `spec.expireAfter` deadline; `ageThreshold` is its age-equivalent representative (§3.2) |
 | **backstop** | Karpenter's native `expireAfter` (Forceful Expiration), which still fires if the controller is unavailable. Intentionally retained as a safety net |
 
 ## 1.5 Position in the Karpenter Ecosystem
@@ -140,7 +140,7 @@ A `NodeClaim` becomes a rotation candidate when **all** of the following hold:
 
 | Condition | Default | Notes |
 |-----------|---------|-------|
-| `now() - metadata.creationTimestamp > ageThreshold` | `ageThreshold` is **derived** (see below), not set directly | Defaults to `auto`; an explicit override is allowed but still validated |
+| `now() > deadline − leadTime`, where `deadline = NodeClaim.metadata.creationTimestamp + NodeClaim.spec.expireAfter` and `leadTime = K·P + t_rot` | `leadTime` is **derived** (see below), not set directly | Anchored on each NodeClaim's **own** `spec.expireAfter` (its authoritative expiry), **not** the NodePool template. The derived `ageThreshold` is the age-equivalent of this trigger; defaults to `auto`, an explicit override is allowed but still validated |
 | Belongs to a `NodePool` matched by the configured selector | Required | A `NodePool` matched by `nodepoolSelectors` is in scope |
 | `status.conditions[Ready] == True` | Required | NotReady NodeClaims are skipped — an already-unhealthy node is left to EKS Node Auto Repair and the `expireAfter` backstop, not rotated here (the controller only owns the health of nodes it created during a surge) |
 | `metadata.annotations["noderotation.io/state"]` is empty, or `failed` past `retryBackoff` | Required | `pending`/`draining` are in-flight and driven by §5.2 step 1, not re-selected here; `failed` is retried after backoff (§5.3) |
@@ -151,12 +151,14 @@ When multiple claims are eligible they are sorted by age (oldest first).
 
 Rather than hand-tuning `ageThreshold` (which is error-prone — a too-loose value lets Forceful Expiration fire before a window arrives), the controller **derives it per NodePool** from the schedule and a target number of rotation chances.
 
+> **This is the central race.** Forceful Expiration fires at each node's `deadline` regardless of maintenance windows or PDBs, so the controller must *finish* a graceful surge rotation **before** that moment — every cycle. Candidate selection **is** that lookahead: a node is selected once its `deadline` falls within `leadTime = K·P + t_rot` of now (equivalently, `age > ageThreshold`). Read `leadTime` left to right — `K` worst-case window cycles (`K·P`) to *catch* a window, plus one node's completion time (`t_rot`) to *finish* inside it — and it guarantees the node sees at least `K` maintenance windows with enough headroom to complete before `expireAfter` can fire. `K ≥ 2` keeps a retry in hand if a window is missed or slow. The derivation below picks the largest such threshold so rotation still happens as late as safely possible.
+
 **Symbols**
 
 | Symbol | Meaning | Source |
 |--------|---------|--------|
-| `E` | `expireAfter` | NodePool `spec.template.spec.expireAfter` |
-| `tGP` | `terminationGracePeriod` | NodePool `spec.template.spec.terminationGracePeriod` |
+| `E` | `expireAfter` | Per-node: **`NodeClaim.spec.expireAfter`** (authoritative; anchored at the NodeClaim's `creationTimestamp`). NodePool `spec.template.spec.expireAfter` is used only as the **representative** for per-NodePool validation/logging — it does **not** propagate to existing NodeClaims (see note below) |
+| `tGP` | `terminationGracePeriod` | Per-node: `NodeClaim.spec.terminationGracePeriod`; NodePool `spec.template.spec.terminationGracePeriod` as the representative |
 | `P` | worst-case window period (largest gap between consecutive window occurrences) | derived from the `maintenanceWindows` union (§3.1) |
 | `t_rot` | upper bound on a single node's rotation time = `readyTimeout + tGP + buffer` (**`cooldownAfter` is not included** — the node is already drained before the cooldown; see the margin note below) | derived from config + NodePool |
 | `K` | desired guaranteed rotation chances (`minRotationChances`) | user-set; floor **1** |
@@ -170,6 +172,8 @@ ageThreshold (A) = E − (K·P + t_rot)
 This holds because the usable interval `[A, E − t_rot]` then spans at least `K` window occurrences in the worst phase (`floor(((E − t_rot) − A) / P) ≥ K`), each with `t_rot` of headroom to complete before `E`.
 
 > **Margin.** The bound is **tight**: the worst-phase guarantee is *exactly* `K` (`floor(K·P / P) = K`), with no built-in slack. Any safety margin must therefore come from `K` itself — `K ≥ 2` is recommended so a single missed or slow window still leaves a retry. `cooldownAfter` is the settle pause *between* consecutive rotations within a window; it does **not** count toward a single node's completion time (`t_rot`, which is why it was removed above) but it **does** factor into throughput (layer 2 below).
+
+> **Authoritative expiry source.** The deadline that drives the *per-node* trigger is read from each **`NodeClaim.spec.expireAfter`**, anchored at that NodeClaim's `creationTimestamp` — **not** from the NodePool's `spec.template.spec.expireAfter`. Karpenter stamps `expireAfter` onto the NodeClaim at creation, and Forceful Expiration fires at `creationTimestamp + NodeClaim.spec.expireAfter`. Later edits to the NodePool template do **not** propagate to existing NodeClaims; they only trigger drift-based replacement. The controller therefore anchors `leadTime` on each node's own `deadline`, and uses the template `E` solely as the **representative** value for the per-NodePool startup validation and the logged/derived `ageThreshold` (§4.2). When a node's own `spec.expireAfter` differs from the template (e.g. mid-drift, or after a template change), its trigger follows its own value — so the identity `now() > deadline − leadTime ⟺ age > ageThreshold` holds exactly only when the two coincide.
 
 **Validation** (layer 1 — scheduling feasibility)
 
@@ -200,7 +204,7 @@ A single reconcile cycle handles **one** node. v1 enforces serial processing **p
 
 The replacement node must belong to the **same NodePool** as the node being replaced. The controller therefore does **not** rotate by creating a standalone `NodeClaim`. (A standalone NodeClaim *is* provisionable — see §7.2 — but the resulting node has no NodePool owner, so its pods would persist on an unmanaged node that sits outside NodePool accounting, expiry, drift, and disruption budgets. In a cluster that deliberately separates NodePools, e.g. `api` vs `batch`, that is unacceptable.)
 
-Instead, the controller induces Karpenter to add a NodePool-owned node by creating a temporary **placeholder Pod** — a single low-priority "pause" Pod that the controller **creates and manages directly** (deliberately *not* via a Deployment/ReplicaSet/Job). Its `nodeSelector`/affinity matches the target NodePool's labels, and its resource requests are set to the **sum of the resource requests of the Pods currently scheduled on the candidate node** — the workload that must re-land after the drain. This forces Karpenter to provision a new node large enough to host that workload, rather than bin-pack the placeholder onto existing capacity. Karpenter provisions a new node *within that NodePool*. Once the old node is drained, the placeholder is removed and the new node is a normal member of the NodePool.
+Instead, the controller induces Karpenter to add a NodePool-owned node by creating a temporary **placeholder Pod** — a single low-priority "pause" Pod that the controller **creates and manages directly** (deliberately *not* via a Deployment/ReplicaSet/Job). Its scheduling requirements are copied from the **candidate node** — most importantly the AZ (`topology.kubernetes.io/zone`), plus the arch / instance-type / capacity-type constraints the rescheduled Pods depend on (see *Stateful and zonal workloads* below) — and its resource requests are set to the **sum of the resource requests of the Pods currently scheduled on the candidate node** — the workload that must re-land after the drain. This forces Karpenter to provision a new node, in the same zone and large enough to host that workload, rather than bin-pack the placeholder onto existing capacity. Karpenter provisions a new node *within that NodePool*. Once the old node is drained, the placeholder is removed and the new node is a normal member of the NodePool.
 
 Because the placeholder is a **bare Pod** (not backed by any controller) and is low-priority, when the rescheduled workload Pods need its space the scheduler **preempts** it and the placeholder is simply **deleted with no replacement**. (A Deployment/Job-backed pod would instead be recreated and re-pend, inducing extra node churn — which is exactly why a bare, controller-managed Pod is used.) Its only role is to reserve one node's worth of capacity until the drain lands the real Pods on it.
 
@@ -223,11 +227,12 @@ ROTATION (logical sequence; each step is a separate reconcile)
   │     annotate(candidate.node, do-not-disrupt=true)   // freeze old node from voluntary disruption
   │     placeholder := create_placeholder_workload(
   │         nodepool     = candidate.nodepool,          // SAME NodePool
-  │         nodeSelector = candidate.nodepool.labels,
+  │         requirements = match(candidate.node, surge.matchNodeRequirements), // same zone/arch/... (zonal PV rebind)
+  │         requests     = sum(requests of pods on candidate),
   │         annotations  = {do-not-disrupt: true},
   │         priority     = low,
   │         labels       = {surge-for: candidate.name},
-  │     )                                               // Karpenter adds a NodePool-owned node
+  │     )                                               // Karpenter adds a NodePool-owned node in the same AZ
   │
   ├─ surge_ready?  (placeholder scheduled onto a NEW node, created after started-at → that node Ready)   [state: pending]
   │     yes → annotate(new_node, do-not-disrupt=true)
@@ -266,6 +271,19 @@ The surge node's role is therefore to **pre-stage a landing zone** so that PDB-g
 
 In short: the controller guarantees a node-level surge; **Pod-level make-before-break is achieved by PDB + replica headroom, which the surge node's capacity enables — not by the controller itself** (consistent with G4).
 
+### Stateful and zonal workloads — matching the replacement node's requirements
+
+Because surge only **adds capacity** and never pins Pods to the new node (above), the rescheduled Pods land wherever the scheduler can place them. A Pod bound to a **zonal** PersistentVolume — EBS `gp3`/`io2`, or any volume whose PV carries a `topology.kubernetes.io/zone` `nodeAffinity` — can only reschedule onto a node in the **same AZ** as its volume. If the surge node is provisioned in a *different* AZ, that Pod has nowhere to land and stays `Pending` after the old node drains — defeating make-before-break for exactly the stateful workloads that need it most.
+
+The placeholder therefore replicates the **candidate node's scheduling requirements**, not merely the NodePool's labels. **Which** requirements are replicated is **configurable** via `surge.matchNodeRequirements` (§6): each listed key is copied from the candidate node onto the placeholder — either as a **`required`** (hard `nodeAffinity` / `nodeSelector`, value = the candidate's) or a **`preferred`** (soft `nodeAffinity`, relaxed under capacity pressure) constraint.
+
+- The default `required` set is **`topology.kubernetes.io/zone`** — pinning the surge node to the candidate's AZ so the existing EBS volume can re-attach — plus **`kubernetes.io/arch`** and **`karpenter.sh/capacity-type`** for arch/capacity parity. This is enough for zonal-PV rebind without pinning the exact instance type, which would needlessly shrink the schedulable pool and make same-AZ capacity harder to find.
+- Operators add keys for stricter parity — e.g. `node.kubernetes.io/instance-type` (or family) for exact-type parity, or any custom node label the workload's `nodeAffinity` / `nodeSelector` / `topologySpreadConstraints` depend on — or move keys to `preferred` to trade strictness for schedulability.
+
+The configured keys are read from the candidate `NodeClaim`'s `spec.requirements` and the candidate node's labels, **intersected with the NodePool's allowed requirements** — the intersection keeps the placeholder schedulable within the NodePool even if the NodePool template has since narrowed its allowed set (otherwise a now-disallowed candidate label would leave the placeholder unschedulable forever, tripping `readyTimeout` and rolling back). A key listed in config but absent on the candidate node is skipped. **Validation:** removing `topology.kubernetes.io/zone` from `required` **warns** — zonal-PV Pods may then strand if the surge node lands in another AZ.
+
+This only re-creates a **same-AZ landing zone**; it does **not** move storage. The CSI driver re-attaches the existing zonal volume to the new node in that AZ once the replacement Pod is scheduled there. Cross-AZ migration of zonal storage is out of scope — surge neither can nor should do it. (Implication: if the candidate node's AZ has no schedulable capacity for a same-zone replacement, the surge cannot complete and rolls back via `readyTimeout` (§3.3 *Rollback*); the old node is left in place and the `expireAfter` backstop still applies. NodePools fronting zonal-PV workloads should ensure each in-use AZ retains surge headroom — see R3.)
+
 ### Rollback behavior
 
 | Failure | Action |
@@ -299,6 +317,8 @@ If the controller is unavailable, the following safety net engages in order:
 4. The Auto Mode 21-day hard cap is the final ceiling
 
 > **Important**: backstop paths 2–4 are forceful — PDBs are respected only until `terminationGracePeriod` expires. Extended controller downtime restores the original risk profile. Note also that a **stale `karpenter.sh/do-not-disrupt`** left on a node by a controller that crashed mid-surge **suppresses path 2 (`expireAfter`)** on that node (§3.3); path 4 (the 21-day hard cap) is then the only ceiling until the startup sweep clears the marker.
+
+> **Graceful degradation — never worse than the status quo.** Every failure mode degrades onto Karpenter's native Forceful Expiration (path 2). If a rotation fails, a maintenance window is missed, or the controller is absent entirely, the node is still expired and drained by `expireAfter` **exactly as it would be without this controller**. The controller only ever moves rotation *earlier* and makes it *graceful*; by design it never removes the safety net or extends a node's life beyond `expireAfter` (the lone exception — a stale `do-not-disrupt` from a mid-surge crash, suppressing `expireAfter` until the startup sweep clears it, §3.3). So the **worst case equals today's baseline** — forceful, but bounded — which is precisely why the design is safe to adopt incrementally and why the §3.2 lead time is sized to win the race in the *normal* case rather than depended on for safety in the *failure* case.
 
 ---
 
@@ -512,6 +532,12 @@ data:
       readyTimeout: 15m        # surge node must reach Ready within this, else state=failed
       cooldownAfter: 10m       # settle pause between consecutive rotations in a window (not part of t_rot; affects throughput, §3.2)
       retryBackoff: 30m        # wait before re-selecting a failed NodeClaim (§5.3)
+      matchNodeRequirements:   # which candidate-node requirements the placeholder replicates (§3.3 "Stateful and zonal workloads")
+        required:              # hard nodeAffinity, value copied from candidate node; intersected with NodePool's allowed requirements
+          - topology.kubernetes.io/zone   # default: same-AZ for zonal-PV (EBS) rebind; removing it only warns
+          - kubernetes.io/arch
+          - karpenter.sh/capacity-type
+        preferred: []          # soft nodeAffinity; relaxed under capacity pressure. e.g. node.kubernetes.io/instance-type
 
     prePull:                   # v2 (disabled in v1)
       enabled: false
@@ -549,7 +575,7 @@ data:
 |---|------|------------|
 | R1 | Controller pod crashes / leader loss | `replicas=2` with leader election; the `expireAfter` backstop is retained; failure metrics alert |
 | R2 | Maintenance window too short to drain all candidates | The §3.2 throughput check warns up front; alert on `noderotation_candidates` failing to decrease for two consecutive windows; consider `maxUnavailable > 1` in a later version |
-| R3 | Surge NodeClaim cannot be launched (capacity / AZ shortage / NodePool at `limits`) | The controller pre-checks NodePool `limits` headroom before starting (§5.2) and warns if at the limit; ready-timeout triggers rollback otherwise; NodePool should already permit multi-AZ / multi-instance-type |
+| R3 | Surge NodeClaim cannot be launched (capacity / AZ shortage / NodePool at `limits`) | The controller pre-checks NodePool `limits` headroom before starting (§5.2) and warns if at the limit; ready-timeout triggers rollback otherwise; NodePool should already permit multi-AZ / multi-instance-type. **Zonal caveat:** the surge node is pinned to the candidate's AZ for zonal-PV rebind (§3.3 *Stateful and zonal workloads*), so a same-AZ capacity shortage cannot fall back to another zone — keep per-AZ surge headroom for NodePools fronting zonal-PV workloads |
 | R4 | Drain blocks on a misconfigured PDB | Karpenter's `terminationGracePeriod` ultimately forces drain; PDB review is the application owner's responsibility |
 | R5 | Forgotten freeze during business-critical period | The freeze annotation is meant to be managed declaratively (e.g., via GitOps) rather than ad-hoc |
 | R6 | Verification gap when test clusters routinely turn over (e.g., nightly shutdown) | Disable shutdown for a soak period that exceeds the age threshold to validate end-to-end rotation |
