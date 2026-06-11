@@ -105,7 +105,7 @@ This controller fills the second and third rows above and substantially simplifi
 | Mechanism | Relationship |
 |-----------|--------------|
 | Karpenter Consolidation / Drift | **Coexists.** This controller takes over only the Expiration path. Voluntary disruption from Consolidation/Drift still flows through Karpenter |
-| NodePool `expireAfter` | **Coexists** as backstop. Recommended to keep `expireAfter > age threshold` |
+| NodePool `expireAfter` | **Coexists** as backstop. The derived `ageThreshold` sits below `expireAfter` by construction (`A = E − (K·P + t_rot)`, §3.2), and validation fails (**fatal**) when the schedule cannot guarantee the configured rotation chances — the gap is not hand-tuned |
 | NodePool `terminationGracePeriod` | **Depended on.** After the controller deletes an old `NodeClaim`, Karpenter's termination controller honors PDBs during drain, bounded by `terminationGracePeriod` |
 | PodDisruptionBudget | **Depended on.** Drain after the controller's `NodeClaim` deletion follows the voluntary path, so PDBs are strictly respected |
 | `topologySpreadConstraints` | **Depended on.** Even with surge, all pods on a node disappear together when that node is finally drained. Spreading remains essential |
@@ -143,7 +143,7 @@ A `NodeClaim` becomes a rotation candidate when **all** of the following hold:
 | `now() > deadline − leadTime`, where `deadline = NodeClaim.metadata.creationTimestamp + NodeClaim.spec.expireAfter` and `leadTime = K·P + t_rot` | `leadTime` is **derived** (see below), not set directly | Anchored on each NodeClaim's **own** `spec.expireAfter` (its authoritative expiry), **not** the NodePool template. The derived `ageThreshold` is the age-equivalent of this trigger; defaults to `auto`, an explicit override is allowed but still validated |
 | Belongs to a `NodePool` matched by the configured selector | Required | A `NodePool` matched by `nodepoolSelectors` is in scope |
 | `status.conditions[Ready] == True` | Required | NotReady NodeClaims are skipped — an already-unhealthy node is left to EKS Node Auto Repair and the `expireAfter` backstop, not rotated here (the controller only owns the health of nodes it created during a surge) |
-| `metadata.annotations["noderotation.io/state"]` is empty, or `failed` past `retryBackoff` | Required | `pending`/`draining` are in-flight and driven by §5.2 step 1, not re-selected here; `failed` is retried after backoff (§5.3) |
+| `metadata.annotations["noderotation.io/state"]` is empty, or `failed` past its escalated backoff | Required | `pending`/`draining` are in-flight and driven by §5.2 step 1, not re-selected here; `failed` is retried after an **escalating** backoff (doubling per consecutive failure, §5.3) |
 
 When multiple claims are eligible they are sorted by age (oldest first).
 
@@ -181,18 +181,21 @@ This holds because the usable interval `[A, E − t_rot]` then spans at least `K
 |-----------|---------|
 | `K < 1` | **fatal** — invalid config |
 | `K < 2` (i.e. `K = 1`) | **warn** — a single missed/failed window leaves no retry before Forceful Expiration |
-| `A ≤ 0` (i.e. `E ≤ K·P + t_rot`; the schedule cannot guarantee even `K` chances) | **fatal** — raise `E` (Auto Mode allows up to `21d − tGP`), add window occurrences to shrink `P`, or lower `K` |
+| `A ≤ 0` (i.e. `E ≤ K·P + t_rot`; the schedule cannot guarantee even `K` chances) | **fatal** — raise `E` (Auto Mode allows up to `21d − tGP`), add window occurrences to shrink `P`, or lower `K`. Note that raising the template `E` heals **new** NodeClaims only — existing ones keep their stamped value and are surfaced by the per-node check (layer 3 below) until they rotate out |
 | `0 < A < P` (a node becomes a candidate before it has lived even one window period) | **warn** — extremely aggressive: nodes rotate very young, maximizing churn/surge cost. Raise `E` or lower `K` |
 | Auto Mode and `E + tGP > 21d` | **warn** — violates the hard cap |
+| `tGP` unset (self-managed Karpenter allows nil) | **warn** — the drain phase is then unbounded by Karpenter (a blocking PDB or stuck finalizer can hold it forever); the §5.2 stuck-drain alert falls back to a fixed bound |
 | NodePool `spec.limits` resource budget (`{cpu, memory, …}`) leaves no room for the surge node's requests (the headroom for one more node is exhausted) | **warn** — surge cannot land without free budget; raise `limits` to leave headroom for one node's worth of resources. The controller re-checks this at rotation start (§5.2) |
 
-**Validation** (layer 2 — throughput) — independent of the derivation; it only **warns** and never changes `A`. Because rotations are serial within a window and separated by `cooldownAfter` (enforced as a per-NodePool start gate in §5.2 step 2), each window occurrence of duration `D` can rotate `C = m · floor(D / (t_rot + cooldownAfter))` nodes (`m = surge.maxUnavailable`, fixed at `1` in v1). If the candidate arrival rate exceeds capacity (`C < N · P / A`, where `N` is the NodePool node count), candidates accumulate and some may reach Forceful Expiration:
+**Validation** (layer 2 — throughput) — independent of the derivation; it only **warns** and never changes `A`. Because rotations are serial within a window and separated by `cooldownAfter` (enforced as a per-NodePool start gate in §5.2 step 2), each window occurrence of duration `D` can rotate `C = m · floor(D / (t_rot + cooldownAfter))` nodes (`m = surge.maxUnavailable`, fixed at `1` in v1). This bound is deliberately **conservative**: the window gates only rotation *starts* (§3.1), so one further rotation can typically start near the window's edge and complete past it — the formula ignores that final start, erring toward a warning. If the candidate arrival rate exceeds capacity (`C < N · P / A`, where `N` is the NodePool node count), candidates accumulate and some may reach Forceful Expiration:
 
 - **warn**: widen windows (larger `D`), add occurrences (smaller `P`), or raise `maxUnavailable` (reserved for a later version).
 
-> **Worked example.** Auto Mode, `E = 14d`, `tGP = 1h`, union `{Wed, Sat} 02:00–06:00` → `P = 4d`, `t_rot ≈ 1.5h` (`readyTimeout 15m + tGP 1h + buffer`), `K = 2`. Then `A = 14d − (2·4d + 1.5h) ≈ 5.9d`: nodes become candidates at ~5.9d and are guaranteed 2 windows before 14d. Throughput `C = floor(4h / (1.5h + 10m)) = 2` per occurrence.
+**Validation** (layer 3 — per-node, runtime) — the two layers above use the NodePool **template** `E`/`tGP` as representatives, but the actual trigger is per-NodeClaim (*Authoritative expiry source* above), so a passing template does not prove every *existing* claim is satisfiable — e.g. after the template `E` was raised to clear a fatal, the already-stamped claims still carry the short value. On each reconcile the controller therefore also checks every in-scope NodeClaim against its **own** `spec.expireAfter`: a claim with `E_node ≤ K·P + t_rot` (per-node `A ≤ 0`) can no longer be guaranteed `K` chances — it is counted in `noderotation_short_lead_nodes` (§4.2), warned via an event, and rotated **best-effort at the earliest opportunity** (by the trigger above it is already a candidate).
+
+> **Worked example.** Auto Mode, `E = 14d`, `tGP = 1h`, union `{Wed, Sat} 02:00–06:00` → `P = 4d`, `t_rot ≈ 1.5h` (`readyTimeout 15m + tGP 1h + buffer`), `K = 2`. Then `A = 14d − (2·4d + 1.5h) ≈ 5.9d`: nodes become candidates at ~5.9d and are guaranteed 2 windows before 14d. Throughput `C = floor(4h / (1.5h + 10m)) = 2` per occurrence (conservative — a third rotation can still *start* before the window closes and complete past it, §3.1).
 >
-> A **weekly-only** window `{Sat}` has `P = 7d`, so `A = 14d − (2·7d) = 0` → **fatal**: weekly windows cannot guarantee 2 chances at `E = 14d`. This is exactly why a fixed `expireAfter − 4d` default was unsafe; the derivation surfaces it and tells the operator to raise `E` (to ~`20d`, giving `A ≈ 6d`) or add a window day.
+> A **weekly-only** window `{Sat}` has `P = 7d`, so `A = 14d − (2·7d + 1.5h) ≈ −1.5h ≤ 0` → **fatal**: weekly windows cannot guarantee 2 chances at `E = 14d`. This is exactly why a fixed `expireAfter − 4d` default was unsafe; the derivation surfaces it and tells the operator to raise `E` (to ~`20d`, giving `A ≈ 6d`) or add a window day. (Raising `E` takes effect for **new** NodeClaims only; the already-stamped ones are caught by the layer-3 per-node check until they rotate out.)
 
 The derived `A`, the guaranteed chances `G`, and `P` are surfaced per NodePool via startup logs and metrics (§4.2). With the auto-derivation, `G = K` by construction; the separate `G` exists so that when an explicit `ageThreshold` override is used, `G` is **recomputed from that override** and can be observed diverging from the requested `K`.
 
@@ -204,11 +207,11 @@ A single reconcile cycle handles **one** node. v1 enforces serial processing **p
 
 The replacement node must belong to the **same NodePool** as the node being replaced. The controller therefore does **not** rotate by creating a standalone `NodeClaim`. (A standalone NodeClaim *is* provisionable — see §7.2 — but the resulting node has no NodePool owner, so its pods would persist on an unmanaged node that sits outside NodePool accounting, expiry, drift, and disruption budgets. In a cluster that deliberately separates NodePools, e.g. `api` vs `batch`, that is unacceptable.)
 
-Instead, the controller induces Karpenter to add a NodePool-owned node by creating a temporary **placeholder Pod** — a single low-priority "pause" Pod that the controller **creates and manages directly** (deliberately *not* via a Deployment/ReplicaSet/Job). Its scheduling requirements are copied from the **candidate node** — most importantly the AZ (`topology.kubernetes.io/zone`), plus the arch / instance-type / capacity-type constraints the rescheduled Pods depend on (see *Stateful and zonal workloads* below) — and its resource requests are set to the **sum of the resource requests of the *reschedulable* Pods currently scheduled on the candidate node** — the workload that must re-land after the drain. This sum **excludes** Pods that Karpenter does not need to re-fit onto fresh capacity: **DaemonSet** Pods (kube-proxy, CNI, CSI, log shippers, …) — Karpenter already adds the DaemonSet overhead to *every* new node it provisions, so counting them here would **double-count** and over-provision — plus mirror/static Pods, completed (`Succeeded`/`Failed`) Pods, and Pods pinned to this specific node (e.g. by hostname affinity) that cannot re-land elsewhere. This forces Karpenter to provision a new node, in the same zone and large enough to host that workload, rather than bin-pack the placeholder onto existing capacity. Karpenter provisions a new node *within that NodePool*. Once the old node is drained, the placeholder is removed and the new node is a normal member of the NodePool.
+Instead, the controller induces Karpenter to add a NodePool-owned node by creating a temporary **placeholder Pod** — a single low-priority "pause" Pod that the controller **creates and manages directly** (deliberately *not* via a Deployment/ReplicaSet/Job). Its scheduling requirements are copied from the **candidate node** — most importantly the AZ (`topology.kubernetes.io/zone`), plus the arch / instance-type / capacity-type constraints the rescheduled Pods depend on (see *Stateful and zonal workloads* below) — and its resource requests are set to the **sum of the resource requests of the *reschedulable* Pods currently scheduled on the candidate node** — the workload that must re-land after the drain. This sum **excludes** Pods that Karpenter does not need to re-fit onto fresh capacity: **DaemonSet** Pods (kube-proxy, CNI, CSI, log shippers, …) — Karpenter already adds the DaemonSet overhead to *every* new node it provisions, so counting them here would **double-count** and over-provision — plus mirror/static Pods, completed (`Succeeded`/`Failed`) Pods, and Pods pinned to this specific node (e.g. by hostname affinity) that cannot re-land elsewhere. A hard anti-affinity additionally excludes the **candidate node itself**, so the placeholder can never reserve space on the very node about to be drained. Sized this way, the placeholder forces Karpenter to provision a new node *within that NodePool* — in the same zone and large enough to host that workload — **whenever existing spare capacity cannot absorb it**. If the scheduler instead bin-packs the placeholder onto *pre-existing* spare capacity, that is equally acceptable (the **capacity-absorb path**): the placeholder is then *reserving* exactly the displaced workload's worth of existing headroom, so the drain is just as safe without a new node. This is the normal outcome for DaemonSet-heavy or low-utilization candidates whose reschedulable sum is small — nodes that would otherwise be structurally unable to rotate, since no sizing could force a new node for them. Either way, the node the placeholder lands on (the **surge target**) is frozen for the duration of the rotation (see *Guarding against mid-surge disruption* below); once the old node is drained, the placeholder is removed and the surge target remains a normal member of the NodePool.
 
 Because the placeholder is a **bare Pod** (not backed by any controller) and is low-priority, when the rescheduled workload Pods need its space the scheduler **preempts** it and the placeholder is simply **deleted with no replacement**. (A Deployment/Job-backed pod would instead be recreated and re-pend, inducing extra node churn — which is exactly why a bare, controller-managed Pod is used.) Its only role is to reserve one node's worth of capacity until the drain lands the real Pods on it.
 
-**Placeholder priority.** The placeholder runs under a **dedicated `PriorityClass`** with a **negative value** (`globalDefault: false`, below the `0` of normal workloads and far below the system-critical classes), and with `preemptionPolicy: Never`. This makes it the deliberate preemption *victim*: the rescheduled workload (priority `≥ 0`) preempts it as described above, while the placeholder itself **never** preempts real workloads or system-critical Pods, and while pending it simply waits for Karpenter to add a node rather than evicting any existing Pod to bin-pack — reinforcing the *new-node-only* intent. **Caveat — preemption is not exclusive to the rescheduled workload.** A negative priority makes the placeholder *maximally* preemptible, so the priority value alone cannot stop an **unrelated higher-priority pending Pod** from preempting it mid-surge (before the drain has even produced the workload it is holding space for). If that happens, the state machine observes the placeholder missing and recreates it (the *placeholder missing → recreate* branch in §3.3 above). This loop is **bounded, not perpetual**: the entire `pending` phase is capped by `readyTimeout`, after which the rotation **rolls back** and degrades to the `expireAfter` baseline (§3.3 *Rollback*) — so even a sustained hostile-preemption scenario self-terminates into a clean failure rather than churning forever.
+**Placeholder priority.** The placeholder runs under a **dedicated `PriorityClass`** with a **negative value** (`globalDefault: false`, below the `0` of normal workloads and far below the system-critical classes), and with `preemptionPolicy: Never`. This makes it the deliberate preemption *victim*: the rescheduled workload (priority `≥ 0`) preempts it as described above, while the placeholder itself **never** preempts real workloads or system-critical Pods: while pending it never evicts any existing Pod to make room — it either fits into genuinely *free* pre-existing capacity (the capacity-absorb path above) or waits for Karpenter to add a node. **Caveat — preemption is not exclusive to the rescheduled workload.** A negative priority makes the placeholder *maximally* preemptible, so the priority value alone cannot stop an **unrelated higher-priority pending Pod** from preempting it mid-surge (before the drain has even produced the workload it is holding space for). If that happens, the state machine observes the placeholder missing and recreates it (the pending handler's idempotent re-assertion, §5.2). This loop is **bounded, not perpetual**: the entire `pending` phase is capped by `readyTimeout`, after which the rotation **rolls back** and degrades to the `expireAfter` baseline (§3.3 *Rollback*) — so even a sustained hostile-preemption scenario self-terminates into a clean failure rather than churning forever.
 
 ### Guarding against mid-surge disruption
 
@@ -217,51 +220,63 @@ While the old and new nodes coexist, Karpenter's Consolidation/Drift could race 
 - the **new** node, briefly underutilized, could be judged "empty/underutilized" and consolidated away immediately;
 - the **old** node could be consolidated/drifted before the controller has finished orchestrating, or be chosen for removal ahead of the intended order.
 
-To prevent both, the controller applies `karpenter.sh/do-not-disrupt` to **both** the old and the new node for the duration of the surge. Per Karpenter's documented semantics, this annotation blocks only **voluntary disruption** (Consolidation, Drift, Emptiness) — it does **not** exclude a node from the *forceful* methods: **Forceful Expiration (`expireAfter`)**, Interruption, or Node Repair. (Confirmed in the Karpenter `nodeclaim/expiration` controller, which deletes an expired NodeClaim the moment `creationTimestamp + expireAfter` is reached without ever consulting the annotation; the node-level `do-not-disrupt` check lives solely on the voluntary candidate-selection path.) Winning the race against Forceful Expiration is therefore **not** this annotation's job — that is handled structurally by the `leadTime` sizing in §3.2, which selects each node early enough to finish a graceful surge **before** its `deadline`. The annotation's role here is narrower but still essential: it stops Karpenter's own optimizer from consolidating or drifting the half-built surge pair out from under the controller. The controller's own explicit `delete` of the old NodeClaim drains it through the voluntary (termination-controller) path regardless of the annotation. The annotations are removed at the end so the new node rejoins normal management. (**Residual risk:** because the annotation does **not** extend the old node's life, if its `deadline` arrives while the surge is still waiting for the replacement to become `Ready`, Karpenter force-expires the old node on schedule — landing the rescheduled Pods on capacity that may not yet exist. This is a tight-`leadTime` / last-window edge case; it degrades to the native baseline rather than being prevented — see §3.5.)
+To prevent both, the controller applies `karpenter.sh/do-not-disrupt` to **both** the old node and the surge target (the node the placeholder landed on — newly provisioned or, on the capacity-absorb path, pre-existing) for the duration of the surge, and marks each frozen node with `noderotation.io/surge-for=<old NodeClaim name>` so its freeze is attributable to this rotation (§5.3) — the marker is what lets the controller find the surge target again after the old NodeClaim is gone, and what distinguishes its own `do-not-disrupt` from one applied by an operator. Per Karpenter's documented semantics, this annotation blocks only **voluntary disruption** (Consolidation, Drift, Emptiness) — it does **not** exclude a node from the *forceful* methods: **Forceful Expiration (`expireAfter`)**, Interruption, or Node Repair. (Confirmed in the Karpenter `nodeclaim/expiration` controller, which deletes an expired NodeClaim the moment `creationTimestamp + expireAfter` is reached without ever consulting the annotation; the node-level `do-not-disrupt` check lives solely on the voluntary candidate-selection path.) Winning the race against Forceful Expiration is therefore **not** this annotation's job — that is handled structurally by the `leadTime` sizing in §3.2, which selects each node early enough to finish a graceful surge **before** its `deadline`. The annotation's role here is narrower but still essential: it stops Karpenter's own optimizer from consolidating or drifting the half-built surge pair out from under the controller. The controller's own explicit `delete` of the old NodeClaim drains it through the voluntary (termination-controller) path regardless of the annotation. The annotations are removed at the end so the new node rejoins normal management. (**Residual risk:** because the annotation does **not** extend the old node's life, if its `deadline` arrives while the surge is still waiting for the replacement to become `Ready`, Karpenter force-expires the old node on schedule — landing the rescheduled Pods on capacity that may not yet exist. This is a tight-`leadTime` / last-window edge case; it degrades to the native baseline rather than being prevented — see §3.5.)
 
-The diagram below is the **logical** sequence of one rotation. It is **not** executed as a single blocking call: the controller implements it as a **non-blocking, requeue-driven state machine** (§5.2), persisting progress in the `noderotation.io/state` annotation on the old NodeClaim (§5.3). Each `wait_*` step is therefore *a state that is re-evaluated on subsequent reconciles*, not a goroutine that blocks a worker. The `[state: …]` tags map each step to that annotation.
+The diagram below is the **logical** sequence of one rotation. It is **not** executed as a single blocking call: the controller implements it as a **non-blocking, requeue-driven state machine** (§5.2), persisting progress in the `noderotation.io/state` annotation on the old NodeClaim and anchoring the rotation itself in the `noderotation.io/active-rotation` annotation on the NodePool — the anchor **outlives the old NodeClaim**, which is deleted when the rotation succeeds, and is what drives the completion step (§5.3). Each `wait_*` step is therefore *a state that is re-evaluated on subsequent reconciles*, not a goroutine that blocks a worker. The `[state: …]` tags map each step to the state annotation.
 
 ```
 ROTATION (logical sequence; each step is a separate reconcile)
   │
   ├─ select candidate (old node to retire)              [state: (none) → pending]
+  │     annotate(nodepool, active-rotation=candidate.name)  // durable anchor FIRST; outlives the old NodeClaim
   │     annotate(candidate, state=pending, started-at=now)
-  │     annotate(candidate.node, do-not-disrupt=true)   // freeze old node from voluntary disruption
+  │     freeze(candidate.node, surge-for=candidate.name)    // do-not-disrupt + ownership marker
   │     placeholder := create_placeholder_workload(
   │         nodepool     = candidate.nodepool,          // SAME NodePool
-  │         requirements = match(candidate.node, surge.matchNodeRequirements), // same zone/arch/... (zonal PV rebind)
+  │         requirements = match(candidate.node, surge.matchNodeRequirements)  // same zone/arch/... (zonal PV rebind)
+  │                        + anti-affinity to candidate.node,  // never reserve space on the node being drained
   │         requests     = sum(requests of reschedulable pods on candidate), // excl. DaemonSet / mirror / completed / node-pinned
   │         annotations  = {do-not-disrupt: true},
   │         priority     = placeholderPriorityClass,        // dedicated, negative value; preemptionPolicy=Never
   │         labels       = {surge-for: candidate.name},
-  │     )                                               // Karpenter adds a NodePool-owned node in the same AZ
+  │     )       // Karpenter adds a NodePool-owned node in the same AZ — or the placeholder bin-packs
+  │             //   onto pre-existing spare capacity (capacity-absorb path; equally acceptable, see above)
+  │     // every pending-phase reconcile RE-ASSERTS this block idempotently: a freeze or placeholder
+  │     //   lost to a crash / preemption is restored on the next pass
   │
-  ├─ surge_ready?  (placeholder scheduled onto a NEW node, created after started-at → that node Ready)   [state: pending]
-  │     yes → annotate(new_node, do-not-disrupt=true)
+  ├─ surge_ready?  (placeholder Running on a Ready host node ≠ candidate.node)   [state: pending]
+  │     yes → host := placeholder.node                  // newly provisioned, or pre-existing (capacity-absorb)
+  │           freeze(host, surge-for=candidate.name)
   │           annotate(candidate, state=draining)
   │           delete(candidate)                         // explicit; not blocked by do-not-disrupt
-  │     no, placeholder missing (lost / crash after state write) →
-  │           recreate_placeholder(candidate); requeue(30s)
   │     no, and elapsed(started-at) > readyTimeout(15m) → FAIL:
-  │           delete(placeholder); unfreeze(candidate.node)
-  │           annotate(candidate, state=failed, failed-at=now); alert
+  │           delete(placeholder)
+  │           reap surge NodeClaim if identifiable      // explicit; don't rely on Consolidation (Rollback below)
+  │           unfreeze(candidate.node)
+  │           annotate(candidate, state=failed, failed-at=now, retry-count+=1)
+  │           clear(nodepool, active-rotation); alert
   │     else → requeue(30s)                             // still waiting; non-blocking
   │
   ├─ candidate_gone?  (old NodeClaim finalized away)              [state: draining]
   │     // Karpenter termination controller drains gracefully, respecting PDBs
-  │     // up to terminationGracePeriod.
-  │     yes → delete(placeholder)                       // release the pause pod;
-  │           unfreeze(new_node)                        //   its node stays as NodePool capacity
-  │           annotate(nodepool, last-rotation-at=now)  // cooldown anchor; lives on the NodePool because
-  │           emit_metrics(success)                     //   the old NodeClaim (per-rotation state) is now gone
-  │     else → requeue(30s)                             // bounded by terminationGracePeriod + buffer
+  │     // up to terminationGracePeriod. The draining handler re-issues the idempotent
+  │     // delete(candidate) if no deletionTimestamp is present (crash between state write and delete).
+  │     yes → COMPLETE — driven by the NodePool anchor, which survives the old NodeClaim:
+  │           delete(placeholder)                       // release the pause pod
+  │           unfreeze(node with surge-for=candidate.name)  // surge target found by its marker
+  │           annotate(nodepool, last-rotation-at=now)  // cooldown anchor
+  │           clear(nodepool, active-rotation)          // release the serial gate LAST
+  │           emit_metrics(success)
+  │     no, and elapsed(candidate.deletionTimestamp) > tGP + buffer →
+  │           stuck-drain alert; state stays draining (the serial gate is held on purpose — §5.2)
+  │     else → requeue(30s)
   │
   └─ cooldown is enforced at the START gate (§5.2 step 2), NOT by requeuing here:
         the next rotation in this NodePool waits until
         now − nodepool/last-rotation-at ≥ cooldownAfter.                 [state: (cleared by deletion)]
 ```
 
-> The placeholder's only job is to add exactly one node's worth of capacity to the NodePool ahead of the drain (make-before-break). Its requests are sized to the **sum of the candidate node's *reschedulable* Pod requests** (excluding DaemonSet, mirror, completed, and node-pinned Pods — see §3.3 above), so Karpenter must launch a *new* node to fit it. As a second guard, the `surge_ready` check additionally requires that the placeholder actually landed on a node whose `creationTimestamp` is *after* `started-at` (i.e. genuinely new, not bin-packed onto pre-existing capacity) — so a falsely-satisfied surge can never delete the old node with no real headroom added. Because these requests define the surge node's resource footprint, they are also what the `surge_headroom` pre-check (§5.2) tests against the NodePool's remaining `spec.limits` resource budget. The exact request padding **and the precise exclusion filter** (DaemonSet / mirror / completed / node-pinned) are finalized in the PoC.
+> The placeholder's only job is to reserve exactly one node's worth of capacity ahead of the drain (make-before-break). Its requests are sized to the **sum of the candidate node's *reschedulable* Pod requests** (excluding DaemonSet, mirror, completed, and node-pinned Pods — see §3.3 above), so Karpenter launches a *new* node whenever existing spare capacity cannot fit it. The guard that protects the drain is **physical reservation**: `surge_ready` requires the placeholder to be *Running* on a *Ready* node **other than the candidate** (a hard anti-affinity already excludes the candidate at scheduling time). Whether that host is newly provisioned or pre-existing (the capacity-absorb path above), its admission means the reschedulable workload's worth of capacity is now physically held — so the old node is never deleted without real headroom in place. Whether the host's `creationTimestamp` postdates `started-at` is still recorded (event/metrics) to distinguish a true surge from capacity absorption, but it is observability, not a gate. Because these requests define the surge node's resource footprint, they are also what the `surge_headroom` pre-check (§5.2) tests against the NodePool's remaining `spec.limits` resource budget (conservative: the capacity-absorb path consumes no new budget, but v1 still requires the headroom before starting). The exact request padding **and the precise exclusion filter** (DaemonSet / mirror / completed / node-pinned) are finalized in the PoC.
 
 ### Pod-level behavior — node-level make-before-break only
 
@@ -280,7 +295,7 @@ In short: the controller guarantees a node-level surge; **Pod-level make-before-
 
 Because surge only **adds capacity** and never pins Pods to the new node (above), the rescheduled Pods land wherever the scheduler can place them. A Pod bound to a **zonal** PersistentVolume — EBS `gp3`/`io2`, or any volume whose PV carries a `topology.kubernetes.io/zone` `nodeAffinity` — can only reschedule onto a node in the **same AZ** as its volume. If the surge node is provisioned in a *different* AZ, that Pod has nowhere to land and stays `Pending` after the old node drains — defeating make-before-break for exactly the stateful workloads that need it most.
 
-The placeholder therefore replicates the **candidate node's scheduling requirements**, not merely the NodePool's labels. **Which** requirements are replicated is **configurable** via `surge.matchNodeRequirements` (§6): each listed key is copied from the candidate node onto the placeholder — either as a **`required`** (hard `nodeAffinity` / `nodeSelector`, value = the candidate's) or a **`preferred`** (soft `nodeAffinity`, relaxed under capacity pressure) constraint.
+The placeholder therefore replicates the **candidate node's scheduling requirements**, not merely the NodePool's labels. **Which** requirements are replicated is **configurable** via `surge.matchNodeRequirements` (§5.4): each listed key is copied from the candidate node onto the placeholder — either as a **`required`** (hard `nodeAffinity` / `nodeSelector`, value = the candidate's) or a **`preferred`** (soft `nodeAffinity`, relaxed under capacity pressure) constraint.
 
 - The default `required` set is **`topology.kubernetes.io/zone`** — pinning the surge node to the candidate's AZ so the existing EBS volume can re-attach — plus **`kubernetes.io/arch`** and **`karpenter.sh/capacity-type`** for arch/capacity parity. This is enough for zonal-PV rebind without pinning the exact instance type, which would needlessly shrink the schedulable pool and make same-AZ capacity harder to find.
 - Operators add keys for stricter parity — e.g. `node.kubernetes.io/instance-type` (or family) for exact-type parity, or any custom node label the workload's `nodeAffinity` / `nodeSelector` / `topologySpreadConstraints` depend on — or move keys to `preferred` to trade strictness for schedulability.
@@ -293,10 +308,10 @@ This only re-creates a **same-AZ landing zone**; it does **not** move storage. T
 
 | Failure | Action |
 |---------|--------|
-| New node not `Ready` within timeout | Delete the placeholder workload (Karpenter reaps the unneeded node); remove `do-not-disrupt` from the old node; leave the old node in place; emit alert |
+| New node not `Ready` within timeout | Delete the placeholder workload **and explicitly delete the surge NodeClaim it induced, when one is identifiable** (the new node the placeholder is bound or nominated to). Consolidation is *not* relied on to reap it: on a NodePool where consolidation is effectively disabled (e.g. `WhenEmpty` with a long `consolidateAfter`, or `nodes: "0"` budgets outside the window) an abandoned surge node would otherwise stay billed until its own `expireAfter`. Remove `do-not-disrupt` from the old node; leave the old node in place; emit alert |
 | New node becomes `NotReady` after old one was deleted | The old node's drain is already in flight and cannot be reversed; rely on Karpenter to reconcile capacity for the rescheduled pods |
 | Karpenter API unavailable | Skip; the next reconcile retries |
-| Controller dies mid-surge | `do-not-disrupt` and the placeholder may be left behind; a startup reconciliation sweep clears stale `noderotation.io/*` markers and orphaned placeholders |
+| Controller dies mid-surge | The rotation resumes exactly from the `noderotation.io/active-rotation` anchor on the NodePool (§5.2 step 1); every state handler re-asserts its phase's side effects idempotently, so a freeze, placeholder, or delete lost to the crash is restored on the next reconcile. A startup sweep additionally clears markers that no anchor references (the precise staleness rule is in §5.3) |
 
 > v1 processes one node per cycle. If the maintenance window is too short to accommodate all candidates, the unprocessed ones roll over to the next window. The `expireAfter` backstop ensures eventual rotation (in the forceful path) even in pathological cases.
 
@@ -350,6 +365,8 @@ Prometheus metrics exposed on `/metrics`:
 | `noderotation_age_threshold_seconds` | Gauge | `nodepool` | Derived `ageThreshold` (§3.2) |
 | `noderotation_rotation_chances` | Gauge | `nodepool` | Guaranteed rotation chances `G` for the derived threshold |
 | `noderotation_window_period_seconds` | Gauge | `nodepool` | Worst-case window period `P` of the schedule union |
+| `noderotation_short_lead_nodes` | Gauge | `nodepool` | NodeClaims whose **own** `spec.expireAfter` can no longer guarantee `K` chances (per-node `A ≤ 0`; §3.2 layer 3) |
+| `noderotation_drain_stuck` | Gauge | `nodepool` | 0/1: the in-flight rotation's drain has exceeded `tGP + buffer` (§5.2) |
 
 > **Label note.** `noderotation_window_period_seconds` carries a `nodepool` label, but in v1 the maintenance window is **cluster-wide** (`maintenanceWindows` is a single union, §3.1) — so `P` is identical across all NodePools and this metric reports the same value for every `nodepool`. The label is **forward-looking**: it is retained so the series shape stays stable when per-NodePool windows land (§7.3 Open Question 2). By contrast `noderotation_age_threshold_seconds` and `noderotation_rotation_chances` *already* vary per NodePool in v1 — they fold in each NodePool's representative `expireAfter`/`terminationGracePeriod` — so their `nodepool` label is load-bearing today; and `noderotation_window_active` is deliberately label-free because window *membership* is a single cluster-wide truth in v1.
 
@@ -358,6 +375,8 @@ Suggested alerts:
 - `increase(noderotation_completed_total{outcome="failure"}[1h]) > 0`
 - `noderotation_candidates > 0` for two consecutive windows (controller falling behind)
 - `noderotation_window_active == 1` for the full window with zero completions and non-zero candidates
+- `noderotation_drain_stuck == 1` (drain blocked past `tGP + buffer` — blocking PDB or stuck finalizer; §5.2)
+- `noderotation_short_lead_nodes > 0` (NodeClaims whose stamped `expireAfter` can no longer guarantee `K` chances; §3.2 layer 3)
 
 ## 4.3 RBAC and Cloud Permissions
 
@@ -389,7 +408,7 @@ v2 (image pre-pull) and v3 (synthetic warm-up) Jobs run as pods on the new node 
 
 ## 4.4 Cost
 
-Each rotation creates a brief overlap during which both the old and new nodes are billed. Order of magnitude per rotation: 10–20 minutes of one extra on-demand instance. For weekly rotation of N nodes, additional cost is `≈ N × 4 × hourly_rate × 0.25` per month, which is small relative to baseline node cost. Because rotation is serial *per NodePool* but concurrent *across* NodePools (§3.3), peak overlap — and thus peak instantaneous extra cost — scales with the number of NodePools rotating at the same time.
+Each rotation creates a brief overlap during which both the old and new nodes are billed. Order of magnitude per rotation: 10–20 minutes of one extra on-demand instance. For weekly rotation of N nodes, additional cost is `≈ N × 4 × hourly_rate × 0.25` per month, which is small relative to baseline node cost. Because rotation is serial *per NodePool* but concurrent *across* NodePools (§3.3), peak overlap — and thus peak instantaneous extra cost — scales with the number of NodePools rotating at the same time. A **failed** surge attempt can also briefly bill a surge node (up to `readyTimeout`, after which it is explicitly reaped — §3.3 *Rollback*); the escalating `retryBackoff` (§5.3) bounds how often a systematically failing rotation (e.g. sustained placeholder preemption, persistent same-AZ capacity shortage) can repeat that cost.
 
 ---
 
@@ -434,10 +453,12 @@ Reconcile(req):                              # req is a NodeClaim event or a per
   return reconcile_nodepool(nodepool(req.obj))
 
 reconcile_nodepool(np):
-  # ── 1. Drive the in-flight rotation first (serial: at most one per NodePool) ──
-  active := claim_in_state(np, {pending, draining})
-  if active != nil:
-      return advance(active)
+  # ── 1. Drive the in-flight rotation first (serial: at most one per NodePool).
+  #       Keyed on the NodePool's active-rotation ANCHOR, not on finding an annotated
+  #       NodeClaim — the old NodeClaim disappears when the rotation succeeds, and the
+  #       completion side effects below must still run after that.
+  if name := np[active-rotation]:
+      return advance(np, name)
 
   # ── 2. No rotation in flight → gate on window / freeze / cooldown / surge headroom ──
   if not in_window(now): return Requeue(1m)
@@ -448,72 +469,103 @@ reconcile_nodepool(np):
   if not surge_headroom(np):                 # placeholder requests don't fit in (spec.limits − provisioned): a resource budget, not a node count
       warn("insufficient limits headroom; cannot surge"); return Requeue(1m)
 
-  # ── 3. Start a new rotation (write state only; do not block) ──
-  cand := pick_oldest_eligible(np)           # empty state, or failed past retry backoff
+  # ── 3. Start a new rotation (write the durable anchor first; do not block) ──
+  cand := pick_oldest_eligible(np)           # empty state, or failed past its escalated backoff
   if cand == nil: return Requeue(1m)
-  annotate(cand, state=pending, started-at=now)
-  annotate(cand.node, do-not-disrupt=true)
-  create_placeholder(np, cand)               # bare low-priority Pod; requests = Σ reschedulable (non-DaemonSet) candidate-node Pod requests
-  return Requeue(30s)
+  annotate(np, active-rotation=cand.name)    # anchor BEFORE any other side effect
+  return advance(np, cand.name)              # falls into the idempotent pending handler below
 
-# advance() runs one step for the in-flight candidate, keyed by its state:
-advance(cand):
+# advance() runs one step for the in-flight rotation, keyed by the anchor:
+advance(np, name):
+  cand := nodeclaim(name)
+  if cand == nil:                            # old NodeClaim finalized away → rotation complete
+      # (normally from draining; if it vanished from pending — e.g. force-expired
+      #  mid-surge, §3.3 residual risk — the same cleanup applies)
+      delete(placeholder(name))              # if still present
+      for node in nodes_with(surge-for=name):    # resolves the surge target WITHOUT the old claim
+          unfreeze(node)                     # remove do-not-disrupt + surge-for
+      annotate(np, last-rotation-at=now)     # cooldown anchor
+      clear(np, active-rotation)             # release the serial gate LAST
+      emit_metrics(success)
+      return Requeue(1m)                     # cooldown is enforced at the step-2 start gate
+
   switch cand.state:
-  case pending:                              # waiting for the surge node to become Ready
-      if surge_ready(cand):                  # placeholder on a NEW node (created > started-at) that is Ready
-          annotate(new_node(cand), do-not-disrupt=true)
+  case (none) | pending:                     # idempotent: (re-)assert everything this phase needs
+      annotate(cand, state=pending)          # no-op if already set
+      annotate_once(cand, started-at=now)    # write-once: a retry must not reset the timeout
+      freeze(cand.node, surge-for=name)      # re-assert do-not-disrupt lost to a crash (§3.3)
+      if placeholder(name) is missing:       # lost / preempted / crash before creation
+          create_placeholder(np, cand)       # requests = Σ reschedulable Pod requests (§3.3 exclusions:
+          return Requeue(30s)                #   DaemonSet/mirror/completed/node-pinned); anti-affinity to cand.node
+      if surge_ready(cand):                  # placeholder Running on a Ready host ≠ cand.node
+          host := placeholder_node(name)     # newly provisioned or pre-existing (capacity-absorb, §3.3)
+          freeze(host, surge-for=name)
           annotate(cand, state=draining)
           delete(cand)                       # explicit; not blocked by do-not-disrupt
           return Requeue(30s)
-      if placeholder(cand) is missing:       # crash/leader-change after the state write, or lost placeholder
-          create_placeholder(nodepool(cand), cand)
-          return Requeue(30s)
       if elapsed(cand.started-at) > readyTimeout:        # default 15m
-          delete(placeholder(cand)); unfreeze(cand.node)
-          annotate(cand, state=failed, failed-at=now); emit_metrics(failure); alert
+          delete(placeholder(name))
+          reap_surge_claim(name)             # explicit reap; don't rely on Consolidation (§3.3 Rollback)
+          unfreeze(cand.node)
+          annotate(cand, state=failed, failed-at=now, retry-count+=1)
+          clear(np, active-rotation)         # release the gate; the failed claim re-enters via backoff
+          emit_metrics(failure); alert
           return Requeue(1m)
       return Requeue(30s)
   case draining:                             # waiting for the old NodeClaim to finalize away
-      if gone(cand):
-          delete(placeholder(cand)); unfreeze(new_node(cand))
-          annotate(nodepool(cand), last-rotation-at=now)  # cooldown anchor on the NodePool — the old NodeClaim is gone
-          emit_metrics(success)
-          return Requeue(1m)                 # cooldown is enforced at the step-2 start gate, not by requeuing the deleted claim
-      # bounded by terminationGracePeriod + buffer; Karpenter forces the drain
+      if cand.deletionTimestamp == nil:      # crash between the state write and delete(cand)
+          delete(cand)                       # idempotent re-issue — without this the rotation hangs forever
+          return Requeue(30s)
+      if elapsed(cand.deletionTimestamp) > drain_bound(np):   # tGP + buffer; fixed fallback if tGP unset
+          alert(stuck_drain)                 # once; state stays draining — the gate is held on purpose (below)
       return Requeue(30s)
+  case failed:                               # crash between the failed write and the anchor clear
+      clear(np, active-rotation)
+      return Requeue(1m)
 ```
 
-`pick_oldest_eligible` selects claims whose `state` is empty (fresh) or `failed` with `now − failed-at > retryBackoff`; `pending`/`draining` claims are never re-selected (they are driven by step 1). Leader election uses the standard `coordination.k8s.io/Lease`; on leader change the new leader resumes purely from annotations.
+`pick_oldest_eligible` selects claims whose `state` is empty (fresh) or `failed` with `now − failed-at` past the escalated backoff (`retryBackoff · 2^(retry-count − 1)`, capped at 8×); `pending`/`draining` claims are never re-selected (they are driven by step 1). Leader election uses the standard `coordination.k8s.io/Lease`; on leader change the new leader resumes purely from annotations.
+
+Step 1 keys on the **NodePool's `active-rotation` anchor**, not on finding an annotated NodeClaim: the old NodeClaim — the carrier of the per-rotation `state` — is deleted when the rotation succeeds, so any discovery that depends on it would go blind at exactly the moment the completion side effects (placeholder removal, surge-target unfreeze, `last-rotation-at`) must run. The anchor is written **before** any other side effect at start and cleared **last** at completion/failure, so every crash point leaves a resumable record. Complementarily, each state handler is an **idempotent re-assertion** of its phase's desired state rather than a one-shot action: the pending handler re-asserts the old node's freeze and the placeholder's existence on every pass (a crash between any two start-time side effects heals on the next reconcile), and the draining handler re-issues the idempotent `delete` when the old NodeClaim has no `deletionTimestamp` (a crash between the state write and the delete would otherwise hang the rotation forever — the handler would be waiting for a deletion nobody requested).
+
+A drain that exceeds `drain_bound` (= `tGP + buffer`; a fixed default, e.g. `1h`, when `tGP` is unset — see the §3.2 layer-1 warning) raises the stuck-drain alert (`noderotation_drain_stuck`, §4.2) but deliberately **keeps the serial gate held**: a rotation in `draining` cannot be rolled back (the old NodeClaim already carries a `deletionTimestamp`), and releasing the gate would start disrupting a second node while the first is still half-drained, violating `maxUnavailable = 1`. Remediation is operator-side — resolve the blocking PDB or stuck finalizer; when `tGP` is set, Karpenter ultimately forces the drain on its own.
 
 The `cooldownAfter` gate in step 2 anchors on `noderotation.io/last-rotation-at`, written on the **NodePool** at each successful completion. It is **not** carried on the old NodeClaim: that object — the carrier of per-rotation state — is deleted when the rotation completes, so a requeue keyed on it would be a no-op (the reason the previous `Requeue(cooldown=…)` on the deleted claim did not actually enforce a pause; instead the next Tick could start a rotation immediately). Anchoring on the surviving NodePool makes the pause durable across the completion boundary and across leader changes. The gate is evaluated *per NodePool*, matching the per-NodePool serial model (distinct NodePools still rotate concurrently).
 
 ## 5.3 State Model
 
-Progress state lives entirely on Kubernetes objects (the old `NodeClaim`, the two nodes, the NodePool, and the transient placeholder Pod) — **no external datastore** is required. The placeholder Pod is a short-lived runtime object, not durable state: if it is lost, the startup sweep reconstructs the situation from the `noderotation.io/state` annotation on the old NodeClaim, which is the single source of truth for where a rotation is.
+Progress state lives entirely on Kubernetes objects (the NodePool, the old `NodeClaim`, the two nodes, and the transient placeholder Pod) — **no external datastore** is required. Durable truth is split across two carriers: the NodePool's `active-rotation` anchor records **which** rotation is in flight (and survives the old NodeClaim's deletion on success), while the old NodeClaim's `state` annotation records **where** that rotation is. The placeholder Pod and the node markers are runtime objects that the idempotent handlers (§5.2) re-create or re-assert from those two if lost.
 
 | Key | Target | Value | Purpose |
 |-----|--------|-------|---------|
-| `noderotation.io/state` | Old NodeClaim | `pending` / `draining` / `failed` | Progress state (source of truth) |
-| `noderotation.io/started-at` | Old NodeClaim | RFC3339 timestamp | `readyTimeout` deadline + observability |
-| `noderotation.io/failed-at` | Old NodeClaim | RFC3339 timestamp | `retryBackoff` anchor for re-selection after a failure |
-| `noderotation.io/surge-for` | Placeholder workload | Old NodeClaim's `metadata.name` | Pairing; used to find/clean up the placeholder and its node |
-| `karpenter.sh/do-not-disrupt` | Old node + new node | `true` | Blocks Karpenter **voluntary disruption only** (Consolidation/Drift/Emptiness) during the surge — **not** `expireAfter`, Interruption, or Node Repair (§3.3). Removed at the end; a stale value does not extend node life (see §3.5) |
+| `noderotation.io/active-rotation` | NodePool | Old NodeClaim's `metadata.name` | **Durable anchor** for the in-flight rotation; drives §5.2 step 1 and — because it outlives the old NodeClaim — the completion handler. Written before any other side effect at start, cleared last at completion/failure. Also the per-NodePool serial gate |
+| `noderotation.io/state` | Old NodeClaim | `pending` / `draining` / `failed` | Progress state of the anchored rotation |
+| `noderotation.io/started-at` | Old NodeClaim | RFC3339 timestamp | `readyTimeout` deadline + observability (write-once per attempt) |
+| `noderotation.io/failed-at` | Old NodeClaim | RFC3339 timestamp | Backoff anchor for re-selection after a failure |
+| `noderotation.io/retry-count` | Old NodeClaim | integer | Consecutive failures of this claim; escalates the backoff (`retryBackoff · 2^(retry-count − 1)`, capped at 8×) and feeds the systematic-failure alert |
+| `noderotation.io/surge-for` | Placeholder Pod **and** each controller-frozen node | Old NodeClaim's `metadata.name` | Pairing and ownership: finds/cleans up the placeholder; resolves the **surge target** at completion after the old NodeClaim is gone; marks a `do-not-disrupt` as controller-applied (vs operator-applied) for the sweep |
+| `karpenter.sh/do-not-disrupt` | Old node + surge target node | `true` | Blocks Karpenter **voluntary disruption only** (Consolidation/Drift/Emptiness) during the surge — **not** `expireAfter`, Interruption, or Node Repair (§3.3). Always set together with `noderotation.io/surge-for`; removed at the end; a stale value does not extend node life (see §3.5) |
 | `noderotation.io/freeze` | NodePool | RFC3339 timestamp (freeze-until) | Suppresses rotation until the given time |
 | `noderotation.io/last-rotation-at` | NodePool | RFC3339 timestamp | Completion time of the NodePool's last rotation; the `cooldownAfter` start-gate anchor (§5.2 step 2). Lives on the **NodePool** because the old NodeClaim that carries per-rotation state is deleted on success, so the pause must survive that deletion |
 
 ### State transitions
 
-The old NodeClaim's `noderotation.io/state` drives the machine in §5.2. The annotation is **written before** each side effect so a crash/leader change is recoverable.
+The old NodeClaim's `noderotation.io/state` drives the machine in §5.2, anchored by the NodePool's `active-rotation`. Crash recovery rests on two rules rather than on annotation order alone: the **anchor brackets the rotation** (written first, cleared last), and **every handler idempotently re-asserts its phase's side effects** — so a crash between any two writes is healed on the next reconcile instead of leaving a half-applied step behind.
 
 | From | Event | To | Side effects |
 |------|-------|----|--------------|
-| *(none)* | selected in window | `pending` | set `do-not-disrupt` on old node; create placeholder |
-| `pending` | surge node `Ready` | `draining` | set `do-not-disrupt` on new node; `delete` old NodeClaim |
-| `pending` | `readyTimeout` elapsed | `failed` | delete placeholder; unfreeze old node; alert |
-| `draining` | old NodeClaim gone | *(deleted)* | delete placeholder; unfreeze new node; emit success |
-| `failed` | `retryBackoff` elapsed, still in window | `pending` | re-enter (annotations reset); the `expireAfter` backstop covers repeated failure |
+| *(none)* | selected in window | `pending` | write NodePool `active-rotation` anchor (first); freeze old node (`do-not-disrupt` + `surge-for`); create placeholder (anti-affinity to the old node) |
+| `pending` | each reconcile (recovery) | `pending` | re-assert old-node freeze; recreate missing placeholder |
+| `pending` | placeholder Running on Ready host ≠ old node | `draining` | freeze surge target (`do-not-disrupt` + `surge-for`); `delete` old NodeClaim |
+| `pending` | `readyTimeout` elapsed | `failed` | delete placeholder; explicitly reap the induced surge NodeClaim if identifiable (§3.3 *Rollback*); unfreeze old node; `retry-count += 1`; clear anchor; alert |
+| `draining` | old NodeClaim has no `deletionTimestamp` (recovery) | `draining` | re-issue the idempotent `delete` |
+| `draining` | drain exceeds `tGP + buffer` | `draining` (stuck) | one-shot stuck-drain alert (`noderotation_drain_stuck`); the serial gate stays held on purpose — see §5.2 |
+| `draining` | old NodeClaim gone | *(completed)* | delete placeholder; unfreeze node(s) carrying `surge-for`; write `last-rotation-at`; clear anchor (last); emit success |
+| `failed` | escalated backoff elapsed, still in window | `pending` | re-enter as a fresh start (`retry-count` retained); the `expireAfter` backstop covers repeated failure |
 
-`pending` and `draining` are **driven by step 1** of §5.2 and are never re-picked as fresh candidates; this is also what enforces serial (parallelism=1) processing. A completed rotation leaves no state because the old NodeClaim — the carrier of the annotations — is deleted. On startup the controller sweeps for stale `noderotation.io/*` markers and orphaned placeholders (Rollback table, §3.3).
+`pending` and `draining` are **driven by step 1** of §5.2 and are never re-picked as fresh candidates; this is also what enforces serial (`surge.maxUnavailable = 1`) processing. A completed rotation leaves no per-claim state because the old NodeClaim — the carrier of those annotations — is deleted; the NodePool keeps only `last-rotation-at`.
+
+**Startup sweep — staleness rule.** A NodePool whose `active-rotation` anchor is set is **not** stale: step 1 resumes it on the first reconcile (that is the normal recovery path, not the sweep's job). The sweep cleans only markers that **no anchor references**: placeholder Pods whose `surge-for` claim no longer exists or is not anchored are deleted; node markers likewise have `noderotation.io/surge-for` *and* the accompanying `karpenter.sh/do-not-disrupt` removed. The sweep strips `do-not-disrupt` **only** from nodes that also carry the controller's own `surge-for` marker — an operator-applied `do-not-disrupt` (no marker) is never touched. `failed` claims keep their annotations (they drive backoff re-entry and are not stale). A `pending`/`draining` claim in a NodePool with no anchor cannot result from any crash point (the anchor is written first and cleared last); if observed anyway (manual edit), it is set to `failed` and alerted.
 
 ## 5.4 Configuration Schema
 
@@ -545,7 +597,7 @@ data:
       maxUnavailable: 1        # v1 fixed at 1 (serial); > 1 reserved for a later version
       readyTimeout: 15m        # surge node must reach Ready within this, else state=failed
       cooldownAfter: 10m       # settle pause between consecutive rotations in a window (not part of t_rot; affects throughput, §3.2)
-      retryBackoff: 30m        # wait before re-selecting a failed NodeClaim (§5.3)
+      retryBackoff: 30m        # base wait before re-selecting a failed NodeClaim; doubles per consecutive failure, capped at 8x (§5.3)
       matchNodeRequirements:   # which candidate-node requirements the placeholder replicates (§3.3 "Stateful and zonal workloads")
         required:              # hard nodeAffinity, value copied from candidate node; intersected with NodePool's allowed requirements
           - topology.kubernetes.io/zone   # default: same-AZ for zonal-PV (EBS) rebind; removing it only warns
@@ -602,7 +654,7 @@ data:
 
 > **Why this is recorded as a capability, not the surge mechanism.** The standalone-NodeClaim result proves Karpenter will honor a controller-created NodeClaim, which de-risks the project. But the surge design (§3.3) deliberately does **not** use it: a standalone node is unowned by any NodePool, so pods would persist on a node outside NodePool accounting/expiry/drift/budgets, breaking intentional NodePool separation. It is kept as a documented **fallback** should the placeholder approach prove unworkable.
 >
-> **Not yet validated (PoC scope):** the *primary* mechanism — inducing a NodePool-owned node via a placeholder Pod sized to the candidate node's *reschedulable* (non-DaemonSet) Pod requests, applying `karpenter.sh/do-not-disrupt` to both nodes during the surge to fend off **voluntary** Consolidation/Drift, and confirming that explicit NodeClaim deletion drains the old node through the voluntary (PDB-respecting) path, plus that a preempted bare placeholder Pod (running under its dedicated negative `PriorityClass`, `preemptionPolicy: Never`) is deleted without re-pending, and that an unrelated higher-priority preemption mid-surge is bounded by `readyTimeout` → rollback (§3.3 *Placeholder priority*). These are the first PoC items. (That `do-not-disrupt` does **not** block `expireAfter` is *not* an open PoC question — it is documented Karpenter behavior, confirmed in the `nodeclaim/expiration` controller source; §3.3. The design relies on `leadTime` sizing, not the annotation, to win the expiration race.)
+> **Not yet validated (PoC scope):** the *primary* mechanism — inducing a NodePool-owned node via a placeholder Pod sized to the candidate node's *reschedulable* Pod requests (§3.3 exclusions: DaemonSet / mirror / completed / node-pinned), applying `karpenter.sh/do-not-disrupt` to both nodes during the surge to fend off **voluntary** Consolidation/Drift, and confirming that explicit NodeClaim deletion drains the old node through the voluntary (PDB-respecting) path, plus that a preempted bare placeholder Pod (running under its dedicated negative `PriorityClass`, `preemptionPolicy: Never`) is deleted without re-pending, that an unrelated higher-priority preemption mid-surge is bounded by `readyTimeout` → rollback (§3.3 *Placeholder priority*), and that a bin-packed placeholder genuinely reserves existing capacity for the drain (capacity-absorb path, §3.3). These are the first PoC items. (That `do-not-disrupt` does **not** block `expireAfter` is *not* an open PoC question — it is documented Karpenter behavior, confirmed in the `nodeclaim/expiration` controller source; §3.3. The design relies on `leadTime` sizing, not the annotation, to win the expiration race.)
 
 ## 7.3 Open Questions
 
