@@ -26,7 +26,3 @@ Thumbs.db
 # Helm
 charts/*/charts/
 charts/*/Chart.lock
-
-# Build artifacts
-bin/
-cover.out

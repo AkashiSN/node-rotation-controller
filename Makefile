@@ -10,6 +10,7 @@ $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
 ENVTEST ?= $(LOCALBIN)/setup-envtest
+ENVTEST_VERSION ?= v0.24.1
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 GOLANGCI_LINT_VERSION ?= v2.12.2
 
@@ -42,7 +43,7 @@ docker-build:
 
 .PHONY: envtest
 envtest: $(LOCALBIN)
-	test -s $(ENVTEST) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	test -s $(ENVTEST) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION)
 
 .PHONY: golangci-lint
 golangci-lint: $(LOCALBIN)
