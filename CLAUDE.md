@@ -46,15 +46,20 @@ started. See the roadmap in the specification (§6.2) for the planned milestones
 
 ## Architectural invariants (do not break without an ADR/Issue)
 
-- The controller **never bypasses Karpenter**. It creates/deletes `NodeClaim`
-  resources (`karpenter.sh/v1`) and lets Karpenter's termination controller
-  drain nodes via the voluntary path, where PDBs apply.
+- The controller **never bypasses Karpenter**. It induces NodePool-owned
+  replacement capacity via a low-priority **placeholder Pod** (never a
+  standalone `NodeClaim` — see spec §3.3), deletes old `NodeClaim` resources
+  (`karpenter.sh/v1`), and lets Karpenter's termination controller drain
+  nodes via the voluntary path, where PDBs apply.
 - `expireAfter` is **retained as a backstop**, not removed. The controller's
-  `ageThreshold` must stay below `expireAfter`.
-- v1 is **surge-only and serial** (parallelism = 1). Pre-pull (v2) and
-  warm-up (v3) are reserved expansion points behind disabled config flags.
-- All controller state lives on `NodeClaim`/`NodePool` annotations — **no
-  external datastore**.
+  `ageThreshold` is derived to stay below `expireAfter` (spec §3.2);
+  validation fails when the schedule cannot guarantee that.
+- v1 is **surge-only and serial per NodePool** (`surge.maxUnavailable = 1`);
+  distinct NodePools may rotate concurrently. Pre-pull (v2) and warm-up (v3)
+  are reserved expansion points behind disabled config flags.
+- All controller state lives on Kubernetes objects — durable state on
+  `NodeClaim`/`NodePool` annotations, plus transient markers on Nodes and the
+  placeholder Pod (spec §5.3) — **no external datastore**.
 
 ## Must not
 
