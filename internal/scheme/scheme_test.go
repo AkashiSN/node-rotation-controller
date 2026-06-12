@@ -10,7 +10,7 @@ import (
 
 func TestNewRegistersKarpenterV1(t *testing.T) {
 	s := scheme.New()
-	for _, kind := range []string{"NodeClaim", "NodePool"} {
+	for _, kind := range []string{"NodeClaim", "NodeClaimList", "NodePool", "NodePoolList"} {
 		gvk := schema.GroupVersionKind{Group: "karpenter.sh", Version: "v1", Kind: kind}
 		if !s.Recognizes(gvk) {
 			t.Errorf("scheme does not recognize %s", gvk)
@@ -24,6 +24,7 @@ func TestNewRegistersCoreTypes(t *testing.T) {
 		{Version: "v1", Kind: "Node"},
 		{Version: "v1", Kind: "Pod"},
 		{Group: "coordination.k8s.io", Version: "v1", Kind: "Lease"},
+		{Version: "v1", Kind: "Event"},
 	} {
 		if !s.Recognizes(gvk) {
 			t.Errorf("scheme does not recognize %s", gvk)

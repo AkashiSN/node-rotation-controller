@@ -21,6 +21,10 @@ func New() *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 
 	gv := schema.GroupVersion{Group: karpapis.Group, Version: "v1"}
+	// Importing karpv1 triggers an init() that registers these types onto the
+	// client-go *global* scheme singleton only. Because this constructor builds
+	// its own Scheme (runtime.NewScheme) rather than reusing the global one,
+	// the types must be registered here explicitly.
 	s.AddKnownTypes(gv,
 		&karpv1.NodeClaim{},
 		&karpv1.NodeClaimList{},
