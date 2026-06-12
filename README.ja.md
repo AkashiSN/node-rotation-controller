@@ -30,7 +30,7 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 
 1. `expireAfter` 接近の `NodeClaim` を watch
 2. 設定可能な **メンテナンスウィンドウ**（例: 土曜 02:00–06:00）に置換を閉じ込める
-3. 代替 `NodeClaim` を先に作成、`Ready` を待ってから旧を delete（**surge**）
+3. 低優先度の **placeholder Pod** で NodePool 所有の代替ノードを先に誘発し（standalone `NodeClaim` は作成しない — 仕様 §3.3）、予約容量の準備完了を待ってから旧 `NodeClaim` を delete（**surge**）
 4. 旧 Node の drain は Karpenter 標準の termination controller に委ねる（**PDB が効く voluntary 経路**）
 
 ## スコープ外

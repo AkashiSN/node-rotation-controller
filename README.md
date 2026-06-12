@@ -30,7 +30,7 @@ This controller closes that gap by:
 
 1. Watching `NodeClaim` resources approaching expiration
 2. Restricting rotation to a configurable **maintenance window** (e.g., Saturday 02:00–06:00)
-3. Creating a replacement `NodeClaim` first, waiting until it is `Ready`, then deleting the old one (**surge**)
+3. Inducing a NodePool-owned replacement node first via a low-priority **placeholder Pod** (never a standalone `NodeClaim` — see the spec, §3.3), waiting until the reserved capacity is ready, then deleting the old `NodeClaim` (**surge**)
 4. Letting Karpenter's standard termination controller graceful-drain the old node, where PDBs *do* apply
 
 ## What it is not
