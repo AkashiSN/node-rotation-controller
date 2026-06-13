@@ -15,7 +15,10 @@ import (
 )
 
 func TestReconcileExistingNodeClaim(t *testing.T) {
-	nc := &karpv1.NodeClaim{ObjectMeta: metav1.ObjectMeta{Name: "nc-test"}}
+	nc := &karpv1.NodeClaim{ObjectMeta: metav1.ObjectMeta{
+		Name:   "nc-test",
+		Labels: map[string]string{karpv1.NodePoolLabelKey: "default"},
+	}}
 	c := fake.NewClientBuilder().WithScheme(scheme.New()).WithObjects(nc).Build()
 	r := &controller.NodeClaimReconciler{Client: c}
 

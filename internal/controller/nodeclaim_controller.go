@@ -27,7 +27,10 @@ func (r *NodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		return ctrl.Result{}, err
 	}
+	// nodepool is empty when the karpenter.sh/nodepool label is absent (e.g. a
+	// manually created NodeClaim); name keeps the line identifiable regardless.
 	log.FromContext(ctx).V(1).Info("observed NodeClaim",
+		"name", nodeClaim.Name,
 		"nodepool", nodeClaim.Labels[karpv1.NodePoolLabelKey])
 	return ctrl.Result{}, nil
 }
