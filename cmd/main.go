@@ -40,6 +40,11 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "node-rotation-controller.noderotation.io",
+		// Release the Lease on SIGTERM so the standby replica takes over
+		// immediately rather than waiting out LeaseDuration. Safe here: all
+		// rotation state is annotation-backed (spec §5.3), so there is no
+		// in-memory state a newly elected leader could corrupt.
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
