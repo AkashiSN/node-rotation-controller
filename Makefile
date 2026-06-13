@@ -3,7 +3,7 @@ IMG ?= ghcr.io/akashisn/node-rotation-controller:dev
 
 # Kubernetes version for envtest assets. Keep in sync with the k8s.io/api
 # minor in go.mod (v0.<minor>.x -> 1.<minor>).
-ENVTEST_K8S_VERSION ?= 1.34
+ENVTEST_K8S_VERSION ?= 1.33
 
 LOCALBIN ?= $(shell pwd)/bin
 $(LOCALBIN):
