@@ -2,6 +2,7 @@ package controller_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -60,8 +61,30 @@ func TestManagerReconcilesNodeClaim(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go func() { _ = mgr.Start(ctx) }()
+	var mgrErr error
+	mgrDone := make(chan struct{})
+	go func() {
+		defer close(mgrDone)
+		mgrErr = mgr.Start(ctx)
+	}()
+	// Drain the manager before stopping the API server: cancel, wait for
+	// Start to return, surface any non-cancellation error, then tear down.
+	// Registered last so it runs first (Cleanup is LIFO).
+	t.Cleanup(func() {
+		cancel()
+		<-mgrDone
+		if mgrErr != nil && !errors.Is(mgrErr, context.Canceled) {
+			t.Errorf("manager exited with error: %v", mgrErr)
+		}
+	})
+
+	// The watch must be established before the Create, otherwise the create
+	// event can fire before the informer is listening and never be observed.
+	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer syncCancel()
+	if !mgr.GetCache().WaitForCacheSync(syncCtx) {
+		t.Fatal("cache did not sync within 30s")
+	}
 
 	nc := &karpv1.NodeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "nc-smoke"},
