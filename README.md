@@ -9,7 +9,7 @@ Designed for EKS Auto Mode and any Karpenter v1+ environment where node expirati
 
 ## Status
 
-**Specification phase.** Implementation has not started. See [docs/specification.md](docs/specification.md) for the full design.
+**Early development (v0.2 skeleton).** The design is locked; implementation has begun with the controller-runtime skeleton (manager, leader election, CI). The rotation logic (spec §5.2) lands in v0.3. [docs/specification.md](docs/specification.md) remains the source of truth for the design.
 
 日本語版: [README.ja.md](README.ja.md) / [docs/ja/specification.md](docs/ja/specification.md)
 
@@ -49,9 +49,9 @@ This controller closes that gap by:
 │   ├── specification.md       Full design specification (English)
 │   └── ja/specification.md    Japanese translation
 ├── charts/                    Helm chart (planned)
-├── cmd/                       Controller entry point (planned)
+├── cmd/                       Controller entry point (manager bootstrap)
 ├── api/                       CRD types (planned, if needed beyond ConfigMap)
-└── internal/                  Reconciler implementation (planned)
+└── internal/                  Reconciler implementation (skeleton; full logic planned)
 ```
 
 ## Getting involved
@@ -59,6 +59,21 @@ This controller closes that gap by:
 This project is in the specification phase. Feedback on the design is welcome via GitHub Issues. Implementation contributions will be accepted once v1 scope is locked.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
+
+## Development
+
+Requires Go 1.26+ and `make`. Docker is needed only for `make docker-build`.
+
+| Command | Purpose |
+|---------|---------|
+| `make build` | Compile the manager binary into `bin/manager` |
+| `make test` | Run unit tests and the envtest-based smoke test |
+| `make lint` | Run golangci-lint |
+| `make docker-build` | Build the container image |
+
+`make test` downloads the envtest control-plane binaries on first run.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow (issues, branches, PRs).
 
 ## License
 
