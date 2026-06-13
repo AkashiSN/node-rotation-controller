@@ -1,0 +1,6 @@
+bin/
+cover.out
+docs/
+.git/
+.github/
+*.md
