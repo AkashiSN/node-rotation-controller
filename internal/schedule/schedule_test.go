@@ -40,14 +40,15 @@ func absent(t *testing.T, r Result, code string) {
 // baseAuto is the §3.2 worked example: a healthy auto-derived configuration.
 func baseAuto() Inputs {
 	return Inputs{
-		E:            14 * 24 * time.Hour, // 336h
-		TGP:          time.Hour,
-		P:            4 * 24 * time.Hour, // 96h
-		WindowLen:    4 * time.Hour,
-		ReadyTimeout: 15 * time.Minute,
-		Cooldown:     10 * time.Minute,
-		RetryBackoff: 30 * time.Minute,
-		K:            2,
+		E:              14 * 24 * time.Hour, // 336h
+		TGP:            time.Hour,
+		P:              4 * 24 * time.Hour, // 96h
+		WindowLen:      4 * time.Hour,
+		ReadyTimeout:   15 * time.Minute,
+		Cooldown:       10 * time.Minute,
+		RetryBackoff:   30 * time.Minute,
+		K:              2,
+		MaxUnavailable: 1,
 	}
 }
 
@@ -169,6 +170,33 @@ func TestDeriveThroughputBelowArrival(t *testing.T) {
 
 	in.NodeCount = 2 // 192/142.5 ≈ 1.35 < C(2)
 	absent(t, Derive(in), "ThroughputBelowArrival")
+}
+
+// TestDeriveOverrideNonPositive locks the defensive guard: Derive is pure and
+// must surface a non-positive override (which policy normally rejects upstream)
+// rather than silently echo it back.
+func TestDeriveOverrideNonPositive(t *testing.T) {
+	in := baseAuto()
+	in.Override = ptr(-1 * time.Hour)
+	r := Derive(in)
+	has(t, r, "OverrideNonPositive", Fatal)
+	absent(t, r, "OverrideGBelowOne") // A <= 0 short-circuits the G checks
+}
+
+// TestDeriveMaxUnavailableScalesC pins the spec §3.2 C = m·floor(...) factor:
+// m = 2 doubles the per-occurrence throughput. (v1 fixes m at 1; this guards
+// the formula for the v2 surge-parallelism expansion point.)
+func TestDeriveMaxUnavailableScalesC(t *testing.T) {
+	in := baseAuto() // C = floor(4h / 100m) = 2 at m=1
+	in.MaxUnavailable = 2
+	if r := Derive(in); r.C != 4 {
+		t.Errorf("C = %d, want 4 (m=2 · floor(4h/100m))", r.C)
+	}
+
+	in.MaxUnavailable = 0 // unset is treated as 1
+	if r := Derive(in); r.C != 2 {
+		t.Errorf("C = %d, want 2 (m=0 treated as 1)", r.C)
+	}
 }
 
 func TestDeriveNoWindowsFatal(t *testing.T) {

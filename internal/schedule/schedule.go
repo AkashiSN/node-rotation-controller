@@ -55,17 +55,18 @@ type Finding struct {
 // resolved (the caller substitutes DrainFallback for an unset tGP and sets
 // TGPWasUnset).
 type Inputs struct {
-	E            time.Duration  // expireAfter (representative template value)
-	TGP          time.Duration  // terminationGracePeriod, fallback already applied
-	TGPWasUnset  bool           // true when DrainFallback was substituted for tGP
-	P            time.Duration  // worst-case window period (window.WorstCasePeriod)
-	WindowLen    time.Duration  // D: window occurrence duration, for layer-2 throughput
-	ReadyTimeout time.Duration  // surge.readyTimeout
-	Cooldown     time.Duration  // surge.cooldownAfter
-	RetryBackoff time.Duration  // surge.retryBackoff
-	K            int            // minRotationChances
-	NodeCount    int            // N; 0 skips the arrival-rate sub-check
-	Override     *time.Duration // explicit ageThreshold override; nil => auto
+	E              time.Duration  // expireAfter (representative template value)
+	TGP            time.Duration  // terminationGracePeriod, fallback already applied
+	TGPWasUnset    bool           // true when DrainFallback was substituted for tGP
+	P              time.Duration  // worst-case window period (window.WorstCasePeriod)
+	WindowLen      time.Duration  // D: window occurrence duration, for layer-2 throughput
+	ReadyTimeout   time.Duration  // surge.readyTimeout
+	Cooldown       time.Duration  // surge.cooldownAfter
+	RetryBackoff   time.Duration  // surge.retryBackoff
+	K              int            // minRotationChances
+	MaxUnavailable int            // m; surge parallelism, fixed at 1 in v1 (spec §3.3). 0 is treated as 1.
+	NodeCount      int            // N; 0 skips the arrival-rate sub-check
+	Override       *time.Duration // explicit ageThreshold override; nil => auto
 }
 
 // Result carries the derived values plus all findings.
@@ -104,7 +105,14 @@ func Derive(in Inputs) Result {
 	}
 
 	if denom := r.TRot + in.Cooldown; denom > 0 {
-		r.C = int(in.WindowLen / denom)
+		// spec §3.2 layer-2: C = m·floor(D/(t_rot+cooldown)). m is fixed at 1 in
+		// v1 (policy validates surge.maxUnavailable == 1); kept explicit so v2
+		// surge parallelism needs no formula change.
+		m := in.MaxUnavailable
+		if m < 1 {
+			m = 1
+		}
+		r.C = m * int(in.WindowLen/denom)
 	}
 
 	r.Findings = append(r.Findings, layer1(in, r)...)
@@ -118,41 +126,51 @@ func layer1(in Inputs, r Result) []Finding {
 
 	switch {
 	case in.K < 1:
-		fs = append(fs, Finding{Fatal, "KBelowOne",
-			fmt.Sprintf("minRotationChances must be >= 1, got %d", in.K)})
+		fs = append(fs, Finding{Severity: Fatal, Code: "KBelowOne",
+			Message: fmt.Sprintf("minRotationChances must be >= 1, got %d", in.K)})
 	case in.K == 1:
-		fs = append(fs, Finding{Warn, "KBelowTwo",
-			"minRotationChances = 1 leaves no retry before Forceful Expiration; >= 2 is recommended"})
+		fs = append(fs, Finding{Severity: Warn, Code: "KBelowTwo",
+			Message: "minRotationChances = 1 leaves no retry before Forceful Expiration; >= 2 is recommended"})
 	}
 
 	if in.Override != nil {
+		// The override is normally validated positive by policy.AgeThresholdOverride,
+		// but Derive is a pure function that must surface a broken input rather than
+		// trust it — keep the A <= 0 guard symmetric with the auto branch below.
 		switch {
+		case r.A <= 0:
+			fs = append(fs, Finding{Severity: Fatal, Code: "OverrideNonPositive",
+				Message: fmt.Sprintf("ageThreshold override A = %v <= 0; must be a positive duration", r.A)})
 		case r.G < 1:
-			fs = append(fs, Finding{Fatal, "OverrideGBelowOne",
-				fmt.Sprintf("ageThreshold override guarantees %d completable window occurrences before expireAfter (need >= 1)", r.G)})
+			fs = append(fs, Finding{Severity: Fatal, Code: "OverrideGBelowOne",
+				Message: fmt.Sprintf("ageThreshold override guarantees %d completable window occurrences before expireAfter (need >= 1)", r.G)})
 		case r.G < in.K:
-			fs = append(fs, Finding{Warn, "OverrideGBelowK",
-				fmt.Sprintf("ageThreshold override guarantees only %d chances, weaker than the requested minRotationChances %d", r.G, in.K)})
+			fs = append(fs, Finding{Severity: Warn, Code: "OverrideGBelowK",
+				Message: fmt.Sprintf("ageThreshold override guarantees only %d chances, weaker than the requested minRotationChances %d", r.G, in.K)})
+		}
+		if r.A > 0 && r.A < in.P {
+			fs = append(fs, Finding{Severity: Warn, Code: "AVeryAggressive",
+				Message: fmt.Sprintf("ageThreshold A = %v is below one window period P = %v: nodes rotate very young, maximizing churn", r.A, in.P)})
 		}
 	} else {
 		switch {
 		case r.A <= 0:
-			fs = append(fs, Finding{Fatal, "ANonPositive",
-				fmt.Sprintf("schedule cannot guarantee %d rotation chances: ageThreshold A = %v <= 0; raise expireAfter, add window occurrences, or lower minRotationChances", in.K, r.A)})
+			fs = append(fs, Finding{Severity: Fatal, Code: "ANonPositive",
+				Message: fmt.Sprintf("schedule cannot guarantee %d rotation chances: ageThreshold A = %v <= 0; raise expireAfter, add window occurrences, or lower minRotationChances", in.K, r.A)})
 		case r.A < in.P:
-			fs = append(fs, Finding{Warn, "AVeryAggressive",
-				fmt.Sprintf("ageThreshold A = %v is below one window period P = %v: nodes rotate very young, maximizing churn", r.A, in.P)})
+			fs = append(fs, Finding{Severity: Warn, Code: "AVeryAggressive",
+				Message: fmt.Sprintf("ageThreshold A = %v is below one window period P = %v: nodes rotate very young, maximizing churn", r.A, in.P)})
 		}
 	}
 
 	if in.TGPWasUnset {
-		fs = append(fs, Finding{Warn, "TGPUnset",
-			fmt.Sprintf("terminationGracePeriod is unset; drain is unbounded by Karpenter and t_rot falls back to %v", DrainFallback)})
+		fs = append(fs, Finding{Severity: Warn, Code: "TGPUnset",
+			Message: fmt.Sprintf("terminationGracePeriod is unset; drain is unbounded by Karpenter and t_rot falls back to %v", DrainFallback)})
 	}
 
 	if in.RetryBackoff < in.ReadyTimeout {
-		fs = append(fs, Finding{Warn, "RetryBackoffShort",
-			fmt.Sprintf("retryBackoff %v is shorter than readyTimeout %v; retries repeat the failed-surge cost faster than one attempt lasts", in.RetryBackoff, in.ReadyTimeout)})
+		fs = append(fs, Finding{Severity: Warn, Code: "RetryBackoffShort",
+			Message: fmt.Sprintf("retryBackoff %v is shorter than readyTimeout %v; retries repeat the failed-surge cost faster than one attempt lasts", in.RetryBackoff, in.ReadyTimeout)})
 	}
 
 	return fs
@@ -163,16 +181,18 @@ func layer2(in Inputs, r Result) []Finding {
 	var fs []Finding
 
 	if r.C < 1 {
-		fs = append(fs, Finding{Warn, "ThroughputZero",
-			fmt.Sprintf("each window occurrence rotates 0 nodes (t_rot %v + cooldown %v exceeds window length %v); widen the window or lower terminationGracePeriod", r.TRot, in.Cooldown, in.WindowLen)})
+		fs = append(fs, Finding{Severity: Warn, Code: "ThroughputZero",
+			Message: fmt.Sprintf("each window occurrence rotates 0 nodes (t_rot %v + cooldown %v exceeds window length %v); widen the window or lower terminationGracePeriod", r.TRot, in.Cooldown, in.WindowLen)})
 		return fs // the arrival comparison is meaningless at zero capacity
 	}
 
 	// Candidate arrival rate exceeds capacity: C < N·P/A ⟺ C·A < N·P (A > 0).
+	// float64 avoids int64 overflow on the ns-scale duration products; the
+	// comparison tolerates the rounding.
 	if in.NodeCount > 0 && r.A > 0 {
-		if int64(r.C)*int64(r.A) < int64(in.NodeCount)*int64(in.P) {
-			fs = append(fs, Finding{Warn, "ThroughputBelowArrival",
-				fmt.Sprintf("candidate arrival (N=%d, P=%v, A=%v) can exceed capacity C=%d per window; candidates may accumulate", in.NodeCount, in.P, r.A, r.C)})
+		if float64(r.C)*float64(r.A) < float64(in.NodeCount)*float64(in.P) {
+			fs = append(fs, Finding{Severity: Warn, Code: "ThroughputBelowArrival",
+				Message: fmt.Sprintf("candidate arrival (N=%d, P=%v, A=%v) can exceed capacity C=%d per window; candidates may accumulate", in.NodeCount, in.P, r.A, r.C)})
 		}
 	}
 
