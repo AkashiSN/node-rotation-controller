@@ -3,6 +3,7 @@ module github.com/AkashiSN/node-rotation-controller
 go 1.26.4
 
 require (
+	github.com/awslabs/operatorpkg v0.0.0-20260501204335-c49b4ca8d58d
 	k8s.io/apimachinery v0.36.1
 	k8s.io/client-go v0.36.1
 	sigs.k8s.io/controller-runtime v0.24.1
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/awslabs/operatorpkg v0.0.0-20260501204335-c49b4ca8d58d // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
