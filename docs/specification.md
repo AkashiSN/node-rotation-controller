@@ -146,7 +146,7 @@ A `NodeClaim` becomes a rotation candidate when **all** of the following hold:
 | `metadata.deletionTimestamp` is unset | Required | A claim already being deleted — typically Forceful Expiration in progress (under Auto Mode's `tGP = 24h` a force-draining claim stays alive, and even `Ready`, for hours) — can no longer be rotated gracefully. Selecting it would seize the per-NodePool serial gate only to abort immediately, over and over, livelocking selection and starving every other candidate (§5.2); the §5.2 abort path handles the one rotation such a claim may already be in |
 | `metadata.annotations["noderotation.io/state"]` is empty, or `failed` past its escalated backoff | Required | `pending`/`draining` are in-flight and driven by §5.2 step 1, not re-selected here; `failed` is retried after an **escalating** backoff (doubling per consecutive failure, §5.3); `expired` is **terminal** — a claim caught force-expiring mid-rotation (§5.2) is never re-selected |
 
-When multiple claims are eligible they are sorted by age (oldest first).
+When multiple claims are eligible they are sorted by age (oldest first), ties broken by NodeClaim name. The tiebreak matters because `creationTimestamp` is second-granular, so claims batch-provisioned by Karpenter routinely share one — without a stable order the pick would follow nondeterministic list order and could drift across reconciles.
 
 ### Deriving `ageThreshold` from the desired rotation chances
 
