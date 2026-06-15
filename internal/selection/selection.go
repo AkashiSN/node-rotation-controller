@@ -44,6 +44,9 @@ func matchesAny(labels map[string]string, selectors []policy.Selector) bool {
 	return false
 }
 
+// matchesAll reports whether labels contain every want entry. An empty want
+// matches vacuously; policy validation (internal/policy) guarantees non-empty
+// matchLabels per selector, so that case is unreachable in practice.
 func matchesAll(labels, want map[string]string) bool {
 	for k, v := range want {
 		if labels[k] != v {
@@ -69,8 +72,9 @@ type Inputs struct {
 }
 
 // PickOldestEligible returns the oldest eligible candidate, or nil when none
-// qualify (spec §3.2). "Oldest" is the earliest creationTimestamp. The returned
-// pointer aliases an element of claims.
+// qualify (spec §3.2). "Oldest" is the earliest creationTimestamp, ties broken
+// by NodeClaim name (see isOlder). The returned pointer aliases an element of
+// claims.
 func PickOldestEligible(claims []karpv1.NodeClaim, in Inputs) *karpv1.NodeClaim {
 	var best *karpv1.NodeClaim
 	for i := range claims {
@@ -78,11 +82,23 @@ func PickOldestEligible(claims []karpv1.NodeClaim, in Inputs) *karpv1.NodeClaim 
 		if !eligible(c, in) {
 			continue
 		}
-		if best == nil || c.CreationTimestamp.Before(&best.CreationTimestamp) {
+		if best == nil || isOlder(c, best) {
 			best = c
 		}
 	}
 	return best
+}
+
+// isOlder orders candidates oldest-first by creationTimestamp, breaking ties on
+// Name so selection is deterministic across reconciles. metav1.Time is
+// second-granular, so claims batch-provisioned by Karpenter routinely share a
+// timestamp; without a stable tiebreak the pick would follow nondeterministic
+// list order. Spec §3.2 specifies oldest-first and leaves the tiebreak open.
+func isOlder(a, b *karpv1.NodeClaim) bool {
+	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+		return a.CreationTimestamp.Before(&b.CreationTimestamp)
+	}
+	return a.Name < b.Name
 }
 
 func eligible(c *karpv1.NodeClaim, in Inputs) bool {

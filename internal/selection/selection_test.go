@@ -86,6 +86,12 @@ func noReadyCondition() claimOpt {
 	return func(c *karpv1.NodeClaim) { c.Status.Conditions = nil }
 }
 
+func unknownReady() claimOpt {
+	return func(c *karpv1.NodeClaim) {
+		c.Status.Conditions = []status.Condition{{Type: status.ConditionReady, Status: metav1.ConditionUnknown}}
+	}
+}
+
 func expireAfter(d time.Duration) claimOpt {
 	return func(c *karpv1.NodeClaim) { c.Spec.ExpireAfter = karpv1.NillableDuration{Duration: &d} }
 }
@@ -148,6 +154,20 @@ func TestPickOldestEligiblePicksTheOldest(t *testing.T) {
 	got := selection.PickOldestEligible(claims, baseInputs())
 	if got == nil || got.Name != "oldest" {
 		t.Fatalf("want oldest, got %v", got)
+	}
+}
+
+func TestPickOldestEligibleTieBreaksOnNameDeterministically(t *testing.T) {
+	// metav1.Time is second-granular, so batch-provisioned claims share a
+	// creationTimestamp; the pick must be the name-least one regardless of list
+	// order (else selection drifts across reconciles).
+	a := claim("a", 20*day)
+	b := claim("b", 20*day)
+	c := claim("c", 20*day)
+	for _, order := range [][]karpv1.NodeClaim{{a, b, c}, {c, b, a}, {b, c, a}} {
+		if got := selection.PickOldestEligible(order, baseInputs()); got == nil || got.Name != "a" {
+			t.Fatalf("want a for any order, got %v", got)
+		}
 	}
 }
 
@@ -215,6 +235,7 @@ func TestPickOldestEligibleExcludesNotReady(t *testing.T) {
 		opt  claimOpt
 	}{
 		{"ready-false", ready(false)},
+		{"ready-unknown", unknownReady()},
 		{"no-condition", noReadyCondition()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -293,6 +314,28 @@ func TestPickOldestEligibleFailedWithoutFailedAtIsReselectable(t *testing.T) {
 	))
 	if got := selection.PickOldestEligible([]karpv1.NodeClaim{c}, baseInputs()); got == nil {
 		t.Fatal("failed claim with no failed-at must remain re-selectable")
+	}
+}
+
+func TestPickOldestEligibleFailedWithUnparseableRetryCountUsesBase(t *testing.T) {
+	// A non-numeric retry-count parses to 0, so the backoff falls back to the
+	// base (30m), not a stranded claim. failed-at is 20m ago → within base → held.
+	in := baseInputs()
+	withinBase := claim("c", 20*day, ann(
+		annotations.State, annotations.StateFailed,
+		annotations.RetryCount, "garbage",
+		annotations.FailedAt, now.Add(-20*time.Minute).Format(time.RFC3339),
+	))
+	if got := selection.PickOldestEligible([]karpv1.NodeClaim{withinBase}, in); got != nil {
+		t.Fatalf("unparseable retry-count must fall back to the base backoff (30m), got %v", got.Name)
+	}
+	pastBase := claim("c", 20*day, ann(
+		annotations.State, annotations.StateFailed,
+		annotations.RetryCount, "garbage",
+		annotations.FailedAt, now.Add(-40*time.Minute).Format(time.RFC3339),
+	))
+	if got := selection.PickOldestEligible([]karpv1.NodeClaim{pastBase}, in); got == nil {
+		t.Fatal("past the base backoff the claim must be re-selectable")
 	}
 }
 
