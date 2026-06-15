@@ -9,7 +9,7 @@ EKS Auto Mode をはじめ、Node Expiration が Forceful で Disruption Budgets
 
 ## Status
 
-**仕様策定フェーズ。** 実装は未着手。設計の全体は [docs/ja/specification.md](docs/ja/specification.md) を参照。
+**初期開発（v0.2 skeleton）。** 設計は確定済みで、controller-runtime のスケルトン（manager・leader election・CI）から実装を開始した。置換ロジック（仕様 §5.2）は v0.3 で実装する。設計の source of truth は引き続き [docs/ja/specification.md](docs/ja/specification.md)。
 
 English: [README.md](README.md) / [docs/specification.md](docs/specification.md)
 
@@ -49,10 +49,25 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 │   ├── specification.md       仕様書（英語）
 │   └── ja/specification.md    日本語訳
 ├── charts/                    Helm chart（予定）
-├── cmd/                       Controller エントリポイント（予定）
+├── cmd/                       Controller エントリポイント（manager bootstrap）
 ├── api/                       CRD types（必要なら）（予定）
-└── internal/                  Reconciler 実装（予定）
+└── internal/                  Reconciler 実装（skeleton；本実装は予定）
 ```
+
+## 開発
+
+Go 1.26 以上と `make` が必要。Docker は `make docker-build` のときのみ必要。
+
+| コマンド | 用途 |
+|----------|------|
+| `make build` | マネージャーバイナリを `bin/manager` にビルド |
+| `make test` | ユニットテストと envtest ベースのスモークテストを実行 |
+| `make lint` | golangci-lint を実行 |
+| `make docker-build` | コンテナイメージをビルド |
+
+`make test` は初回実行時に envtest のコントロールプレーンバイナリをダウンロードする。
+
+ワークフロー（Issue・ブランチ・PR）は [CONTRIBUTING.md](CONTRIBUTING.md) を参照。
 
 ## ライセンス
 
