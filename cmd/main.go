@@ -14,9 +14,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/controller"
+	appmetrics "github.com/AkashiSN/node-rotation-controller/internal/metrics"
 	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 	"github.com/AkashiSN/node-rotation-controller/internal/scheme"
 	"github.com/AkashiSN/node-rotation-controller/internal/window"
@@ -75,6 +77,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Register the §4.2 metrics on the controller-runtime registry the manager
+	// already serves on /metrics — no extra server.
+	recorder := appmetrics.New(ctrlmetrics.Registry)
+
 	if err := (&controller.RotationReconciler{
 		Client:            mgr.GetClient(),
 		Policy:            pol,
@@ -82,6 +88,7 @@ func main() {
 		Namespace:         namespace,
 		PlaceholderImage:  placeholderImage,
 		PriorityClassName: priorityClassName,
+		Recorder:          recorder,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "rotation")
 		os.Exit(1)

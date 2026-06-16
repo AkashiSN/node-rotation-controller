@@ -89,6 +89,44 @@ func PickOldestEligible(claims []karpv1.NodeClaim, in Inputs) *karpv1.NodeClaim 
 	return best
 }
 
+// CountEligible returns how many claims currently pass the rotation-eligibility
+// predicate — the §4.2 noderotation_candidates gauge. It applies the same
+// predicate as PickOldestEligible (ready, in-scope state, triggered, not
+// deleting), so an in-flight or terminal claim is excluded.
+func CountEligible(claims []karpv1.NodeClaim, in Inputs) int {
+	n := 0
+	for i := range claims {
+		if eligible(&claims[i], in) {
+			n++
+		}
+	}
+	return n
+}
+
+// CountShortLead returns how many claims can no longer guarantee K rotation
+// chances against their own spec.expireAfter — the §4.2 noderotation_short_lead_nodes
+// gauge (§3.2 layer 3). A claim is short-lead when its expireAfter ≤ leadTime
+// (K·P + t_rot, i.e. per-node A ≤ 0). A nil (Never) expireAfter never races
+// forceful expiration, and a claim already on the forceful path
+// (deletionTimestamp set) is excluded — both mirror selection eligibility.
+func CountShortLead(claims []karpv1.NodeClaim, leadTime time.Duration) int {
+	n := 0
+	for i := range claims {
+		c := &claims[i]
+		if c.DeletionTimestamp != nil {
+			continue
+		}
+		e := c.Spec.ExpireAfter.Duration
+		if e == nil {
+			continue
+		}
+		if *e <= leadTime {
+			n++
+		}
+	}
+	return n
+}
+
 // isOlder orders candidates oldest-first by creationTimestamp, breaking ties on
 // Name so selection is deterministic across reconciles. metav1.Time is
 // second-granular, so claims batch-provisioned by Karpenter routinely share a

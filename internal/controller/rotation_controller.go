@@ -79,6 +79,12 @@ func (r *RotationReconciler) recorder() Recorder {
 func (r *RotationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var pool karpv1.NodePool
 	if err := r.Get(ctx, req.NamespacedName, &pool); err != nil {
+		if apierrors.IsNotFound(err) {
+			// The NodePool is gone; drop its metric series so the recomputed gauges
+			// don't latch at their last value once its reconciles stop (§4.2).
+			// NodePool is cluster-scoped, so the request name is the pool name.
+			r.recorder().ForgetPool(req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !r.inScope(&pool) {
@@ -179,6 +185,17 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	now := r.now()
 	res := r.resolve(pool)
 
+	// List the pool's claims once and feed both the §4.2 gauges and candidate
+	// selection: the state is identical for both and unchanged in between (step 2
+	// writes nothing), so a single read avoids a redundant cache list per pass.
+	claims, err := r.poolClaims(ctx, pool)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
+	r.observe(pool, res, now, claims)
+
 	// ── 1. Drive the in-flight rotation, keyed on the anchor (it outlives the
 	//        old NodeClaim's deletion on success).
 	if name := pool.Annotations[annotations.ActiveRotation]; name != "" {
@@ -191,10 +208,6 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	}
 
 	// ── 3. Pick the candidate, gate on its headroom, then anchor.
-	claims, err := r.poolClaims(ctx, pool)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
 	cand := selection.PickOldestEligible(claims, r.selInputs(res, now))
 	if cand == nil {
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
@@ -217,6 +230,96 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		return ctrl.Result{}, err
 	}
 	return r.advance(ctx, pool, cand.Name)
+}
+
+// observe computes and emits the §4.2 reconcile-time gauges from the live claims
+// (listed once by the caller) on every pass. Recomputing each pass is what lets
+// the 0/1 and "highest"/"count" gauges reset: a cleared drain stops alerting, a
+// pool with no failures reports zero retries. The window-active gauge is
+// cluster-wide (label-free) but set here because the reconcile is the only
+// periodic tick (§5.2).
+func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now time.Time, claims []karpv1.NodeClaim) {
+	rec := r.recorder()
+	rec.ObserveWindow(r.Schedule.InWindow(now))
+
+	// WorstCasePeriod's ok is always true here: policy.Validate rejects an empty
+	// maintenanceWindows (and empty days), so the Schedule always has ≥1 occurrence.
+	p, _ := r.Schedule.WorstCasePeriod()
+	a, g := r.derivedThresholds(pool, res, p)
+	o := PoolObservation{
+		Candidates:      selection.CountEligible(claims, r.selInputs(res, now)),
+		ShortLeadNodes:  selection.CountShortLead(claims, res.leadTime),
+		RetryCount:      highestRetry(claims),
+		DrainStuck:      r.drainStuck(pool, claims, res, now),
+		WindowPeriod:    p,
+		AgeThreshold:    a,
+		RotationChances: g,
+	}
+	if pool.Annotations[annotations.ActiveRotation] != "" {
+		o.InProgress = 1 // serial per NodePool in v1 (0 or 1)
+	}
+	if until, ok := parseTime(pool.Annotations[annotations.Freeze]); ok && now.Before(until) {
+		o.FreezeUntil = until
+	}
+	rec.ObservePool(pool.Name, o)
+}
+
+// highestRetry returns the largest retry-count annotation across the pool's
+// claims (0 when none) — the noderotation_retry_count gauge (§4.2).
+func highestRetry(claims []karpv1.NodeClaim) int {
+	highest := 0
+	for i := range claims {
+		if n := parseInt(claims[i].Annotations[annotations.RetryCount]); n > highest {
+			highest = n
+		}
+	}
+	return highest
+}
+
+// drainStuck reports whether the in-flight draining rotation's old NodeClaim has
+// been deleting past the drain bound (tGP + buffer) — the noderotation_drain_stuck
+// gauge (§4.2, §5.2). It mirrors the bound check in advanceDraining.
+func (r *RotationReconciler) drainStuck(pool *karpv1.NodePool, claims []karpv1.NodeClaim, res resolved, now time.Time) bool {
+	name := pool.Annotations[annotations.ActiveRotation]
+	if name == "" || pool.Annotations[annotations.ActiveRotationState] != annotations.StateDraining {
+		return false
+	}
+	for i := range claims {
+		c := &claims[i]
+		if c.Name == name && c.DeletionTimestamp != nil {
+			return now.Sub(c.DeletionTimestamp.Time) > res.drainBound
+		}
+	}
+	return false
+}
+
+// derivedThresholds returns the derived ageThreshold A and guaranteed chances G
+// for the pool's representative template expireAfter (§3.2) — the
+// noderotation_age_threshold_seconds and noderotation_rotation_chances gauges. A
+// never-expiring template has no derivation: an override A still applies, but no
+// chances can be guaranteed.
+func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolved, p time.Duration) (time.Duration, int) {
+	eptr := pool.Spec.Template.Spec.ExpireAfter.Duration
+	if eptr == nil {
+		if res.override != nil {
+			return *res.override, 0
+		}
+		return 0, 0
+	}
+	tgp, unset := poolTGP(pool)
+	out := schedule.Derive(schedule.Inputs{
+		E:              *eptr,
+		TGP:            tgp,
+		TGPWasUnset:    unset,
+		P:              p,
+		ReadyTimeout:   res.readyTimeout,
+		Cooldown:       res.cooldown,
+		RetryBackoff:   res.retryBackoff,
+		K:              r.Policy.K(),
+		MaxUnavailable: r.Policy.Surge.MaxUnavailable,
+		Override:       res.override,
+	})
+	return out.A, out.G
 }
 
 // startGates is the §5.2 step-2 gate set, shared verbatim with the failed →
@@ -252,7 +355,7 @@ func (r *RotationReconciler) advance(ctx context.Context, pool *karpv1.NodePool,
 	case "", annotations.StatePending:
 		return r.advancePending(ctx, pool, res, cand)
 	case annotations.StateDraining:
-		return r.advanceDraining(ctx, pool, res, cand)
+		return r.advanceDraining(ctx, pool, cand)
 	case annotations.StateFailed:
 		return r.advanceFailed(ctx, pool, res, cand)
 	case annotations.StateExpired:
@@ -341,6 +444,9 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 		return ctrl.Result{}, err
 	}
 	if ready {
+		// surge_wait phase complete: started-at → surge_ready (§4.2). Observed here
+		// because started-at lives on the candidate, which is deleted just below.
+		r.recorder().ObserveDuration(pool.Name, PhaseSurgeWait, r.now().Sub(startedAt))
 		if err := r.freezeNode(ctx, host, cand.Name); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -409,19 +515,19 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 		return ctrl.Result{}, err
 	}
 
-	newRetry := 0
+	// The retry-count annotation is the durable backoff state; it also feeds the
+	// recomputed noderotation_retry_count gauge (set in observe), so no separate
+	// gauge emission is needed here.
 	if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
 		m[annotations.State] = annotations.StateFailed
 		m[annotations.FailedAt] = rfc3339(r.now())
-		newRetry = parseInt(m[annotations.RetryCount]) + 1
-		m[annotations.RetryCount] = strconv.Itoa(newRetry)
+		m[annotations.RetryCount] = strconv.Itoa(parseInt(m[annotations.RetryCount]) + 1)
 		delete(m, annotations.StartedAt)
 		delete(m, annotations.SurgeClaim)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 	r.recorder().Failure(pool.Name, cand.Name)
-	r.recorder().RetryCount(pool.Name, cand.Name, newRetry)
 
 	// Single pool update (last): the inter-attempt pause anchor + the gate release.
 	if err := r.patchPool(ctx, pool, func(m map[string]string) {
@@ -435,9 +541,10 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 }
 
 // advanceDraining waits for the old NodeClaim to finalize away, re-issuing the
-// idempotent delete on crash recovery and raising the stuck-drain alert past the
-// drain bound — while deliberately keeping the serial gate held (spec §5.2).
-func (r *RotationReconciler) advanceDraining(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim) (ctrl.Result, error) {
+// idempotent delete on crash recovery, while deliberately keeping the serial gate
+// held (spec §5.2). The stuck-drain alert is the recomputed drain_stuck gauge
+// (observe), so this step no longer needs the drain bound.
+func (r *RotationReconciler) advanceDraining(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (ctrl.Result, error) {
 	if pool.Annotations[annotations.ActiveRotationState] != annotations.StateDraining {
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
 			m[annotations.ActiveRotationState] = annotations.StateDraining
@@ -451,9 +558,8 @@ func (r *RotationReconciler) advanceDraining(ctx context.Context, pool *karpv1.N
 		}
 		return ctrl.Result{RequeueAfter: shortRequeue}, nil
 	}
-	if r.now().Sub(cand.DeletionTimestamp.Time) > res.drainBound {
-		r.recorder().DrainStuck(pool.Name, cand.Name)
-	}
+	// The stuck-drain signal is the recomputed drain_stuck gauge (set in observe),
+	// not a one-shot emission here — a 0/1 gauge must reset once the drain clears.
 	return ctrl.Result{RequeueAfter: shortRequeue}, nil
 }
 

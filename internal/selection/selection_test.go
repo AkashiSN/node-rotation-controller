@@ -372,3 +372,41 @@ func TestEscalatedBackoff(t *testing.T) {
 		}
 	}
 }
+
+func TestCountEligibleCountsEveryEligibleClaim(t *testing.T) {
+	// baseInputs: auto mode, leadTime 8d, expireAfter 14d ⇒ trigger age > 6d.
+	claims := []karpv1.NodeClaim{
+		claim("old1", 10*day), // eligible
+		claim("old2", 20*day), // eligible
+		claim("young", 1*day), // not triggered
+		claim("notready", 20*day, ready(false)),
+		claim("pending", 20*day, ann(annotations.State, annotations.StatePending)),
+		claim("deleting", 20*day, deleting()),
+	}
+	if got := selection.CountEligible(claims, baseInputs()); got != 2 {
+		t.Fatalf("want 2 eligible, got %d", got)
+	}
+}
+
+func TestCountEligibleZeroWhenNoneEligible(t *testing.T) {
+	claims := []karpv1.NodeClaim{claim("young", 1*day)}
+	if got := selection.CountEligible(claims, baseInputs()); got != 0 {
+		t.Fatalf("want 0, got %d", got)
+	}
+}
+
+func TestCountShortLeadCountsClaimsThatCannotGuaranteeKChances(t *testing.T) {
+	// A claim whose own expireAfter ≤ leadTime (K·P + t_rot) has per-node A ≤ 0
+	// and can no longer guarantee K chances (§3.2 layer 3).
+	leadTime := 8 * day
+	claims := []karpv1.NodeClaim{
+		claim("short", 1*day, expireAfter(7*day)),                // 7d ≤ 8d → counted
+		claim("exact", 1*day, expireAfter(8*day)),                // 8d ≤ 8d (A == 0) → counted
+		claim("ample", 1*day, expireAfter(30*day)),               // not short-lead
+		claim("never", 1*day, neverExpire()),                     // nil expireAfter → never
+		claim("expiring", 1*day, expireAfter(7*day), deleting()), // forceful path begun → excluded
+	}
+	if got := selection.CountShortLead(claims, leadTime); got != 2 {
+		t.Fatalf("want 2 short-lead, got %d", got)
+	}
+}
