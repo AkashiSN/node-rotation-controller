@@ -1,0 +1,22 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "node-rotation-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "node-rotation-controller.labels" . | nindent 4 }}
+# Namespaced resources (spec §4.3). The placeholder Pods are created in this
+# namespace (--namespace), and leader-election Leases live here too.
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    # Only the placeholder Pod is created/deleted, and only in this namespace
+    # (--namespace, spec §3.3). Cluster-wide reads (the headroom gate, the
+    # manager cache) are granted via the ClusterRole.
+    verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

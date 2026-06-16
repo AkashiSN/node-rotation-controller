@@ -1,0 +1,19 @@
+{{- if .Values.placeholder.priorityClass.create -}}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "node-rotation-controller.priorityClassName" . }}
+  labels:
+    {{- include "node-rotation-controller.labels" . | nindent 4 }}
+# The surge placeholder runs under this dedicated negative-priority class so it
+# is the deliberate preemption victim: the rescheduled workload (priority >= 0)
+# preempts it, while it never preempts real or system-critical Pods (spec §3.3).
+# Installed statically here, never at runtime — so the controller needs no
+# priorityclasses permission (spec §4.3).
+value: {{ .Values.placeholder.priorityClass.value }}
+globalDefault: false
+preemptionPolicy: Never
+description: >-
+  Negative priority for node-rotation-controller surge placeholder Pods.
+  Maximally preemptible; never preempts other Pods (spec §3.3).
+{{- end }}

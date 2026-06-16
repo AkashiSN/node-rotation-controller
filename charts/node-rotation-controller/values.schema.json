@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "node-rotation-controller values",
+  "description": "Install-time validation of the chart values. The controller re-validates the rendered policy.yaml at startup (spec §5.4) — this schema is a fast first line of defense, not the source of truth.",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "v1 expects 2 for leader election (spec §5.1)."
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+        "tag": { "type": "string" }
+      }
+    },
+    "placeholder": {
+      "type": "object",
+      "properties": {
+        "image": { "type": "string", "minLength": 1 },
+        "priorityClass": {
+          "type": "object",
+          "properties": {
+            "create": { "type": "boolean" },
+            "name": { "type": "string", "minLength": 1 },
+            "value": {
+              "type": "integer",
+              "maximum": -1,
+              "description": "Must be negative so the placeholder is the preemption victim (spec §3.3)."
+            }
+          }
+        }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string"] }
+      }
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "type": "object",
+          "required": ["nodepoolSelectors", "maintenanceWindows"],
+          "properties": {
+            "nodepoolSelectors": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["matchLabels"],
+                "properties": {
+                  "matchLabels": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "additionalProperties": { "type": "string" }
+                  }
+                }
+              }
+            },
+            "ageThreshold": {
+              "type": "string",
+              "description": "\"auto\" or a Go duration (e.g. \"120h\")."
+            },
+            "minRotationChances": { "type": "integer", "minimum": 1 },
+            "maintenanceWindows": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["timezone", "days", "start", "end"],
+                "properties": {
+                  "timezone": { "type": "string", "minLength": 1 },
+                  "days": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "enum": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                    }
+                  },
+                  "start": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+                  "end": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
+                }
+              }
+            },
+            "surge": {
+              "type": "object",
+              "properties": {
+                "maxUnavailable": {
+                  "const": 1,
+                  "description": "v1 is surge-only and serial per NodePool (spec §5.4)."
+                },
+                "readyTimeout": { "type": "string" },
+                "cooldownAfter": { "type": "string" },
+                "retryBackoff": { "type": "string" },
+                "matchNodeRequirements": {
+                  "type": "object",
+                  "properties": {
+                    "required": { "type": "array", "items": { "type": "string" } },
+                    "preferred": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
+              }
+            },
+            "prePull": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "const": false,
+                  "description": "v2 feature; must be false in v1 (spec §5.4)."
+                }
+              }
+            },
+            "warmup": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "const": false,
+                  "description": "v3 feature; must be false in v1 (spec §5.4)."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+apiVersion: v2
+name: node-rotation-controller
+description: |
+  Proactively rotates Karpenter-managed nodes make-before-break within a
+  maintenance window, before Karpenter's forceful expireAfter fires.
+type: application
+# Pre-1.0: chart and app versions move together until the v1 ConfigMap schema
+# and surface stabilize (spec §6.1).
+version: 0.3.0
+appVersion: "0.3.0"
+# Karpenter v1 (karpenter.sh/v1) requires a recent control plane.
+kubeVersion: ">=1.29.0-0"
+home: https://github.com/AkashiSN/node-rotation-controller
+sources:
+  - https://github.com/AkashiSN/node-rotation-controller
+keywords:
+  - karpenter
+  - node-rotation
+  - eks-auto-mode
+  - surge
+maintainers:
+  - name: AkashiSN
+    url: https://github.com/AkashiSN

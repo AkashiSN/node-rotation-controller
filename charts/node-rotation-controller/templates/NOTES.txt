@@ -1,0 +1,37 @@
+node-rotation-controller {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Namespace }}.
+
+It rotates Karpenter-managed nodes make-before-break within your maintenance
+window, before Karpenter's forceful expireAfter fires (spec §3).
+
+Next steps:
+
+1. Point it at your NodePools. Edit config.policy.nodepoolSelectors so the
+   matchLabels select the NodePools you want rotated:
+
+     helm upgrade {{ .Release.Name }} <chart> \
+       --namespace {{ .Release.Namespace }} \
+       --set-json 'config.policy.nodepoolSelectors=[{"matchLabels":{"workload":"api"}}]'
+
+2. Set your maintenance window (config.policy.maintenanceWindows). The current
+   window is:
+{{- range .Values.config.policy.maintenanceWindows }}
+     - {{ .timezone }} {{ .days }} {{ .start }}-{{ .end }}
+{{- end }}
+
+3. Confirm the controller is healthy and which replica holds the leader Lease:
+
+     kubectl -n {{ .Release.Namespace }} get deploy {{ include "node-rotation-controller.fullname" . }}
+     kubectl -n {{ .Release.Namespace }} get lease node-rotation-controller.noderotation.io
+
+{{- if .Values.metrics.service.enabled }}
+
+4. Metrics are served on :{{ .Values.metrics.service.port }}/metrics via Service
+   {{ include "node-rotation-controller.fullname" . }}-metrics.
+   {{- if not .Values.metrics.serviceMonitor.enabled }}
+   Set metrics.serviceMonitor.enabled=true if you run the Prometheus Operator.
+   {{- end }}
+{{- end }}
+
+Prerequisite: Karpenter v1+ must already be installed (this chart does NOT
+install Karpenter or its CRDs). The controller never bypasses Karpenter — it
+induces replacement capacity via a placeholder Pod and deletes old NodeClaims.
