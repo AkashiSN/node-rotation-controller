@@ -281,7 +281,10 @@ ROTATION (logical sequence; each step is a separate reconcile)
   │     //   the attempt times out and rolls back cleanly below if the freeze outlasts readyTimeout
   │     yes → host := placeholder.node                  // newly provisioned, or pre-existing (capacity-absorb)
   │           freeze(host, surge-for=candidate.name)
-  │           annotate(nodepool, active-rotation-state=draining)  // durable phase record FIRST; decides the completion outcome
+  │           annotate(nodepool, active-rotation-state=draining, draining-at=now)  // durable phase record FIRST
+  │                                                     //   (decides the completion outcome); draining-at (write-once)
+  │                                                     //   anchors the §4.2 drain duration — the old NodeClaim's
+  │                                                     //   deletionTimestamp is gone by completion
   │           annotate(candidate, state=draining)
   │           delete(candidate)                         // explicit; not blocked by do-not-disrupt
   │     no, and elapsed(started-at) > readyTimeout(15m) → FAIL:   // §5.2 evaluates this timeout FIRST —
@@ -314,10 +317,10 @@ ROTATION (logical sequence; each step is a separate reconcile)
   │           unfreeze(node with surge-for=candidate.name)  // surge target found by its marker
   │           if active-rotation-state == draining:     // controller-driven drain → genuine rotation
   │               annotate(nodepool, last-rotation-at=now)  // cooldown anchor
-  │               emit_metrics(success)
+  │               emit_metrics(success, drain=now − draining-at)  // §4.2 drain-phase duration (when anchored)
   │           else:                                     // vanished out of pending (force-expired, §3.3):
   │               emit_metrics(expired); alert          //   nothing was rotated — no cooldown
-  │           clear(nodepool, active-rotation, active-rotation-state)  // release the serial gate LAST
+  │           clear(nodepool, active-rotation, active-rotation-state, draining-at)  // release the serial gate LAST
   │     no, and elapsed(candidate.deletionTimestamp) > tGP + buffer →
   │           stuck-drain alert; state stays draining (the serial gate is held on purpose — §5.2)
   │     else → requeue(30s)
@@ -412,7 +415,7 @@ Prometheus metrics exposed on `/metrics`:
 | `noderotation_candidates` | Gauge | `nodepool` | Eligible NodeClaim count |
 | `noderotation_in_progress` | Gauge | `nodepool` | Active rotation count |
 | `noderotation_completed_total` | Counter | `nodepool`, `outcome` | Cumulative completions; outcome ∈ {success, failure, expired} — `expired` = the old NodeClaim was force-expired before a graceful rotation completed (caught by its `deletionTimestamp` appearing while still `pending` or `failed`, or by its disappearance with no `draining` mirror — §5.2; emitted once per rotation, never counted as success) |
-| `noderotation_duration_seconds` | Histogram | `nodepool`, `phase` | Per-phase duration; phase ∈ {surge_wait, drain}. v1 emits `surge_wait` (started-at → surge_ready); the `drain` phase needs a durable drain-start anchor (the old NodeClaim's `deletionTimestamp` is gone once it finalizes) and is tracked as a follow-up (#15) |
+| `noderotation_duration_seconds` | Histogram | `nodepool`, `phase` | Per-phase duration; phase ∈ {surge_wait, drain}. `surge_wait` = `started-at → surge_ready`; `drain` = `draining-at → old-NodeClaim finalization`, anchored by the NodePool `draining-at` annotation stamped at the `pending → draining` transition because the old NodeClaim's `deletionTimestamp` has finalized away by the single completion point where the histogram is observed once (§5.3) |
 | `noderotation_window_active` | Gauge | — | 0/1 indicator of window membership |
 | `noderotation_freeze_until_timestamp` | Gauge | `nodepool` | Unix timestamp of active freeze (0 = no freeze) |
 | `noderotation_age_threshold_seconds` | Gauge | `nodepool` | Derived `ageThreshold` (§3.2) |
@@ -564,10 +567,12 @@ advance(np, name):
                                              #   controller's noderotation.io/cordoned marker is present)
       if np[active-rotation-state] == draining:  # controller-driven drain → genuine rotation
           annotate(np, last-rotation-at=now) # cooldown anchor
-          emit_metrics(success)
+          emit_metrics(success, duration[drain]=now − np[draining-at])  # §4.2 drain phase; skipped when
+                                             #   draining-at is absent (a rotation that reached draining before
+                                             #   this anchor existed) — uncounted beats mis-anchored
       else:                                  # vanished out of pending (e.g. force-expired mid-surge,
           emit_metrics(expired); alert       #   §3.3 residual risk): nothing was rotated — no cooldown
-      clear(np, active-rotation, active-rotation-state)  # same object → one update; release the gate LAST
+      clear(np, active-rotation, active-rotation-state, draining-at)  # same object → one update; release the gate LAST
       return Requeue(1m)                     # cooldown is enforced at the step-2 start gate
 
   switch cand.state:
@@ -639,13 +644,16 @@ advance(np, name):
                                              #   for the placeholder's required selector, §3.3)
           host := placeholder_node(name)     # newly provisioned or pre-existing (capacity-absorb, §3.3)
           freeze(host, surge-for=name)
-          annotate(np, active-rotation-state=draining)   # durable phase record BEFORE the delete;
-          annotate(cand, state=draining)                 #   decides the completion outcome (§5.3)
+          annotate(np, active-rotation-state=draining, draining-at=now)   # durable phase record BEFORE the
+          annotate(cand, state=draining)                 #   delete (decides the completion outcome, §5.3);
+                                             #   draining-at (write-once) anchors the §4.2 drain duration
           delete(cand)                       # explicit; not blocked by do-not-disrupt
           return Requeue(30s)
       return Requeue(30s)
   case draining:                             # waiting for the old NodeClaim to finalize away
-      annotate(np, active-rotation-state=draining)   # idempotent re-assert (normally a no-op; written before cand.state)
+      annotate(np, active-rotation-state=draining, draining-at=now if unset)   # idempotent re-assert (normally a
+                                             #   no-op; written before cand.state); backfills draining-at for a
+                                             #   rotation that reached draining before the anchor existed
       if cand.deletionTimestamp == nil:      # crash between the state write and delete(cand)
           delete(cand)                       # idempotent re-issue — without this the rotation hangs forever
           return Requeue(30s)
@@ -703,6 +711,7 @@ Progress state lives entirely on Kubernetes objects (the NodePool, the old `Node
 |-----|--------|-------|---------|
 | `noderotation.io/active-rotation` | NodePool | Old NodeClaim's `metadata.name` | **Durable anchor** for the in-flight rotation; drives §5.2 step 1 and — because it outlives the old NodeClaim — the completion handler. Written before any other side effect at start, cleared last at completion/failure. Also the per-NodePool serial gate |
 | `noderotation.io/active-rotation-state` | NodePool | `draining` | Phase mirror for the anchored rotation, written immediately **before** the controller's `delete` of the old NodeClaim; absence means the rotation never left `pending`. Read by the completion handler — after the old NodeClaim (the `state` carrier) is gone — to pick the outcome: `draining` → `success` + cooldown; absent → `expired` + alert, no cooldown (§5.2). Cleared in the same update as the anchor on **both** the completion and the failure path (same object → atomic) |
+| `noderotation.io/draining-at` | NodePool | RFC3339 timestamp | **Drain-start anchor** for the `drain`-phase `noderotation_duration_seconds` histogram (§4.2). Stamped **write-once** in the same update as `active-rotation-state=draining` at the `pending → draining` transition (and backfilled by the `draining` recovery branch if missing); the natural drain start — the old NodeClaim's `deletionTimestamp` — has finalized away by the single completion point where the histogram is observed once, so the duration needs this pool-side anchor. Read at completion (`now − draining-at`) and cleared in the same update as the anchor |
 | `noderotation.io/state` | Old NodeClaim | `pending` / `draining` / `failed` / `expired` | Progress state of the anchored rotation. `expired` is **terminal**: written by the abort path when the claim is caught force-expiring (§5.2), it blocks re-selection while the claim — alive for up to `tGP` under the forceful drain — finishes finalizing |
 | `noderotation.io/started-at` | Old NodeClaim | RFC3339 timestamp | `readyTimeout` deadline + observability. Write-once **per attempt**: cleared by the failed write — a **single update** together with `state=failed`/`failed-at`/`retry-count` (§5.2), so no crash can leave a torn intermediate — and re-stamped by the retry (otherwise, `retryBackoff` ≥ `readyTimeout` — true of the defaults; §3.2 warns when violated — would make every retry time out instantly) |
 | `noderotation.io/failed-at` | Old NodeClaim | RFC3339 timestamp | Backoff anchor for re-selection after a failure |
@@ -724,13 +733,13 @@ The old NodeClaim's `noderotation.io/state` drives the machine in §5.2, anchore
 |------|-------|----|--------------|
 | *(none)* | selected in window | `pending` | write NodePool `active-rotation` anchor (first; conflict-checked, only-if-absent — §5.2); freeze old node (`do-not-disrupt` + `surge-for`); cordon old node (+ `cordoned` marker); create placeholder (required `karpenter.sh/nodepool` selector; pod-level `do-not-disrupt`; hostname `NotIn` exclusion of the old node and near-deadline hosts, §3.3) |
 | `pending` | each reconcile (recovery) | `pending` | re-assert old-node freeze + cordon and persist `surge-claim` as soon as the placeholder's bind target is observable — passive steps that run **even while the NodePool is frozen**; recreate missing placeholder (only while `readyTimeout` has not elapsed — the timeout is checked first, §5.2; exclusion lists recomputed) — placeholder (re)creation and escalation are **held** during a freeze (§3.1) |
-| `pending` | placeholder Running on Ready host ≠ old node, host in the same NodePool | `draining` | freeze surge target (`do-not-disrupt` + `surge-for`); write NodePool `active-rotation-state=draining` (before the delete); `delete` old NodeClaim |
+| `pending` | placeholder Running on Ready host ≠ old node, host in the same NodePool | `draining` | freeze surge target (`do-not-disrupt` + `surge-for`); write NodePool `active-rotation-state=draining` + `draining-at=now` (write-once, before the delete — the §4.2 drain-duration anchor); `delete` old NodeClaim |
 | `pending` | `readyTimeout` elapsed | `failed` | reap the induced claim from `surge-claim` (persisted during `pending`; when unset, re-resolved from a still-present placeholder or as the pool's claim created after `started-at` with no registered Node; guards: created after `started-at` **and** hosting only the placeholder — no registered Node passes trivially — §3.3 *Rollback*); delete placeholder; unfreeze + uncordon node(s) carrying this rotation's markers; one update: `state=failed`, `failed-at`, `retry-count += 1`, clear `started-at` + `surge-claim`; emit failure + alert; one NodePool update (last): write `last-failure-at`, clear anchor + `active-rotation-state` |
 | `pending` | old NodeClaim force-expiring (`deletionTimestamp` observed — checked first in the handler, §5.2) | `expired` (terminal) | delete placeholder; unfreeze + uncordon node(s) carrying the markers; write `state=expired` (clear `started-at` + `surge-claim`) **before** the pool clear — blocks re-selection (with the §3.2 `deletionTimestamp` exclusion) and keeps the sweep invariant; emit `expired` + alert (once); **no** `last-rotation-at` (nothing was rotated → no cooldown); clear anchor + `active-rotation-state` (last) |
 | `pending` | old NodeClaim already **gone** with no `draining` mirror (§3.3) | *(aborted)* | delete placeholder; unfreeze + uncordon node(s) carrying the markers; emit `expired` + alert; **no** `last-rotation-at` (no cooldown); clear anchor + `active-rotation-state` (last) |
-| `draining` | old NodeClaim has no `deletionTimestamp` (recovery) | `draining` | re-issue the idempotent `delete` |
+| `draining` | old NodeClaim has no `deletionTimestamp` (recovery) | `draining` | re-issue the idempotent `delete`; backfill `draining-at` if unset |
 | `draining` | drain exceeds `tGP + buffer` | `draining` (stuck) | stuck-drain signal via the `noderotation_drain_stuck` 0/1 gauge — recomputed each reconcile (so it clears when the drain completes), not a one-shot emission; the serial gate stays held on purpose — see §5.2 |
-| `draining` | old NodeClaim gone | *(completed)* | delete placeholder; unfreeze (+ uncordon by marker) node(s) carrying `surge-for`; write `last-rotation-at`; clear anchor + `active-rotation-state` (last); emit success |
+| `draining` | old NodeClaim gone | *(completed)* | delete placeholder; unfreeze (+ uncordon by marker) node(s) carrying `surge-for`; write `last-rotation-at`; emit success + the `drain`-phase duration (`now − draining-at`, when anchored); clear anchor + `active-rotation-state` + `draining-at` (last) |
 | `failed` | escalated backoff elapsed **and every start gate passes** — the step-2 set (window / freeze / cooldown / failure pause) plus `surge_headroom` for this claim (§5.2) | `pending` | the `failed` case of `advance()` resets `state` to `pending` (§5.2) — `retry-count` retained, `started-at` re-stamped by the new attempt. A re-entry is a **new** attempt, not an in-flight continuation, so it honors everything a fresh start would; the `expireAfter` backstop covers repeated failure |
 | `failed` | `deletionTimestamp` observed while anchored (re-selection or crash recovery, §5.2) | `expired` (terminal) | the backstop reached a rolled-back claim — the failure path already cleaned the runtime objects; write `state=expired`; emit `expired` + alert; clear anchor + `active-rotation-state` |
 | `expired` | each reconcile while still anchored (crash between the terminal write and the pool clear, §5.2) | `expired` | re-run the cleanup idempotently (placeholder delete; unfreeze + uncordon by markers); clear anchor + `active-rotation-state`; the metric/alert are **not** re-emitted |

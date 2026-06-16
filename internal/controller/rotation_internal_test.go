@@ -354,6 +354,9 @@ func TestSurgeReadyTransitionsToDraining(t *testing.T) {
 	if got := getPool(t, r).Annotations[annotations.ActiveRotationState]; got != annotations.StateDraining {
 		t.Errorf("active-rotation-state: got %q, want draining", got)
 	}
+	if getPool(t, r).Annotations[annotations.DrainingAt] == "" {
+		t.Error("draining-at drain-start anchor must be stamped at the pending → draining transition")
+	}
 	if n := getNodeObj(t, r, surgeNode); n.Annotations[annotations.SurgeFor] != "nc-old" {
 		t.Errorf("surge target not frozen: %+v", n.Annotations)
 	}
@@ -487,16 +490,21 @@ func TestDrainingReissuesDelete(t *testing.T) {
 	if c == nil || c.DeletionTimestamp == nil {
 		t.Error("draining recovery must re-issue the delete")
 	}
+	if getPool(t, r).Annotations[annotations.DrainingAt] == "" {
+		t.Error("draining recovery must backfill a missing draining-at anchor")
+	}
 }
 
 // --- completion ------------------------------------------------------------
 
 func TestCompletionSuccess(t *testing.T) {
 	rec := &fakeRecorder{}
-	// old NodeClaim already gone; mirror says draining → success.
+	// old NodeClaim already gone; mirror says draining → success. draining-at set
+	// 30m ago anchors the §4.2 drain-phase duration.
 	pool := withTGP(testNodePool(map[string]string{
 		annotations.ActiveRotation:      "nc-old",
 		annotations.ActiveRotationState: annotations.StateDraining,
+		annotations.DrainingAt:          rfc(testNow.Add(-30 * time.Minute)),
 	}))
 	surgeFrozen := testK8sNode(surgeNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old"}, false)
 	ph := placeholderPod(surgeNode, corev1.PodRunning)
@@ -507,6 +515,9 @@ func TestCompletionSuccess(t *testing.T) {
 	p := getPool(t, r)
 	if p.Annotations[annotations.ActiveRotation] != "" || p.Annotations[annotations.ActiveRotationState] != "" {
 		t.Error("anchor and mirror must be cleared on completion")
+	}
+	if p.Annotations[annotations.DrainingAt] != "" {
+		t.Error("draining-at must be cleared on completion")
 	}
 	if p.Annotations[annotations.LastRotationAt] == "" {
 		t.Error("last-rotation-at must be stamped on success")
@@ -519,6 +530,45 @@ func TestCompletionSuccess(t *testing.T) {
 	}
 	if rec.success != 1 {
 		t.Errorf("success metric: got %d", rec.success)
+	}
+
+	var drain time.Duration
+	found := false
+	for _, d := range rec.durations {
+		if d.phase == PhaseDrain {
+			drain, found = d.d, true
+		}
+	}
+	if !found {
+		t.Fatalf("drain duration not observed; durations=%+v", rec.durations)
+	}
+	if drain != 30*time.Minute {
+		t.Errorf("drain duration: got %v, want 30m", drain)
+	}
+}
+
+// TestCompletionWithoutDrainAnchorSkipsDuration: a rotation that reached draining
+// before the draining-at anchor existed (or had it cleared) still completes as
+// success, but emits no drain duration rather than a mis-anchored one.
+func TestCompletionWithoutDrainAnchorSkipsDuration(t *testing.T) {
+	rec := &fakeRecorder{}
+	pool := withTGP(testNodePool(map[string]string{
+		annotations.ActiveRotation:      "nc-old",
+		annotations.ActiveRotationState: annotations.StateDraining,
+	}))
+	surgeFrozen := testK8sNode(surgeNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old"}, false)
+	ph := placeholderPod(surgeNode, corev1.PodRunning)
+	r := newReconciler(t, testNow, rec, pool, surgeFrozen, ph)
+
+	step(t, r, pool)
+
+	if rec.success != 1 {
+		t.Errorf("success metric: got %d, want 1", rec.success)
+	}
+	for _, d := range rec.durations {
+		if d.phase == PhaseDrain {
+			t.Errorf("no drain duration must be observed without a draining-at anchor; got %v", d.d)
+		}
 	}
 }
 

@@ -518,9 +518,14 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 		if err := r.freezeNode(ctx, host, cand.Name); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Durable phase record BEFORE the delete — it decides the completion outcome.
+		// Durable phase record BEFORE the delete — it decides the completion
+		// outcome — plus the drain-start anchor for the §4.2 drain histogram,
+		// stamped write-once in the same update so a re-run never moves it.
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
 			m[annotations.ActiveRotationState] = annotations.StateDraining
+			if m[annotations.DrainingAt] == "" {
+				m[annotations.DrainingAt] = rfc3339(r.now())
+			}
 		}); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -602,6 +607,7 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 		m[annotations.LastFailureAt] = rfc3339(r.now())
 		delete(m, annotations.ActiveRotation)
 		delete(m, annotations.ActiveRotationState)
+		delete(m, annotations.DrainingAt)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -613,9 +619,13 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 // held (spec §5.2). The stuck-drain alert is the recomputed drain_stuck gauge
 // (observe), so this step no longer needs the drain bound.
 func (r *RotationReconciler) advanceDraining(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (ctrl.Result, error) {
-	if pool.Annotations[annotations.ActiveRotationState] != annotations.StateDraining {
+	if pool.Annotations[annotations.ActiveRotationState] != annotations.StateDraining ||
+		pool.Annotations[annotations.DrainingAt] == "" {
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
 			m[annotations.ActiveRotationState] = annotations.StateDraining
+			if m[annotations.DrainingAt] == "" {
+				m[annotations.DrainingAt] = rfc3339(r.now())
+			}
 		}); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -675,6 +685,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 		m[annotations.LastFailureAt] = maxRFC3339(m[annotations.LastFailureAt], cand.Annotations[annotations.FailedAt])
 		delete(m, annotations.ActiveRotation)
 		delete(m, annotations.ActiveRotationState)
+		delete(m, annotations.DrainingAt)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -709,10 +720,17 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 	}
 	if pool.Annotations[annotations.ActiveRotationState] == annotations.StateDraining {
 		r.recorder().Success(pool.Name) // emit before releasing the gate (at-least-once)
+		// drain phase complete: draining-at → finalization (§4.2). Guarded so a
+		// rotation that reached draining before this anchor existed is uncounted
+		// rather than mis-anchored.
+		if drainingAt, ok := parseTime(pool.Annotations[annotations.DrainingAt]); ok {
+			r.recorder().ObserveDuration(pool.Name, PhaseDrain, r.now().Sub(drainingAt))
+		}
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
 			m[annotations.LastRotationAt] = rfc3339(r.now())
 			delete(m, annotations.ActiveRotation)
 			delete(m, annotations.ActiveRotationState)
+			delete(m, annotations.DrainingAt)
 		}); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -996,6 +1014,7 @@ func (r *RotationReconciler) clearAnchor(ctx context.Context, pool *karpv1.NodeP
 	return r.patchPool(ctx, pool, func(m map[string]string) {
 		delete(m, annotations.ActiveRotation)
 		delete(m, annotations.ActiveRotationState)
+		delete(m, annotations.DrainingAt)
 	})
 }
 

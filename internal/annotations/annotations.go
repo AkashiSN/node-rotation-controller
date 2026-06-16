@@ -53,6 +53,14 @@ const (
 	// its absence after the old NodeClaim is gone marks a force-expiry, not a
 	// success (spec §5.2). Its only value is StateDraining.
 	ActiveRotationState = Prefix + "active-rotation-state"
+	// DrainingAt is the RFC3339 drain-start anchor, stamped at the pending →
+	// draining transition in the same update that writes ActiveRotationState. It
+	// is the durable start time for the §4.2 drain-phase duration_seconds
+	// histogram: the old NodeClaim's deletionTimestamp (the natural drain start)
+	// has finalized away by the single completion point where the histogram is
+	// observed once, so the duration needs its own pool-side anchor (spec §5.3).
+	// Cleared with the anchor at completion.
+	DrainingAt = Prefix + "draining-at"
 	// LastRotationAt is the RFC3339 completion time of the last successful
 	// rotation; the cooldownAfter start-gate anchor (spec §5.2 step 2).
 	LastRotationAt = Prefix + "last-rotation-at"
