@@ -251,7 +251,9 @@ ROTATION (logical sequence; each step is a separate reconcile)
   │         requests     = sum(requests of reschedulable pods on candidate), // excl. DaemonSet / mirror / completed / node-pinned
   │         annotations  = {do-not-disrupt: true},
   │         priority     = placeholderPriorityClass,        // dedicated, negative value; preemptionPolicy=Never
-  │         labels       = {surge-for: candidate.name},
+  │         labels       = {surge-for: candidate.name,
+  │                         karpenter.sh/nodepool: candidate.nodepool}, // lets the Pod watch map the
+  │                                                       //   placeholder back to its NodePool with no client lookup (§5.1)
   │     )       // Karpenter adds a NodePool-owned node in the same AZ — or the placeholder bin-packs
   │             //   onto pre-existing spare capacity (capacity-absorb path; equally acceptable, see above)
   │     // every pending-phase reconcile RE-ASSERTS this block idempotently: a freeze or placeholder
@@ -488,7 +490,8 @@ Each rotation creates a brief overlap during which both the old and new nodes ar
 │  │  Deployment: node-rotation-controller                     ││
 │  │    - controller-runtime manager                           ││
 │  │    - replicas=2 with leader election (1 active)           ││
-│  │    - NodeClaim watcher + 1-minute Ticker                  ││
+│  │    - NodePool reconciler; watches NodeClaim/Pod/Node      ││
+│  │    - 1-minute self-requeue (window edges, drain progress) ││
 │  │    - /metrics endpoint                                    ││
 │  │                                                           ││
 │  │  ConfigMap: node-rotation-config                          ││
@@ -506,7 +509,7 @@ Each rotation creates a brief overlap during which both the old and new nodes ar
 
 ## 5.2 Reconcile Loop
 
-Implemented with [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime). The reconciler watches `NodeClaim` and runs a periodic Ticker to detect window edges and freeze releases.
+Implemented with [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime). The reconciler is keyed on the `NodePool` and watches `NodeClaim` (mapped to its owning NodePool), plus the placeholder `Pod` reaching `Running` and the surge host `Node` reaching `Ready` — the two readiness signals that advance an in-flight `pending` rotation, watched so they are observed promptly rather than only on the next periodic pass. A periodic self-requeue remains the backstop that detects window edges, freeze releases, drain progress, and force-expiry.
 
 Each `Reconcile` call performs **exactly one non-blocking step** and returns a `Requeue`. There are **no blocking waits** (the 15-minute surge wait and the drain wait are *elapsed-time checks* against the `started-at`/deletion timestamps, re-evaluated on later reconciles), so a worker is never held and progress survives controller restarts — all state is read back from annotations (§5.3). Serial processing is enforced by handling any in-flight rotation *before* starting a new one.
 

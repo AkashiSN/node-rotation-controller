@@ -12,9 +12,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
@@ -103,23 +106,88 @@ func (r *RotationReconciler) inScope(pool *karpv1.NodePool) bool {
 // pool and picks up freeze-annotation edits, while NodeClaim events are mapped to
 // their owning NodePool so a claim becoming Ready/expiring drives its pool
 // promptly (spec §5.1/§5.2).
+//
+// The placeholder-Pod and Node watches cut surge-readiness latency (issue #14):
+// the two signals that advance an in-flight pending rotation — the placeholder
+// reaching Running and its host Node reaching Ready — would otherwise be seen
+// only by the 30s self-requeue. Predicates keep them to those transitions so
+// unrelated Pod/Node churn does not amplify reconciles; the periodic requeue
+// stays as the backstop for drain progress and force-expiry detection.
 func (r *RotationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("rotation").
 		For(&karpv1.NodePool{}).
-		Watches(&karpv1.NodeClaim{}, handler.EnqueueRequestsFromMapFunc(nodeClaimToNodePool)).
+		Watches(&karpv1.NodeClaim{}, handler.EnqueueRequestsFromMapFunc(nodePoolFromLabel)).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.placeholderToNodePool),
+			builder.WithPredicates(placeholderRunning())).
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(nodePoolFromLabel),
+			builder.WithPredicates(nodeBecameReady())).
 		Complete(r)
 }
 
-// nodeClaimToNodePool maps a NodeClaim event to a reconcile of its owning
-// NodePool (the reconcile unit). A claim without the nodepool label — e.g. a
-// manually created one — enqueues nothing.
-func nodeClaimToNodePool(_ context.Context, obj client.Object) []reconcile.Request {
+// nodePoolFromLabel maps an object carrying the karpenter.sh/nodepool label
+// (a NodeClaim or a Node) to a reconcile of that NodePool — the reconcile unit.
+// An object without the label — e.g. a manually created NodeClaim, or a Node
+// outside any Karpenter NodePool — enqueues nothing, bounding the reconcile rate.
+func nodePoolFromLabel(_ context.Context, obj client.Object) []reconcile.Request {
 	np := obj.GetLabels()[karpv1.NodePoolLabelKey]
 	if np == "" {
 		return nil
 	}
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: np}}}
+}
+
+// placeholderToNodePool maps a placeholder Pod to its owning NodePool, read from
+// the karpenter.sh/nodepool label stamped at creation (no client lookup). It
+// filters to the controller namespace and the surge-for marker so only the
+// controller's own placeholders enqueue.
+func (r *RotationReconciler) placeholderToNodePool(_ context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetNamespace() != r.Namespace {
+		return nil
+	}
+	labels := obj.GetLabels()
+	if labels[annotations.SurgeFor] == "" {
+		return nil
+	}
+	np := labels[karpv1.NodePoolLabelKey]
+	if np == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: np}}}
+}
+
+// placeholderRunning enqueues only when a placeholder Pod reaches Running — the
+// transition advancePending waits on to observe surge readiness. Deletions and
+// other phase changes are dropped (issue #14).
+func placeholderRunning() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return podRunning(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return !podRunning(e.ObjectOld) && podRunning(e.ObjectNew) },
+		DeleteFunc:  func(event.DeleteEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+func podRunning(obj client.Object) bool {
+	p, ok := obj.(*corev1.Pod)
+	return ok && p.Status.Phase == corev1.PodRunning
+}
+
+// nodeBecameReady enqueues only when a Node's Ready condition flips to True — the
+// other signal advancePending waits on (the surge host registering). Unrelated
+// Node churn is dropped to bound the reconcile rate (issue #14).
+func nodeBecameReady() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return nodeReadyObj(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return !nodeReadyObj(e.ObjectOld) && nodeReadyObj(e.ObjectNew) },
+		DeleteFunc:  func(event.DeleteEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+func nodeReadyObj(obj client.Object) bool {
+	n, ok := obj.(*corev1.Node)
+	return ok && nodeReady(n)
 }
 
 // resolved holds the per-NodePool durations derived from policy + schedule.

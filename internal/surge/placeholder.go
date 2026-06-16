@@ -52,7 +52,13 @@ func BuildPlaceholder(in PlaceholderInputs) *corev1.Pod {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      PlaceholderName(in.Candidate.Name),
 			Namespace: in.Namespace,
-			Labels:    map[string]string{annotations.SurgeFor: in.Candidate.Name},
+			// surge-for pairs the placeholder to its rotation; the karpenter.sh/nodepool
+			// label lets the controller's Pod watch map the placeholder back to its
+			// owning NodePool without a client lookup (spec §3.3, issue #14).
+			Labels: map[string]string{
+				annotations.SurgeFor:    in.Candidate.Name,
+				karpv1.NodePoolLabelKey: in.Pool.Name,
+			},
 			// Pod-level do-not-disrupt: blocks voluntary disruption of whatever node
 			// the placeholder runs on, covering the surge target in the bind →
 			// surge_ready gap before the node-level freeze lands (spec §3.3, §5.3).
