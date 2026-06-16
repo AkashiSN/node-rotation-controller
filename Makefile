@@ -1,6 +1,9 @@
 # Image URL for docker-build
 IMG ?= ghcr.io/akashisn/node-rotation-controller:dev
 
+# Helm chart location.
+CHART ?= charts/node-rotation-controller
+
 # Kubernetes version for envtest assets. Keep in sync with the k8s.io/api
 # minor in go.mod (v0.<minor>.x -> 1.<minor>).
 ENVTEST_K8S_VERSION ?= 1.36
@@ -40,6 +43,12 @@ lint: golangci-lint
 .PHONY: docker-build
 docker-build:
 	docker build -t $(IMG) .
+
+.PHONY: helm-lint
+helm-lint:
+	helm lint $(CHART)
+	helm template rot $(CHART) --namespace node-rotation-system >/dev/null
+	helm template rot $(CHART) --namespace node-rotation-system --set metrics.serviceMonitor.enabled=true >/dev/null
 
 .PHONY: envtest
 envtest: $(LOCALBIN)

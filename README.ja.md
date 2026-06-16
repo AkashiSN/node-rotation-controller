@@ -48,11 +48,30 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 ├── docs/
 │   ├── specification.md       仕様書（英語）
 │   └── ja/specification.md    日本語訳
-├── charts/                    Helm chart（予定）
+├── charts/                    Helm chart（node-rotation-controller）
 ├── cmd/                       Controller エントリポイント（manager bootstrap）
 ├── api/                       CRD types（必要なら）（予定）
 └── internal/                  Reconciler 実装（skeleton；本実装は予定）
 ```
+
+## インストール
+
+> Karpenter v1+ が既にインストールされていることが前提。本 chart は Karpenter
+> やその CRD をインストールしない — Karpenter が所有する `NodeClaim`/`NodePool`
+> リソースを操作するだけである。
+
+```sh
+helm install node-rotation-controller charts/node-rotation-controller \
+  --namespace node-rotation-system --create-namespace \
+  --set-json 'config.policy.nodepoolSelectors=[{"matchLabels":{"workload":"api"}}]'
+```
+
+chart はコントローラ（leader election 付き `replicas=2`）、その RBAC、
+`node-rotation-config` ConfigMap、surge placeholder Pod 用の専用の負優先度
+`PriorityClass`（仕様 §3.3・§4.3・§5.1）をインストールする。置換の設定は
+`config.policy`（仕様 §5.4 のスキーマ）を編集する —
+[`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml)
+を参照。
 
 ## 開発
 
@@ -63,6 +82,7 @@ Go 1.26 以上と `make` が必要。Docker は `make docker-build` のときの
 | `make build` | マネージャーバイナリを `bin/manager` にビルド |
 | `make test` | ユニットテストと envtest ベースのスモークテストを実行 |
 | `make lint` | golangci-lint を実行 |
+| `make helm-lint` | Helm chart の lint とレンダリング |
 | `make docker-build` | コンテナイメージをビルド |
 
 `make test` は初回実行時に envtest のコントロールプレーンバイナリをダウンロードする。

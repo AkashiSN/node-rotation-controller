@@ -1,0 +1,20 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "node-rotation-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "node-rotation-controller.labels" . | nindent 4 }}
+# Namespaced resources (spec §4.3). The placeholder Pods are created in this
+# namespace (--namespace), and leader-election Leases live here too.
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    # The placeholder Pod is created and managed directly by the controller (spec §3.3).
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

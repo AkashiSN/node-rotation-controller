@@ -1,0 +1,173 @@
+# Default values for node-rotation-controller.
+# This is a YAML-formatted file.
+
+# -- Number of controller replicas. v1 runs 2 with leader election (1 active),
+# so a node drain or crash never leaves the cluster un-reconciled (spec §5.1).
+replicaCount: 2
+
+image:
+  # -- Controller image repository.
+  repository: ghcr.io/akashisn/node-rotation-controller
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+  # -- Image tag. Defaults to the chart appVersion when empty.
+  tag: ""
+
+# -- Image pull secrets for the controller image.
+imagePullSecrets: []
+# -- Override the chart name portion of resource names.
+nameOverride: ""
+# -- Override the full name of chart resources.
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a ServiceAccount for the controller.
+  create: true
+  # -- Annotations for the ServiceAccount (e.g. an IRSA role ARN — note v1 needs
+  # no cloud IAM, all node ops route through Karpenter, spec §4.3).
+  annotations: {}
+  # -- ServiceAccount name. Generated from the fullname when empty.
+  name: ""
+
+# -- Extra annotations for the controller Pod.
+podAnnotations: {}
+# -- Extra labels for the controller Pod.
+podLabels: {}
+
+# -- Pod-level security context. Aligns with the distroless nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container-level security context.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Controller resource requests/limits. The controller is light; surge nodes
+# are the real cost (spec §4.4).
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# -- Node selector for the controller Pod.
+nodeSelector: {}
+# -- Tolerations for the controller Pod.
+tolerations: []
+# -- Affinity for the controller Pod.
+affinity: {}
+# -- Topology spread constraints for the controller Pod.
+topologySpreadConstraints: []
+
+metrics:
+  service:
+    # -- Create a ClusterIP Service exposing the /metrics endpoint (spec §4.2).
+    enabled: true
+    # -- The metrics Service type.
+    type: ClusterIP
+    # -- The metrics Service port.
+    port: 8080
+  serviceMonitor:
+    # -- Create a Prometheus Operator ServiceMonitor. Requires the
+    # monitoring.coreos.com/v1 CRD; left off so a cluster without it still
+    # renders.
+    enabled: false
+    # -- Scrape interval.
+    interval: 30s
+    # -- Scrape timeout.
+    scrapeTimeout: 10s
+    # -- Extra labels for the ServiceMonitor (e.g. a Prometheus release selector).
+    labels: {}
+
+podDisruptionBudget:
+  # -- Create a PodDisruptionBudget for the controller. With replicaCount=2 and
+  # minAvailable=1 a node drain cannot take out both replicas at once, so a
+  # leader survives (R1 mitigation, spec §7.1).
+  enabled: true
+  # -- minAvailable for the controller PDB.
+  minAvailable: 1
+
+# Surge placeholder Pod settings (spec §3.3). These wire the controller's
+# --placeholder-image and --priority-class flags AND install the matching
+# PriorityClass, so the two never drift.
+placeholder:
+  # -- The pause image the surge placeholder Pod runs (spec §3.3).
+  image: registry.k8s.io/pause:3.10
+  priorityClass:
+    # -- Install the dedicated negative-priority PriorityClass. Disable only if
+    # you manage it out-of-band; the controller does NOT create it (spec §4.3).
+    create: true
+    # -- PriorityClass name. Must match the controller's --priority-class flag.
+    name: noderotation-placeholder
+    # -- Priority value. Negative so the placeholder is the deliberate preemption
+    # victim, below normal workloads at 0 (spec §3.3).
+    value: -10
+
+# -- Controller log settings, passed to zap.
+logging:
+  # -- Enable development-mode (human-readable) logging. Production uses JSON.
+  development: false
+
+# The policy.yaml document (spec §5.4) rendered verbatim into the
+# node-rotation-config ConfigMap via toYaml. Edit these structured values rather
+# than a YAML blob so --set works and the controller validates the result.
+config:
+  policy:
+    # NodePools in scope, matched by label (spec §3.2). MUST be non-empty.
+    nodepoolSelectors:
+      - matchLabels:
+          # example; adjust to your NodePool labels
+          workload: api
+
+    # Derived per NodePool (spec §3.2). An explicit Go duration override is
+    # allowed but still validated (recomputed G < 1 is fatal, G < K warns).
+    ageThreshold: auto
+    # K; floor 1, values < 2 only warn (spec §3.2).
+    minRotationChances: 2
+
+    # The effective window is the UNION of all entries (spec §3.1).
+    maintenanceWindows:
+      - timezone: Asia/Tokyo
+        days: [Wed, Sat]
+        start: "02:00"
+        end: "06:00"
+
+    surge:
+      # v1 fixed at 1 (serial); > 1 reserved for a later version.
+      maxUnavailable: 1
+      # Surge node must reach Ready within this, else the attempt fails.
+      readyTimeout: 15m
+      # Settle pause between rotations; also the post-failure inter-attempt
+      # pause (spec §5.2 / §4.4).
+      cooldownAfter: 10m
+      # Base wait before re-selecting a failed NodeClaim; doubles per
+      # consecutive failure, capped at 8x (spec §5.3).
+      retryBackoff: 30m
+      # Which candidate-node requirements the placeholder replicates (spec §3.3).
+      # The karpenter.sh/nodepool selector is always applied and is NOT listed.
+      matchNodeRequirements:
+        required:
+          - topology.kubernetes.io/zone
+          - kubernetes.io/arch
+          - karpenter.sh/capacity-type
+        preferred: []
+
+    # v2 (disabled in v1). The v1 parser accepts only `enabled` here; the
+    # images list (spec §5.4) lands when pre-pull ships in v0.4.
+    prePull:
+      enabled: false
+
+    # v3 (disabled in v1). The v1 parser accepts only `enabled` here; the
+    # jobTemplate (spec §5.4) lands when warm-up ships in v0.5.
+    warmup:
+      enabled: false

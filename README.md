@@ -48,11 +48,29 @@ This controller closes that gap by:
 ├── docs/
 │   ├── specification.md       Full design specification (English)
 │   └── ja/specification.md    Japanese translation
-├── charts/                    Helm chart (planned)
+├── charts/                    Helm chart (node-rotation-controller)
 ├── cmd/                       Controller entry point (manager bootstrap)
 ├── api/                       CRD types (planned, if needed beyond ConfigMap)
 └── internal/                  Reconciler implementation (skeleton; full logic planned)
 ```
+
+## Installation
+
+> Requires Karpenter v1+ already installed. This chart does **not** install
+> Karpenter or its CRDs — it only operates the `NodeClaim`/`NodePool` resources
+> Karpenter owns.
+
+```sh
+helm install node-rotation-controller charts/node-rotation-controller \
+  --namespace node-rotation-system --create-namespace \
+  --set-json 'config.policy.nodepoolSelectors=[{"matchLabels":{"workload":"api"}}]'
+```
+
+The chart installs the controller (`replicas=2` with leader election), its RBAC,
+the `node-rotation-config` ConfigMap, and the dedicated negative-priority
+`PriorityClass` for the surge placeholder Pod (spec §3.3, §4.3, §5.1). Configure
+rotation by editing `config.policy` (the spec §5.4 schema) — see
+[`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml).
 
 ## Getting involved
 
@@ -69,6 +87,7 @@ Requires Go 1.26+ and `make`. Docker is needed only for `make docker-build`.
 | `make build` | Compile the manager binary into `bin/manager` |
 | `make test` | Run unit tests and the envtest-based smoke test |
 | `make lint` | Run golangci-lint |
+| `make helm-lint` | Lint and render the Helm chart |
 | `make docker-build` | Build the container image |
 
 `make test` downloads the envtest control-plane binaries on first run.
