@@ -45,10 +45,21 @@ func reschedulable(p *corev1.Pod, nodeName string) bool {
 	if p.Spec.NodeName != nodeName {
 		return false // not on the candidate node
 	}
-	if isDaemonSet(p) || isMirror(p) || isCompleted(p) || isNodePinned(p) {
+	if IsInfraOrCompleted(p) || isNodePinned(p) {
 		return false
 	}
 	return true
+}
+
+// IsInfraOrCompleted reports whether a Pod is infrastructure the surge need not
+// re-fit — a DaemonSet Pod (Karpenter already adds DaemonSet overhead to every
+// node it provisions) or a mirror/static Pod — or has already completed
+// (Succeeded/Failed). Unlike full reschedulability it deliberately does NOT
+// consider node-pinning: a node-pinned Pod is still real workload occupying a
+// node, which the rollback's absorb-host guard must count (spec §3.3). Exported
+// so that guard can share this filter instead of re-implementing it.
+func IsInfraOrCompleted(p *corev1.Pod) bool {
+	return isDaemonSet(p) || isMirror(p) || isCompleted(p)
 }
 
 func isDaemonSet(p *corev1.Pod) bool {

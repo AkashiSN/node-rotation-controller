@@ -664,3 +664,105 @@ func TestAnchorWriteIsOptimisticallyLocked(t *testing.T) {
 		t.Errorf("the winner's anchor must stand: got %q", got)
 	}
 }
+
+// --- rollback: absorb-host guard -------------------------------------------
+
+func TestReadyTimeoutDoesNotReapAbsorbHost(t *testing.T) {
+	// readyTimeout (15m) elapsed, so the attempt fails — but the induced surge
+	// claim has registered a node onto which an unrelated Pod has since landed: an
+	// absorb host. The rollback must NOT reap it; the surge node is repurposed as
+	// normal capacity, not surge debris (spec §3.3 Rollback, second guard).
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncAnn(
+		annotations.State, annotations.StatePending,
+		annotations.StartedAt, rfc(testNow.Add(-20*time.Minute)),
+		annotations.SurgeClaim, "nc-new",
+	))
+	// surge claim created after started-at AND registered a node → guarded by occupancy.
+	surgeClaim := testClaim("nc-new", 0, ncCreated(testNow.Add(-10*time.Minute)), ncNode(surgeNode))
+	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
+	surgeHost := testK8sNode(surgeNode, true, nil, false)
+	// an unrelated, reschedulable Pod bin-packed onto the surge node.
+	realPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "tenant-app", Namespace: "default"},
+		Spec:       corev1.PodSpec{NodeName: surgeNode},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	ph := placeholderPod(surgeNode, corev1.PodRunning)
+	r := newReconciler(t, testNow, nil, pool, cand, surgeClaim, oldNode, surgeHost, realPod, ph)
+
+	step(t, r, pool)
+
+	if c := getClaimOrNil(t, r, "nc-old"); c == nil || c.Annotations[annotations.State] != annotations.StateFailed {
+		t.Fatalf("the attempt must still fail: %+v", c)
+	}
+	if getClaimOrNil(t, r, "nc-new") == nil {
+		t.Error("an absorb host's surge claim must NOT be reaped (spec §3.3)")
+	}
+}
+
+// --- failed: torn-write crash recovery -------------------------------------
+
+func TestFailedTornWriteRepairReleasesAnchorAndPreservesPause(t *testing.T) {
+	// A failed claim is still anchored but its escalated backoff has not elapsed,
+	// so it cannot re-enter pending. This is the torn-write crash-recovery branch
+	// (a crash between the failed write and the pool update): it must release the
+	// anchor and re-stamp last-failure-at = max(existing, failed-at) so the §4.4
+	// inter-attempt pause is never voided (spec §5.2 case failed).
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncAnn(
+		annotations.State, annotations.StateFailed,
+		annotations.RetryCount, "1",
+		annotations.FailedAt, rfc(testNow.Add(-5*time.Minute)), // backoff 30m → NOT elapsed
+	))
+	pool := withTGP(testNodePool(map[string]string{
+		annotations.ActiveRotation: "nc-old",
+		annotations.LastFailureAt:  rfc(testNow.Add(-1 * time.Hour)), // stale, older than failed-at
+	}))
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false))
+
+	step(t, r, pool)
+
+	if c := getClaimOrNil(t, r, "nc-old"); c == nil || c.Annotations[annotations.State] != annotations.StateFailed {
+		t.Fatalf("the claim must stay failed before its backoff elapses: %+v", c)
+	}
+	p := getPool(t, r)
+	if p.Annotations[annotations.ActiveRotation] != "" {
+		t.Error("the stale anchor must be released")
+	}
+	if got, want := p.Annotations[annotations.LastFailureAt], rfc(testNow.Add(-5*time.Minute)); got != want {
+		t.Errorf("last-failure-at must advance to max(existing, failed-at): got %q, want %q", got, want)
+	}
+}
+
+// --- freeze hold on an in-flight pending rotation --------------------------
+
+func TestFrozenHoldsInFlightPending(t *testing.T) {
+	// A NodePool frozen mid-rotation HOLDS an in-flight pending rotation: the
+	// protective markers are still (re)asserted, but no placeholder is created and
+	// the rotation does not advance to draining (spec §3.1 freeze hold).
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(), ncAnn(
+		annotations.State, annotations.StatePending,
+		annotations.StartedAt, rfc(testNow.Add(-2*time.Minute)),
+	))
+	pool := withTGP(testNodePool(map[string]string{
+		annotations.ActiveRotation: "nc-old",
+		annotations.Freeze:         rfc(testNow.Add(time.Hour)),
+	}))
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false))
+
+	step(t, r, pool)
+
+	n := getNodeObj(t, r, candNode)
+	if n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "true" || n.Annotations[annotations.SurgeFor] != "nc-old" {
+		t.Errorf("freeze markers must still be asserted while frozen: %+v", n.Annotations)
+	}
+	if placeholderExists(t, r) {
+		t.Error("a frozen pending rotation must not create the placeholder")
+	}
+	if c := getClaimOrNil(t, r, "nc-old"); c == nil || c.Annotations[annotations.State] != annotations.StatePending {
+		t.Errorf("a frozen rotation must stay pending: %+v", c)
+	}
+	if getPool(t, r).Annotations[annotations.ActiveRotationState] == annotations.StateDraining {
+		t.Error("a frozen rotation must not advance to draining")
+	}
+}

@@ -336,7 +336,7 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 		return ctrl.Result{RequeueAfter: shortRequeue}, nil
 	}
 
-	host, ready, err := r.surgeReady(ctx, pool, cand)
+	host, ready, err := r.surgeReady(ctx, pool, cand, ph)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -592,12 +592,10 @@ func (r *RotationReconciler) candidateRequests(ctx context.Context, cand *karpv1
 }
 
 // surgeReady reports whether the placeholder is Running on a Ready host distinct
-// from the candidate node and in the same NodePool (spec §5.2).
-func (r *RotationReconciler) surgeReady(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (string, bool, error) {
-	ph, err := r.getPlaceholder(ctx, cand.Name)
-	if err != nil {
-		return "", false, err
-	}
+// from the candidate node and in the same NodePool (spec §5.2). It takes the
+// already-fetched placeholder (the pending handler reads it once per pass) to
+// avoid a second Get.
+func (r *RotationReconciler) surgeReady(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim, ph *corev1.Pod) (string, bool, error) {
 	if ph == nil || ph.Status.Phase != corev1.PodRunning {
 		return "", false, nil
 	}
@@ -703,37 +701,21 @@ func (r *RotationReconciler) reapSurgeClaim(ctx context.Context, cand *karpv1.No
 }
 
 // hostsRealPods reports whether nodeName carries any reschedulable Pod other than
-// the placeholder — DaemonSet/mirror/completed Pods do not count (spec §3.3).
+// the placeholder — DaemonSet/mirror/completed Pods do not count (spec §3.3). It
+// shares the surge package's infra/completed filter; node-pinned Pods are counted
+// here (an absorb host's real workload) even though surge sizing excludes them.
 func hostsRealPods(pods []corev1.Pod, nodeName, placeholderName string) bool {
 	for i := range pods {
 		p := &pods[i]
 		if p.Spec.NodeName != nodeName || p.Name == placeholderName {
 			continue
 		}
-		if isDaemonSetPod(p) || isMirrorPod(p) || isCompletedPod(p) {
+		if surge.IsInfraOrCompleted(p) {
 			continue
 		}
 		return true
 	}
 	return false
-}
-
-func isDaemonSetPod(p *corev1.Pod) bool {
-	for _, o := range p.OwnerReferences {
-		if o.Controller != nil && *o.Controller && o.Kind == "DaemonSet" {
-			return true
-		}
-	}
-	return false
-}
-
-func isMirrorPod(p *corev1.Pod) bool {
-	_, ok := p.Annotations[corev1.MirrorPodAnnotationKey]
-	return ok
-}
-
-func isCompletedPod(p *corev1.Pod) bool {
-	return p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed
 }
 
 func nodeReady(n *corev1.Node) bool {

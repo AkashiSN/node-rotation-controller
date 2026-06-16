@@ -1,6 +1,8 @@
 package surge
 
 import (
+	"slices"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -150,9 +152,9 @@ func poolAllows(pool *karpv1.NodePool, key, value string) bool {
 func requirementPermits(op corev1.NodeSelectorOperator, values []string, value string) bool {
 	switch op {
 	case corev1.NodeSelectorOpIn:
-		return contains(values, value)
+		return slices.Contains(values, value)
 	case corev1.NodeSelectorOpNotIn:
-		return !contains(values, value)
+		return !slices.Contains(values, value)
 	case corev1.NodeSelectorOpExists:
 		return true // the key is present (value is non-empty by construction)
 	case corev1.NodeSelectorOpDoesNotExist:
@@ -160,13 +162,4 @@ func requirementPermits(op corev1.NodeSelectorOperator, values []string, value s
 	default:
 		return false
 	}
-}
-
-func contains(values []string, v string) bool {
-	for _, x := range values {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
