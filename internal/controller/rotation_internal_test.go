@@ -400,7 +400,12 @@ func TestReadyTimeoutFailsAndReaps(t *testing.T) {
 	// surge claim created after started-at, never registered a node → reapable.
 	surgeClaim := testClaim("nc-new", 0, ncCreated(testNow.Add(-10*time.Minute)))
 	surgeClaim.Status.NodeName = ""
-	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
+	// draining-at is not normally present on a pending timeout; seed it to lock the
+	// invariant that failPending clears it alongside the anchor on every end path.
+	pool := withTGP(testNodePool(map[string]string{
+		annotations.ActiveRotation: "nc-old",
+		annotations.DrainingAt:     rfc(testNow.Add(-5 * time.Minute)),
+	}))
 	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
 	ph := placeholderPod("", corev1.PodPending)
 	r := newReconciler(t, testNow, rec, pool, cand, surgeClaim, oldNode, ph)
@@ -420,6 +425,9 @@ func TestReadyTimeoutFailsAndReaps(t *testing.T) {
 	p := getPool(t, r)
 	if p.Annotations[annotations.ActiveRotation] != "" {
 		t.Error("anchor must be released on failure")
+	}
+	if p.Annotations[annotations.DrainingAt] != "" {
+		t.Error("draining-at must be cleared on the failPending path")
 	}
 	if p.Annotations[annotations.LastFailureAt] == "" {
 		t.Error("last-failure-at must be stamped")
@@ -490,8 +498,10 @@ func TestDrainingReissuesDelete(t *testing.T) {
 	if c == nil || c.DeletionTimestamp == nil {
 		t.Error("draining recovery must re-issue the delete")
 	}
-	if getPool(t, r).Annotations[annotations.DrainingAt] == "" {
-		t.Error("draining recovery must backfill a missing draining-at anchor")
+	// A rotation that reached draining before the anchor existed must NOT be
+	// back-anchored: an uncounted drain beats a mis-anchored one (spec §4.2).
+	if getPool(t, r).Annotations[annotations.DrainingAt] != "" {
+		t.Error("draining recovery must not backfill a missing draining-at anchor")
 	}
 }
 
@@ -656,6 +666,7 @@ func TestExpiredTerminalCleanup(t *testing.T) {
 	pool := withTGP(testNodePool(map[string]string{
 		annotations.ActiveRotation:      "nc-old",
 		annotations.ActiveRotationState: annotations.StateDraining,
+		annotations.DrainingAt:          rfc(testNow.Add(-30 * time.Minute)), // reached draining, then force-expired
 	}))
 	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
 	ph := placeholderPod("", corev1.PodPending)
@@ -666,6 +677,9 @@ func TestExpiredTerminalCleanup(t *testing.T) {
 	p := getPool(t, r)
 	if p.Annotations[annotations.ActiveRotation] != "" || p.Annotations[annotations.ActiveRotationState] != "" {
 		t.Error("anchor and mirror must be cleared")
+	}
+	if p.Annotations[annotations.DrainingAt] != "" {
+		t.Error("draining-at must be cleared on the expired-terminal clearAnchor path")
 	}
 	if placeholderExists(t, r) {
 		t.Error("placeholder must be deleted")
@@ -778,7 +792,8 @@ func TestFailedTornWriteRepairReleasesAnchorAndPreservesPause(t *testing.T) {
 	))
 	pool := withTGP(testNodePool(map[string]string{
 		annotations.ActiveRotation: "nc-old",
-		annotations.LastFailureAt:  rfc(testNow.Add(-1 * time.Hour)), // stale, older than failed-at
+		annotations.LastFailureAt:  rfc(testNow.Add(-1 * time.Hour)),   // stale, older than failed-at
+		annotations.DrainingAt:     rfc(testNow.Add(-5 * time.Minute)), // defensive-invariant seed
 	}))
 	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false))
 
@@ -790,6 +805,9 @@ func TestFailedTornWriteRepairReleasesAnchorAndPreservesPause(t *testing.T) {
 	p := getPool(t, r)
 	if p.Annotations[annotations.ActiveRotation] != "" {
 		t.Error("the stale anchor must be released")
+	}
+	if p.Annotations[annotations.DrainingAt] != "" {
+		t.Error("draining-at must be cleared on the advanceFailed torn-repair path")
 	}
 	if got, want := p.Annotations[annotations.LastFailureAt], rfc(testNow.Add(-5*time.Minute)); got != want {
 		t.Errorf("last-failure-at must advance to max(existing, failed-at): got %q, want %q", got, want)
