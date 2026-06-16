@@ -23,6 +23,8 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+      - name: gopls check (severity>=hint)
+        run: make gopls-check
 
   test:
     runs-on: ubuntu-latest
