@@ -106,6 +106,10 @@ placeholder:
   priorityClass:
     # -- Install the dedicated negative-priority PriorityClass. Disable only if
     # you manage it out-of-band; the controller does NOT create it (spec §4.3).
+    # NOTE: this is a cluster-scoped object with a fixed name (it must match the
+    # controller's --priority-class flag), so it is NOT release-scoped. v1 assumes
+    # a single install per cluster; a second release would collide on this object
+    # (set create=false on additional releases and share the one PriorityClass).
     create: true
     # -- PriorityClass name. Must match the controller's --priority-class flag.
     name: noderotation-placeholder

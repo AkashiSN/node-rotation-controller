@@ -4,9 +4,10 @@ metadata:
   name: {{ include "node-rotation-controller.fullname" . }}
   labels:
     {{- include "node-rotation-controller.labels" . | nindent 4 }}
-# Cluster-scoped resources only (spec §4.3). Namespaced resources (pods, events,
-# leases) are granted via a namespaced Role so the placeholder Pods and the
-# leader-election Lease are confined to the controller namespace.
+# Cluster-scoped resources, plus the cluster-wide pods read the headroom gate
+# needs (spec §4.3). Namespaced writes (placeholder pods create/delete, events,
+# leases) are granted via a namespaced Role so they stay in the controller
+# namespace.
 rules:
   - apiGroups: ["karpenter.sh"]
     resources: ["nodeclaims"]
@@ -22,3 +23,10 @@ rules:
     resources: ["nodes"]
     # patch: do-not-disrupt / surge-for / cordoned annotations + spec.unschedulable.
     verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    # get/list/watch must be cluster-wide: the headroom gate sums the
+    # reschedulable Pod requests on the candidate node, and those Pods live in
+    # arbitrary namespaces (spec §3.3). The manager cache also watches Pods
+    # cluster-wide. create/delete (placeholder Pods) stay in the namespaced Role.
+    verbs: ["get", "list", "watch"]
