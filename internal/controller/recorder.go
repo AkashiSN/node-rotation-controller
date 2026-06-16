@@ -36,10 +36,15 @@ type Recorder interface {
 	ForgetPool(nodePool string)
 }
 
-// duration_seconds phase labels (§4.2). The drain phase is tracked separately
-// (it needs a durable drain-start anchor — see the follow-up issue) and is not
-// emitted here yet.
-const PhaseSurgeWait = "surge_wait"
+// duration_seconds phase labels (§4.2): surge_wait spans started-at →
+// surge_ready; drain spans the NodePool draining-at anchor → old-NodeClaim
+// finalization. The drain phase needs that durable anchor because the old
+// NodeClaim's deletionTimestamp is gone by the completion point where the
+// histogram is observed once (spec §4.2, §5.3).
+const (
+	PhaseSurgeWait = "surge_wait"
+	PhaseDrain     = "drain"
+)
 
 // PoolObservation is the set of §4.2 reconcile-time gauges for one NodePool,
 // recomputed from live state on every reconcile.
