@@ -12,15 +12,6 @@ import (
 // placeholderContainerName is the name of the single pause container.
 const placeholderContainerName = "pause"
 
-// placeholderNamePrefix is prepended to the old NodeClaim's name to form a
-// deterministic placeholder Pod name, so the state machine's create is
-// idempotent (a re-create after a crash hits AlreadyExists rather than spawning
-// a duplicate). This assumes prefix+Candidate.Name stays within the 253-char
-// Pod name limit; Karpenter NodeClaim names are short generated names, so it
-// holds in practice. A length-safe derivation (truncate + hash, preserving
-// determinism) belongs with the create path that surfaces the limit.
-const placeholderNamePrefix = "noderotation-surge-"
-
 // PlaceholderInputs are the resolved inputs for one placeholder Pod (spec §3.3).
 // They are plain values; the caller fetches the candidate Node, the NodePool,
 // and the reschedulable request sum and passes them in.
@@ -57,7 +48,7 @@ func BuildPlaceholder(in PlaceholderInputs) *corev1.Pod {
 	preempt := corev1.PreemptNever
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      placeholderNamePrefix + in.Candidate.Name,
+			Name:      PlaceholderName(in.Candidate.Name),
 			Namespace: in.Namespace,
 			Labels:    map[string]string{annotations.SurgeFor: in.Candidate.Name},
 			// Pod-level do-not-disrupt: blocks voluntary disruption of whatever node
