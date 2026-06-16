@@ -216,13 +216,7 @@ func isReady(c *karpv1.NodeClaim) bool {
 // base · 2^(retryCount − 1), capped at 8× (spec §5.3). A retryCount below 1
 // (defensive — a failed claim always carries ≥ 1) yields the base.
 func EscalatedBackoff(retryCount int, base time.Duration) time.Duration {
-	shift := retryCount - 1
-	if shift < 0 {
-		shift = 0
-	}
-	if shift > maxBackoffShift {
-		shift = maxBackoffShift
-	}
+	shift := min(max(retryCount-1, 0), maxBackoffShift)
 	return base << shift
 }
 

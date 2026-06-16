@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-func ptr(d time.Duration) *time.Duration { return &d }
-
 // codes collects the findings into a code→severity map for order-independent
 // assertions.
 func codes(r Result) map[string]Severity {
@@ -100,7 +98,7 @@ func TestDeriveAggressiveWarn(t *testing.T) {
 
 func TestDeriveOverrideGBelowOneFatal(t *testing.T) {
 	in := baseAuto()
-	in.Override = ptr(300 * time.Hour) // G = floor((334.5 - 300)/96) = 0
+	in.Override = new(300 * time.Hour) // G = floor((334.5 - 300)/96) = 0
 	r := Derive(in)
 	has(t, r, "OverrideGBelowOne", Fatal)
 	if r.G != 0 {
@@ -116,7 +114,7 @@ func TestDeriveOverrideGBelowOneFatal(t *testing.T) {
 // must be -1, not 0.
 func TestDeriveOverrideGFloorNegative(t *testing.T) {
 	in := baseAuto()
-	in.Override = ptr(400 * time.Hour) // E−tRot = 334.5h; (334.5−400)/96 = -0.68 → floor -1
+	in.Override = new(400 * time.Hour) // E−tRot = 334.5h; (334.5−400)/96 = -0.68 → floor -1
 	r := Derive(in)
 	if r.G != -1 {
 		t.Errorf("G = %d, want -1 (floor of negative numerator)", r.G)
@@ -126,7 +124,7 @@ func TestDeriveOverrideGFloorNegative(t *testing.T) {
 
 func TestDeriveOverrideGBelowKWarn(t *testing.T) {
 	in := baseAuto()
-	in.Override = ptr(200 * time.Hour) // G = floor((334.5 - 200)/96) = 1, K=2
+	in.Override = new(200 * time.Hour) // G = floor((334.5 - 200)/96) = 1, K=2
 	r := Derive(in)
 	has(t, r, "OverrideGBelowK", Warn)
 	absent(t, r, "OverrideGBelowOne")
@@ -177,7 +175,7 @@ func TestDeriveThroughputBelowArrival(t *testing.T) {
 // rather than silently echo it back.
 func TestDeriveOverrideNonPositive(t *testing.T) {
 	in := baseAuto()
-	in.Override = ptr(-1 * time.Hour)
+	in.Override = new(-1 * time.Hour)
 	r := Derive(in)
 	has(t, r, "OverrideNonPositive", Fatal)
 	absent(t, r, "OverrideGBelowOne") // A <= 0 short-circuits the G checks

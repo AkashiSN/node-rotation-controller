@@ -108,10 +108,7 @@ func Derive(in Inputs) Result {
 		// spec §3.2 layer-2: C = m·floor(D/(t_rot+cooldown)). m is fixed at 1 in
 		// v1 (policy validates surge.maxUnavailable == 1); kept explicit so v2
 		// surge parallelism needs no formula change.
-		m := in.MaxUnavailable
-		if m < 1 {
-			m = 1
-		}
+		m := max(in.MaxUnavailable, 1)
 		r.C = m * int(in.WindowLen/denom)
 	}
 
