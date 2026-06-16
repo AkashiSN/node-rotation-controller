@@ -49,20 +49,30 @@ func testPolicy() *policy.Policy {
 	return p
 }
 
-type fakeRecorder struct {
-	success, expired, failure, drainStuck int
-	retry                                 map[string]int
+type recDuration struct {
+	pool, phase string
+	d           time.Duration
 }
 
-func (f *fakeRecorder) Success(string)            { f.success++ }
-func (f *fakeRecorder) Expired(string, string)    { f.expired++ }
-func (f *fakeRecorder) Failure(string, string)    { f.failure++ }
-func (f *fakeRecorder) DrainStuck(string, string) { f.drainStuck++ }
-func (f *fakeRecorder) RetryCount(_, claim string, n int) {
-	if f.retry == nil {
-		f.retry = map[string]int{}
+type fakeRecorder struct {
+	success, expired, failure int
+	obs                       map[string]PoolObservation
+	window                    []bool
+	durations                 []recDuration
+}
+
+func (f *fakeRecorder) Success(string)         { f.success++ }
+func (f *fakeRecorder) Expired(string, string) { f.expired++ }
+func (f *fakeRecorder) Failure(string, string) { f.failure++ }
+func (f *fakeRecorder) ObservePool(np string, o PoolObservation) {
+	if f.obs == nil {
+		f.obs = map[string]PoolObservation{}
 	}
-	f.retry[claim] = n
+	f.obs[np] = o
+}
+func (f *fakeRecorder) ObserveWindow(active bool) { f.window = append(f.window, active) }
+func (f *fakeRecorder) ObserveDuration(np, phase string, d time.Duration) {
+	f.durations = append(f.durations, recDuration{np, phase, d})
 }
 
 func newReconciler(t *testing.T, clock time.Time, rec *fakeRecorder, objs ...client.Object) *RotationReconciler {
