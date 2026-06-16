@@ -4,8 +4,9 @@
 // rather than scattered as string literals across the handlers.
 //
 // Beyond the keys read by candidate selection (spec §3.2), the surge builder
-// (spec §3.3) defines SurgeFor; the remaining drain and completion keys are
-// added by their handlers as they land.
+// (spec §3.3) defines SurgeFor; the rotation state machine (spec §5.2) adds the
+// NodePool anchor, the per-attempt NodeClaim timestamps, and the node Cordoned
+// marker that complete the §5.3 state model.
 package annotations
 
 // Prefix is the common namespace for every controller-owned key (spec §5.3).
@@ -30,7 +31,43 @@ const (
 	// RetryCount is the integer count of consecutive failures of this claim; it
 	// escalates the re-selection backoff (spec §5.3).
 	RetryCount = Prefix + "retry-count"
+	// StartedAt is the RFC3339 readyTimeout deadline anchor, written once per
+	// attempt and cleared by the failed write so a retry re-stamps its own
+	// deadline (spec §5.3).
+	StartedAt = Prefix + "started-at"
+	// SurgeClaim records the induced surge NodeClaim's name, persisted by the
+	// pending handler as soon as the placeholder's bind target is observable so
+	// the rollback path can reap it even after the placeholder is gone (spec §5.3).
+	SurgeClaim = Prefix + "surge-claim"
 )
+
+// Per-NodePool rotation keys (spec §5.3 State Model). The anchor outlives the old
+// NodeClaim's deletion on success, so the durable record of an in-flight rotation
+// — and the per-NodePool serial gate — lives here, not on the claim.
+const (
+	// ActiveRotation is the durable anchor: the in-flight rotation's old
+	// NodeClaim name. Written before any other side effect at start, cleared last
+	// at completion/failure; also the per-NodePool serial gate (spec §5.2).
+	ActiveRotation = Prefix + "active-rotation"
+	// ActiveRotationState mirrors whether the anchored rotation reached draining;
+	// its absence after the old NodeClaim is gone marks a force-expiry, not a
+	// success (spec §5.2). Its only value is StateDraining.
+	ActiveRotationState = Prefix + "active-rotation-state"
+	// LastRotationAt is the RFC3339 completion time of the last successful
+	// rotation; the cooldownAfter start-gate anchor (spec §5.2 step 2).
+	LastRotationAt = Prefix + "last-rotation-at"
+	// LastFailureAt is the RFC3339 anchor for the pool-level inter-attempt pause
+	// after a failed attempt (spec §4.4, §5.2 step 2).
+	LastFailureAt = Prefix + "last-failure-at"
+	// Freeze is an RFC3339 freeze-until timestamp that suppresses rotation starts
+	// and holds escalation of an in-flight pending rotation (spec §3.1).
+	Freeze = Prefix + "freeze"
+)
+
+// Cordoned marks a node's cordon (spec.unschedulable) as controller-applied, so
+// rollback and the startup sweep uncordon only what the controller cordoned —
+// an operator's pre-existing cordon (no marker) is never touched (spec §5.3).
+const Cordoned = Prefix + "cordoned"
 
 // State annotation values (spec §5.3). An empty/absent State means a fresh claim.
 const (

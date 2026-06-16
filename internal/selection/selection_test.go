@@ -339,6 +339,20 @@ func TestPickOldestEligibleFailedWithUnparseableRetryCountUsesBase(t *testing.T)
 	}
 }
 
+func TestTriggeredConsidersAgeAloneIgnoringReadyAndState(t *testing.T) {
+	in := baseInputs() // threshold 6d
+	// Past the trigger but NotReady and in-flight: not *eligible*, yet still
+	// near-deadline, so Triggered (used for the placeholder host exclusion) is true.
+	c := claim("c", 10*day, ready(false), ann(annotations.State, annotations.StatePending))
+	if !selection.Triggered(&c, in) {
+		t.Error("a past-deadline claim must be Triggered regardless of Ready/state")
+	}
+	young := claim("young", 1*day)
+	if selection.Triggered(&young, in) {
+		t.Error("a young claim must not be Triggered")
+	}
+}
+
 func TestEscalatedBackoff(t *testing.T) {
 	base := 30 * time.Minute
 	for _, tc := range []struct {

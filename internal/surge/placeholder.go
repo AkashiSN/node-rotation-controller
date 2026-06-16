@@ -1,6 +1,8 @@
 package surge
 
 import (
+	"slices"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -11,15 +13,6 @@ import (
 
 // placeholderContainerName is the name of the single pause container.
 const placeholderContainerName = "pause"
-
-// placeholderNamePrefix is prepended to the old NodeClaim's name to form a
-// deterministic placeholder Pod name, so the state machine's create is
-// idempotent (a re-create after a crash hits AlreadyExists rather than spawning
-// a duplicate). This assumes prefix+Candidate.Name stays within the 253-char
-// Pod name limit; Karpenter NodeClaim names are short generated names, so it
-// holds in practice. A length-safe derivation (truncate + hash, preserving
-// determinism) belongs with the create path that surfaces the limit.
-const placeholderNamePrefix = "noderotation-surge-"
 
 // PlaceholderInputs are the resolved inputs for one placeholder Pod (spec §3.3).
 // They are plain values; the caller fetches the candidate Node, the NodePool,
@@ -57,7 +50,7 @@ func BuildPlaceholder(in PlaceholderInputs) *corev1.Pod {
 	preempt := corev1.PreemptNever
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      placeholderNamePrefix + in.Candidate.Name,
+			Name:      PlaceholderName(in.Candidate.Name),
 			Namespace: in.Namespace,
 			Labels:    map[string]string{annotations.SurgeFor: in.Candidate.Name},
 			// Pod-level do-not-disrupt: blocks voluntary disruption of whatever node
@@ -159,9 +152,9 @@ func poolAllows(pool *karpv1.NodePool, key, value string) bool {
 func requirementPermits(op corev1.NodeSelectorOperator, values []string, value string) bool {
 	switch op {
 	case corev1.NodeSelectorOpIn:
-		return contains(values, value)
+		return slices.Contains(values, value)
 	case corev1.NodeSelectorOpNotIn:
-		return !contains(values, value)
+		return !slices.Contains(values, value)
 	case corev1.NodeSelectorOpExists:
 		return true // the key is present (value is non-empty by construction)
 	case corev1.NodeSelectorOpDoesNotExist:
@@ -169,13 +162,4 @@ func requirementPermits(op corev1.NodeSelectorOperator, values []string, value s
 	default:
 		return false
 	}
-}
-
-func contains(values []string, v string) bool {
-	for _, x := range values {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }

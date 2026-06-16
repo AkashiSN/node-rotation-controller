@@ -236,3 +236,28 @@ func TestReschedulableRequestsEmptyWhenNothingReschedulable(t *testing.T) {
 		t.Fatalf("want empty, got %v", got)
 	}
 }
+
+func TestIsInfraOrCompleted(t *testing.T) {
+	cases := []struct {
+		name string
+		p    corev1.Pod
+		want bool
+	}{
+		{"plain workload", pod("app"), false},
+		{"daemonset", pod("ds", ownedBy("DaemonSet")), true},
+		{"non-controller daemonset ref", pod("ds-ref", ownedByNonController("DaemonSet")), false},
+		{"mirror/static", pod("static", mirror()), true},
+		{"succeeded", pod("done", phase(corev1.PodSucceeded)), true},
+		{"failed", pod("crashed", phase(corev1.PodFailed)), true},
+		// node-pinning is NOT infra: a pinned Pod is still real workload occupying
+		// a node, which the rollback's absorb-host guard must count (spec §3.3).
+		{"node-pinned workload", pod("pinned", hostnamePinned()), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := surge.IsInfraOrCompleted(&tc.p); got != tc.want {
+				t.Errorf("IsInfraOrCompleted = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
