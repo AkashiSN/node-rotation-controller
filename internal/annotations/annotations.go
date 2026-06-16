@@ -3,12 +3,21 @@
 // of the project's compatibility surface (§6.1), so they live in one place
 // rather than scattered as string literals across the handlers.
 //
-// Only the keys read by candidate selection (spec §3.2) are defined so far; the
-// surge, drain, and completion handlers add the remaining keys as they land.
+// Beyond the keys read by candidate selection (spec §3.2), the surge builder
+// (spec §3.3) defines SurgeFor; the remaining drain and completion keys are
+// added by their handlers as they land.
 package annotations
 
 // Prefix is the common namespace for every controller-owned key (spec §5.3).
 const Prefix = "noderotation.io/"
+
+// SurgeFor pairs the surge runtime objects with the rotation that owns them
+// (spec §3.3, §5.3). Its value is the old NodeClaim's metadata.name. It is set
+// as a label on the placeholder Pod and as an annotation on each
+// controller-frozen node; the marker is what finds the placeholder and resolves
+// the surge target after the old NodeClaim is gone, and what distinguishes a
+// controller-applied karpenter.sh/do-not-disrupt from an operator's.
+const SurgeFor = Prefix + "surge-for"
 
 // Per-NodeClaim progress-state keys (spec §5.3 State Model). The selector reads
 // State (to exclude in-flight/terminal claims) and, for a Failed claim, FailedAt
