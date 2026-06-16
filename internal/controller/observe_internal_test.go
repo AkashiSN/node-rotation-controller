@@ -103,7 +103,7 @@ func TestReconcileForgetsDeletedPool(t *testing.T) {
 func TestObserveShortLeadNodes(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	short := testClaim("nc-short", 1*24*time.Hour) // expireAfter set below
-	short.Spec.ExpireAfter = karpv1.NillableDuration{Duration: durPtr(40 * time.Hour)}
+	short.Spec.ExpireAfter = karpv1.NillableDuration{Duration: new(40 * time.Hour)}
 	ample := testClaim("nc-ample", 1*24*time.Hour)
 
 	rec := &fakeRecorder{}
@@ -114,8 +114,6 @@ func TestObserveShortLeadNodes(t *testing.T) {
 		t.Errorf("short-lead: got %d, want 1", o.ShortLeadNodes)
 	}
 }
-
-func durPtr(d time.Duration) *time.Duration { return &d }
 
 // TestObserveDrainStuckAndInProgress: an anchored, draining rotation whose old
 // NodeClaim has been deleting past the drain bound (tGP 30m + buffer 15m = 45m).

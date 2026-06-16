@@ -16,6 +16,8 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 ENVTEST_VERSION ?= v0.24.1
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 GOLANGCI_LINT_VERSION ?= v2.12.2
+GOPLS ?= $(LOCALBIN)/gopls
+GOPLS_VERSION ?= v0.22.0
 
 .PHONY: all
 all: build
@@ -40,6 +42,25 @@ test: envtest
 lint: golangci-lint
 	$(GOLANGCI_LINT) run
 
+# gopls-check surfaces gopls' static diagnostics down to hint severity (the
+# modernize suggestions etc. that golangci-lint does not cover). gopls check
+# takes file paths, not packages, and exits 0 even with findings — so feed it the
+# tracked Go files and fail when it prints anything. Findings land on stdout
+# (captured) so stderr is dropped to avoid double-printing; a non-zero gopls exit
+# (e.g. a load error) fails the target too, so a tool failure can't pass green.
+.PHONY: gopls-check
+gopls-check: gopls
+	@out="$$($(GOPLS) check -severity=hint $$(git ls-files '*.go') 2>/dev/null)"; status=$$?; \
+	if [ $$status -ne 0 ]; then \
+		echo "gopls check failed to run (exit $$status); re-run for detail: $(GOPLS) check -severity=hint \$$(git ls-files '*.go')"; \
+		exit $$status; \
+	fi; \
+	if [ -n "$$out" ]; then \
+		echo "$$out"; \
+		echo "gopls check found issues (severity>=hint)"; \
+		exit 1; \
+	fi
+
 .PHONY: docker-build
 docker-build:
 	docker build -t $(IMG) .
@@ -57,3 +78,7 @@ envtest: $(LOCALBIN)
 .PHONY: golangci-lint
 golangci-lint: $(LOCALBIN)
 	test -s $(GOLANGCI_LINT) || GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+.PHONY: gopls
+gopls: $(LOCALBIN)
+	test -s $(GOPLS) || GOBIN=$(LOCALBIN) go install golang.org/x/tools/gopls@$(GOPLS_VERSION)

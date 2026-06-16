@@ -12,7 +12,7 @@ package window
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/policy"
@@ -76,10 +76,8 @@ func (s *Schedule) InWindow(now time.Time) bool {
 		if mins < e.StartMin || mins >= e.EndMin {
 			continue
 		}
-		for _, d := range e.Days {
-			if local.Weekday() == d {
-				return true
-			}
+		if slices.Contains(e.Days, local.Weekday()) {
+			return true
 		}
 	}
 	return false
@@ -100,7 +98,7 @@ func (s *Schedule) WorstCasePeriod() (time.Duration, bool) {
 		return 0, false
 	}
 
-	sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+	slices.Sort(offsets)
 	// Deduplicate so coincident starts don't create spurious zero gaps.
 	uniq := offsets[:1]
 	for _, o := range offsets[1:] {
