@@ -132,6 +132,24 @@ func (r *Recorder) ObservePool(nodePool string, o controller.PoolObservation) {
 	r.freezeUntil.WithLabelValues(nodePool).Set(freeze)
 }
 
+// ForgetPool deletes every per-NodePool series for nodePool, called when the
+// NodePool is deleted (§4.2). The gauges are recomputed each reconcile, so once a
+// pool's reconciles stop they would otherwise latch their last value forever — a
+// since-deleted drain_stuck=1 would alert indefinitely. The cluster-wide
+// window_active gauge has no nodepool label and is untouched.
+func (r *Recorder) ForgetPool(nodePool string) {
+	for _, g := range []*prometheus.GaugeVec{
+		r.candidates, r.inProgress, r.freezeUntil, r.ageThreshold, r.rotationChances,
+		r.windowPeriod, r.shortLead, r.drainStuck, r.retryCount,
+	} {
+		g.DeleteLabelValues(nodePool)
+	}
+	// completed_total{nodepool,outcome} and duration_seconds{nodepool,phase} carry
+	// an extra label, so drop every series sharing this nodepool.
+	r.completed.DeletePartialMatch(prometheus.Labels{"nodepool": nodePool})
+	r.duration.DeletePartialMatch(prometheus.Labels{"nodepool": nodePool})
+}
+
 func b2f(b bool) float64 {
 	if b {
 		return 1

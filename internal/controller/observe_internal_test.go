@@ -1,11 +1,14 @@
 package controller
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -74,6 +77,24 @@ func TestObserveIdlePoolGauges(t *testing.T) {
 	}
 	if len(rec.window) == 0 || !rec.window[len(rec.window)-1] {
 		t.Errorf("window-active: got %v, want last true", rec.window)
+	}
+}
+
+// TestReconcileForgetsDeletedPool: once the NodePool is gone, Reconcile drops its
+// metric series (§4.2) so the recomputed gauges do not latch at their last value
+// after its reconciles stop.
+func TestReconcileForgetsDeletedPool(t *testing.T) {
+	rec := &fakeRecorder{}
+	r := newReconciler(t, testNow, rec) // no objects → Get returns NotFound
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: testPoolName},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if len(rec.forgotten) != 1 || rec.forgotten[0] != testPoolName {
+		t.Errorf("ForgetPool: got %v, want [%s]", rec.forgotten, testPoolName)
 	}
 }
 

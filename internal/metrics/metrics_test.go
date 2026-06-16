@@ -189,3 +189,67 @@ func countSeries(t *testing.T, reg *prometheus.Registry) int {
 	}
 	return len(mfs)
 }
+
+// metricPresent reports whether a series with the given name and labels exists,
+// without failing the test when it does not (unlike findMetric).
+func metricPresent(t *testing.T, reg *prometheus.Registry, name string, labels map[string]string) bool {
+	t.Helper()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			if labelsMatch(m, labels) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ForgetPool must drop every per-NodePool series so a deleted NodePool stops
+// exporting stale gauges/counters — the per-pool analogue of the recomputed-gauge
+// reset, since a deleted pool's reconciles stop and would otherwise latch the
+// last value forever. The cluster-wide window_active gauge and other pools are
+// untouched.
+func TestForgetPoolClearsSeries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	rec := metrics.New(reg)
+
+	rec.ObservePool("api", controller.PoolObservation{Candidates: 3, DrainStuck: true, RetryCount: 2})
+	rec.Success("api")
+	rec.ObserveDuration("api", controller.PhaseSurgeWait, time.Minute)
+	rec.ObservePool("web", controller.PoolObservation{Candidates: 5}) // unrelated pool stays
+	rec.ObserveWindow(true)
+
+	rec.ForgetPool("api")
+
+	api := map[string]string{"nodepool": "api"}
+	for _, name := range []string{
+		"noderotation_candidates", "noderotation_in_progress", "noderotation_drain_stuck",
+		"noderotation_retry_count", "noderotation_short_lead_nodes", "noderotation_freeze_until_timestamp",
+		"noderotation_age_threshold_seconds", "noderotation_rotation_chances", "noderotation_window_period_seconds",
+	} {
+		if metricPresent(t, reg, name, api) {
+			t.Errorf("%s{nodepool=api} still present after ForgetPool", name)
+		}
+	}
+	if metricPresent(t, reg, "noderotation_completed_total", map[string]string{"nodepool": "api", "outcome": "success"}) {
+		t.Error("completed_total{nodepool=api} still present after ForgetPool")
+	}
+	if metricPresent(t, reg, "noderotation_duration_seconds", map[string]string{"nodepool": "api", "phase": controller.PhaseSurgeWait}) {
+		t.Error("duration_seconds{nodepool=api} still present after ForgetPool")
+	}
+
+	// The unrelated pool and the cluster-wide gauge survive.
+	if got := metricValue(t, reg, "noderotation_candidates", map[string]string{"nodepool": "web"}); got != 5 {
+		t.Errorf("web candidates clobbered: got %v, want 5", got)
+	}
+	if got := metricValue(t, reg, "noderotation_window_active", map[string]string{}); got != 1 {
+		t.Errorf("window_active clobbered: got %v, want 1", got)
+	}
+}

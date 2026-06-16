@@ -30,6 +30,10 @@ type Recorder interface {
 	ObserveWindow(active bool)
 	// ObserveDuration records one completed phase duration (§4.2 duration_seconds).
 	ObserveDuration(nodePool, phase string, d time.Duration)
+	// ForgetPool drops every per-NodePool series when the NodePool is deleted, so
+	// the recomputed gauges do not latch at their last value once its reconciles
+	// stop (§4.2). The cluster-wide window-active gauge is unaffected.
+	ForgetPool(nodePool string)
 }
 
 // duration_seconds phase labels (§4.2). The drain phase is tracked separately
@@ -74,3 +78,4 @@ func (noopRecorder) Failure(string, string)                        {}
 func (noopRecorder) ObservePool(string, PoolObservation)           {}
 func (noopRecorder) ObserveWindow(bool)                            {}
 func (noopRecorder) ObserveDuration(string, string, time.Duration) {}
+func (noopRecorder) ForgetPool(string)                             {}

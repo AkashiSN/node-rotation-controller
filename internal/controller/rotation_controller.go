@@ -79,6 +79,12 @@ func (r *RotationReconciler) recorder() Recorder {
 func (r *RotationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var pool karpv1.NodePool
 	if err := r.Get(ctx, req.NamespacedName, &pool); err != nil {
+		if apierrors.IsNotFound(err) {
+			// The NodePool is gone; drop its metric series so the recomputed gauges
+			// don't latch at their last value once its reconciles stop (§4.2).
+			// NodePool is cluster-scoped, so the request name is the pool name.
+			r.recorder().ForgetPool(req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !r.inScope(&pool) {
@@ -179,10 +185,16 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	now := r.now()
 	res := r.resolve(pool)
 
-	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
-	if err := r.observe(ctx, pool, res, now); err != nil {
+	// List the pool's claims once and feed both the §4.2 gauges and candidate
+	// selection: the state is identical for both and unchanged in between (step 2
+	// writes nothing), so a single read avoids a redundant cache list per pass.
+	claims, err := r.poolClaims(ctx, pool)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
+
+	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
+	r.observe(pool, res, now, claims)
 
 	// ── 1. Drive the in-flight rotation, keyed on the anchor (it outlives the
 	//        old NodeClaim's deletion on success).
@@ -196,10 +208,6 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	}
 
 	// ── 3. Pick the candidate, gate on its headroom, then anchor.
-	claims, err := r.poolClaims(ctx, pool)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
 	cand := selection.PickOldestEligible(claims, r.selInputs(res, now))
 	if cand == nil {
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
@@ -224,20 +232,18 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	return r.advance(ctx, pool, cand.Name)
 }
 
-// observe computes and emits the §4.2 reconcile-time gauges from live state on
-// every pass. Recomputing each pass is what lets the 0/1 and "highest"/"count"
-// gauges reset: a cleared drain stops alerting, a pool with no failures reports
-// zero retries. The window-active gauge is cluster-wide (label-free) but set here
-// because the reconcile is the only periodic tick (§5.2).
-func (r *RotationReconciler) observe(ctx context.Context, pool *karpv1.NodePool, res resolved, now time.Time) error {
+// observe computes and emits the §4.2 reconcile-time gauges from the live claims
+// (listed once by the caller) on every pass. Recomputing each pass is what lets
+// the 0/1 and "highest"/"count" gauges reset: a cleared drain stops alerting, a
+// pool with no failures reports zero retries. The window-active gauge is
+// cluster-wide (label-free) but set here because the reconcile is the only
+// periodic tick (§5.2).
+func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now time.Time, claims []karpv1.NodeClaim) {
 	rec := r.recorder()
 	rec.ObserveWindow(r.Schedule.InWindow(now))
 
-	claims, err := r.poolClaims(ctx, pool)
-	if err != nil {
-		return err
-	}
-
+	// WorstCasePeriod's ok is always true here: policy.Validate rejects an empty
+	// maintenanceWindows (and empty days), so the Schedule always has ≥1 occurrence.
 	p, _ := r.Schedule.WorstCasePeriod()
 	a, g := r.derivedThresholds(pool, res, p)
 	o := PoolObservation{
@@ -256,7 +262,6 @@ func (r *RotationReconciler) observe(ctx context.Context, pool *karpv1.NodePool,
 		o.FreezeUntil = until
 	}
 	rec.ObservePool(pool.Name, o)
-	return nil
 }
 
 // highestRetry returns the largest retry-count annotation across the pool's

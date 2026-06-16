@@ -59,6 +59,7 @@ type fakeRecorder struct {
 	obs                       map[string]PoolObservation
 	window                    []bool
 	durations                 []recDuration
+	forgotten                 []string
 }
 
 func (f *fakeRecorder) Success(string)         { f.success++ }
@@ -74,6 +75,7 @@ func (f *fakeRecorder) ObserveWindow(active bool) { f.window = append(f.window, 
 func (f *fakeRecorder) ObserveDuration(np, phase string, d time.Duration) {
 	f.durations = append(f.durations, recDuration{np, phase, d})
 }
+func (f *fakeRecorder) ForgetPool(np string) { f.forgotten = append(f.forgotten, np) }
 
 func newReconciler(t *testing.T, clock time.Time, rec *fakeRecorder, objs ...client.Object) *RotationReconciler {
 	t.Helper()
