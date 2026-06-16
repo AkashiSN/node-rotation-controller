@@ -15,7 +15,10 @@ const placeholderContainerName = "pause"
 // placeholderNamePrefix is prepended to the old NodeClaim's name to form a
 // deterministic placeholder Pod name, so the state machine's create is
 // idempotent (a re-create after a crash hits AlreadyExists rather than spawning
-// a duplicate).
+// a duplicate). This assumes prefix+Candidate.Name stays within the 253-char
+// Pod name limit; Karpenter NodeClaim names are short generated names, so it
+// holds in practice. A length-safe derivation (truncate + hash, preserving
+// determinism) belongs with the create path that surfaces the limit.
 const placeholderNamePrefix = "noderotation-surge-"
 
 // PlaceholderInputs are the resolved inputs for one placeholder Pod (spec §3.3).
@@ -150,9 +153,9 @@ func poolAllows(pool *karpv1.NodePool, key, value string) bool {
 }
 
 // requirementPermits evaluates one NodeSelector operator against value. Gt/Lt
-// (and their Gte/Lte aliases) are not used by the categorical node labels this
-// replicates; an unrecognized operator is treated as not permitting, which drops
-// the key — the schedulability-preserving default (spec §3.3).
+// are not used by the categorical node labels this replicates; an unrecognized
+// operator is treated as not permitting, which drops the key — the
+// schedulability-preserving default (spec §3.3).
 func requirementPermits(op corev1.NodeSelectorOperator, values []string, value string) bool {
 	switch op {
 	case corev1.NodeSelectorOpIn:

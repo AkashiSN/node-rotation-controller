@@ -53,7 +53,7 @@ func reschedulable(p *corev1.Pod, nodeName string) bool {
 
 func isDaemonSet(p *corev1.Pod) bool {
 	for _, o := range p.OwnerReferences {
-		if o.Kind == "DaemonSet" {
+		if o.Controller != nil && *o.Controller && o.Kind == "DaemonSet" {
 			return true
 		}
 	}

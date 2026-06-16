@@ -42,6 +42,14 @@ func ownedBy(kind string) podOpt {
 	}
 }
 
+// ownedByNonController adds an owner reference that is NOT the controlling one
+// (Controller unset), mirroring a stray cross-reference rather than ownership.
+func ownedByNonController(kind string) podOpt {
+	return func(p *corev1.Pod) {
+		p.OwnerReferences = append(p.OwnerReferences, metav1.OwnerReference{Kind: kind})
+	}
+}
+
 func mirror() podOpt {
 	return func(p *corev1.Pod) {
 		if p.Annotations == nil {
@@ -179,6 +187,17 @@ func TestReschedulableRequestsKeepsReplicaSetAndStatefulSet(t *testing.T) {
 	}
 	got := surge.ReschedulableRequests(pods, candidateNode)
 	wantEqual(t, got, rl("cpu", "200m"))
+}
+
+func TestReschedulableRequestsKeepsNonControllerDaemonSetRef(t *testing.T) {
+	// A DaemonSet owner reference that is not the controlling one is a stray
+	// cross-reference, not ownership — the Pod is a normal reschedulable workload
+	// and must still be counted.
+	pods := []corev1.Pod{
+		pod("a", reqs(rl("cpu", "100m")), ownedByNonController("DaemonSet")),
+	}
+	got := surge.ReschedulableRequests(pods, candidateNode)
+	wantEqual(t, got, rl("cpu", "100m"))
 }
 
 func TestReschedulableRequestsCountsSidecarsAndOverhead(t *testing.T) {
