@@ -619,13 +619,9 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 // held (spec §5.2). The stuck-drain alert is the recomputed drain_stuck gauge
 // (observe), so this step no longer needs the drain bound.
 func (r *RotationReconciler) advanceDraining(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (ctrl.Result, error) {
-	if pool.Annotations[annotations.ActiveRotationState] != annotations.StateDraining ||
-		pool.Annotations[annotations.DrainingAt] == "" {
+	if pool.Annotations[annotations.ActiveRotationState] != annotations.StateDraining {
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
 			m[annotations.ActiveRotationState] = annotations.StateDraining
-			if m[annotations.DrainingAt] == "" {
-				m[annotations.DrainingAt] = rfc3339(r.now())
-			}
 		}); err != nil {
 			return ctrl.Result{}, err
 		}
