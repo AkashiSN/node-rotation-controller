@@ -11,6 +11,7 @@
 package window
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"time"
@@ -83,42 +84,133 @@ func (s *Schedule) InWindow(now time.Time) bool {
 	return false
 }
 
-// WorstCasePeriod returns P: the largest gap between the start of one window
-// occurrence and the start of the next, over the recurring weekly cycle and
-// across the union of all entries (and all timezones). The second return is
-// false when the schedule has no occurrences.
-func (s *Schedule) WorstCasePeriod() (time.Duration, bool) {
-	var offsets []time.Duration
+// occurrence is one occurrence of the effective maintenance window on the
+// canonical weekly timeline: it begins at start (in [0, week)) and lasts length,
+// possibly wrapping past the week boundary back toward 0.
+type occurrence struct {
+	start  time.Duration
+	length time.Duration
+}
+
+// mergedOccurrences projects every entry occurrence onto the canonical weekly
+// timeline (via startOffset, so cross-timezone overlaps are handled the same way
+// WorstCasePeriod always has) and merges overlapping/adjacent ones: the effective
+// maintenance window is the union of all entries (spec §3.1), so two adjacent
+// entries are one occurrence, not two. The result drives both P (gaps between
+// occurrence starts) and D (occurrence durations), keeping them consistent. It is
+// empty when the schedule has no occurrences.
+func (s *Schedule) mergedOccurrences() []occurrence {
+	type span struct{ start, end time.Duration } // 0 <= start < end <= week
+	var spans []span
 	for _, e := range s.entries {
+		length := time.Duration(e.EndMin-e.StartMin) * time.Minute
+		if length <= 0 {
+			continue // defensive: policy.Validate already rejects start >= end
+		}
 		for _, d := range e.Days {
-			offsets = append(offsets, e.startOffset(d))
+			st := e.startOffset(d) // [0, week)
+			if en := st + length; en > week {
+				// Wraps the week boundary (possible after a cross-tz projection):
+				// split into a head at the week start and a tail at the week end;
+				// the circular join below reconnects them.
+				spans = append(spans, span{0, en - week}, span{st, week})
+			} else {
+				spans = append(spans, span{st, en})
+			}
 		}
 	}
-	if len(offsets) == 0 {
+	if len(spans) == 0 {
+		return nil
+	}
+
+	slices.SortFunc(spans, func(a, b span) int {
+		if a.start != b.start {
+			return cmp.Compare(a.start, b.start)
+		}
+		return cmp.Compare(a.end, b.end)
+	})
+	// Merge overlapping/adjacent spans (next.start <= cur.end joins them).
+	merged := spans[:1]
+	for _, x := range spans[1:] {
+		last := &merged[len(merged)-1]
+		if x.start <= last.end {
+			if x.end > last.end {
+				last.end = x.end
+			}
+		} else {
+			merged = append(merged, x)
+		}
+	}
+
+	// Circular join: a span touching the week end (…, week] continues into one
+	// starting at 0 — a single occurrence that wraps. Anchor it at its true
+	// (late-week) start so the gap and duration both see one occurrence, not two.
+	n := len(merged)
+	if n > 1 && merged[0].start == 0 && merged[n-1].end == week {
+		occs := []occurrence{{start: merged[n-1].start, length: (week - merged[n-1].start) + merged[0].end}}
+		for i := 1; i < n-1; i++ {
+			occs = append(occs, occurrence{merged[i].start, merged[i].end - merged[i].start})
+		}
+		return occs
+	}
+	occs := make([]occurrence, len(merged))
+	for i, m := range merged {
+		occs[i] = occurrence{m.start, m.end - m.start}
+	}
+	return occs
+}
+
+// WorstCasePeriod returns P: the largest gap between the start of one effective
+// window occurrence and the start of the next, over the recurring weekly cycle
+// and across the union of all entries (and all timezones). Occurrences are the
+// merged union (spec §3.1), so adjacent/overlapping entries count as one
+// occurrence — their internal entry starts are not separate occurrences. The
+// second return is false when the schedule has no occurrences.
+func (s *Schedule) WorstCasePeriod() (time.Duration, bool) {
+	occs := s.mergedOccurrences()
+	if len(occs) == 0 {
 		return 0, false
 	}
-
-	slices.Sort(offsets)
-	// Deduplicate so coincident starts don't create spurious zero gaps.
-	uniq := offsets[:1]
-	for _, o := range offsets[1:] {
-		if o != uniq[len(uniq)-1] {
-			uniq = append(uniq, o)
-		}
+	starts := make([]time.Duration, len(occs))
+	for i, o := range occs {
+		starts[i] = o.start
 	}
+	slices.Sort(starts)
 
-	// The cycle is weekly: append the first occurrence one week later as the
-	// wrap sentinel so the gap spanning the week boundary is measured too.
+	// The cycle is weekly: the wrap gap (first start one week later, minus the
+	// last) measures the span across the week boundary.
 	var maxGap time.Duration
-	for i := 1; i < len(uniq); i++ {
-		if g := uniq[i] - uniq[i-1]; g > maxGap {
+	for i := 1; i < len(starts); i++ {
+		if g := starts[i] - starts[i-1]; g > maxGap {
 			maxGap = g
 		}
 	}
-	if wrap := (uniq[0] + week) - uniq[len(uniq)-1]; wrap > maxGap {
+	if wrap := (starts[0] + week) - starts[len(starts)-1]; wrap > maxGap {
 		maxGap = wrap
 	}
 	return maxGap, true
+}
+
+// ShortestWindow returns D: the representative window-occurrence duration fed to
+// the layer-2 throughput check (spec §3.2). It is the duration of the shortest
+// occurrence of the **effective** maintenance window — the union of all entries
+// (§3.1) — so adjacent or overlapping entries that form one continuous window are
+// counted as a single occurrence, not split into raw entry pieces. The shortest
+// occurrence is the conservative worst case (a shorter D fits fewer rotations,
+// C = floor(D/(t_rot+cooldown))) without that false pessimism. The second return
+// is false when the schedule has no occurrences.
+func (s *Schedule) ShortestWindow() (time.Duration, bool) {
+	occs := s.mergedOccurrences()
+	if len(occs) == 0 {
+		return 0, false
+	}
+	shortest := occs[0].length
+	for _, o := range occs[1:] {
+		if o.length < shortest {
+			shortest = o.length
+		}
+	}
+	return shortest, true
 }
 
 // startOffset projects one (weekday, start-time) occurrence in the entry's tz

@@ -281,13 +281,34 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		return ctrl.Result{}, err
 	}
 
+	// Derive the §3.2 thresholds + feasibility findings once from current state;
+	// the §4.2 gauges (step 0) and the fatal-feasibility gate (step 1b) share them.
+	// WorstCasePeriod/ShortestWindow's ok is always true here: policy.Validate
+	// rejects an empty maintenanceWindows (and empty days), so the Schedule always
+	// has ≥1 occurrence. N is the pool's in-scope claim count (issue #36).
+	p, _ := r.Schedule.WorstCasePeriod()
+	d, _ := r.Schedule.ShortestWindow()
+	derived := r.derivedThresholds(pool, res, p, d, len(claims))
+
 	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
-	r.observe(pool, res, now, claims)
+	r.observe(pool, res, now, claims, p, derived)
 
 	// ── 1. Drive the in-flight rotation, keyed on the anchor (it outlives the
 	//        old NodeClaim's deletion on success).
 	if name := pool.Annotations[annotations.ActiveRotation]; name != "" {
 		return r.advance(ctx, pool, name)
+	}
+
+	// ── 1b. Fatal feasibility gate (spec §3.2 layer 1): a schedule that cannot
+	//        guarantee the configured rotation chances (A ≤ 0, override G < 1,
+	//        K < 1, no windows) must NOT start a new rotation — the §2.2 invariant
+	//        is "validation fails when the schedule cannot guarantee the configured
+	//        chances". This gates only the start; an in-flight rotation (step 1)
+	//        is already past here and runs to completion/rollback regardless.
+	if f, ok := firstFatal(derived.Findings); ok {
+		log.Info("schedule feasibility is fatal; not starting a rotation",
+			"code", f.Code, "detail", f.Message)
+		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
 
 	// ── 2. Candidate-independent start gates.
@@ -326,22 +347,18 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 // pool with no failures reports zero retries. The window-active gauge is
 // cluster-wide (label-free) but set here because the reconcile is the only
 // periodic tick (§5.2).
-func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now time.Time, claims []karpv1.NodeClaim) {
+func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now time.Time, claims []karpv1.NodeClaim, p time.Duration, derived schedule.Result) {
 	rec := r.recorder()
 	rec.ObserveWindow(r.Schedule.InWindow(now))
 
-	// WorstCasePeriod's ok is always true here: policy.Validate rejects an empty
-	// maintenanceWindows (and empty days), so the Schedule always has ≥1 occurrence.
-	p, _ := r.Schedule.WorstCasePeriod()
-	a, g := r.derivedThresholds(pool, res, p)
 	o := PoolObservation{
 		Candidates:      selection.CountEligible(claims, r.selInputs(res, now)),
 		ShortLeadNodes:  selection.CountShortLead(claims, res.leadTime),
 		RetryCount:      highestRetry(claims),
 		DrainStuck:      r.drainStuck(pool, claims, res, now),
 		WindowPeriod:    p,
-		AgeThreshold:    a,
-		RotationChances: g,
+		AgeThreshold:    derived.A,
+		RotationChances: derived.G,
 	}
 	if pool.Annotations[annotations.ActiveRotation] != "" {
 		o.InProgress = 1 // serial per NodePool in v1 (0 or 1)
@@ -381,33 +398,50 @@ func (r *RotationReconciler) drainStuck(pool *karpv1.NodePool, claims []karpv1.N
 	return false
 }
 
-// derivedThresholds returns the derived ageThreshold A and guaranteed chances G
-// for the pool's representative template expireAfter (§3.2) — the
-// noderotation_age_threshold_seconds and noderotation_rotation_chances gauges. A
-// never-expiring template has no derivation: an override A still applies, but no
-// chances can be guaranteed.
-func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolved, p time.Duration) (time.Duration, int) {
+// derivedThresholds runs the §3.2 derivation for the pool's representative
+// template expireAfter and returns the full schedule.Result: the derived
+// ageThreshold A and guaranteed chances G feed the
+// noderotation_age_threshold_seconds / noderotation_rotation_chances gauges, and
+// the Findings are consumed by the feasibility gate (issue #27). The layer-2
+// throughput inputs windowLen (D) and nodeCount (N) must be passed so the
+// throughput findings are meaningful (issue #36); A and G do not depend on them.
+// A never-expiring template has no derivation: an override A still applies, but
+// no chances can be guaranteed and no findings are produced.
+func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolved, p, windowLen time.Duration, nodeCount int) schedule.Result {
 	eptr := pool.Spec.Template.Spec.ExpireAfter.Duration
 	if eptr == nil {
 		if res.override != nil {
-			return *res.override, 0
+			return schedule.Result{A: *res.override}
 		}
-		return 0, 0
+		return schedule.Result{}
 	}
 	tgp, unset := poolTGP(pool)
-	out := schedule.Derive(schedule.Inputs{
+	return schedule.Derive(schedule.Inputs{
 		E:              *eptr,
 		TGP:            tgp,
 		TGPWasUnset:    unset,
 		P:              p,
+		WindowLen:      windowLen,
 		ReadyTimeout:   res.readyTimeout,
 		Cooldown:       res.cooldown,
 		RetryBackoff:   res.retryBackoff,
 		K:              r.Policy.K(),
 		MaxUnavailable: r.Policy.Surge.MaxUnavailable,
+		NodeCount:      nodeCount,
 		Override:       res.override,
 	})
-	return out.A, out.G
+}
+
+// firstFatal returns the first Fatal finding (spec §3.2 layer 1), if any. Used to
+// gate a NodePool out of starting new rotations when its schedule cannot
+// guarantee the configured rotation chances (issue #27).
+func firstFatal(findings []schedule.Finding) (schedule.Finding, bool) {
+	for _, f := range findings {
+		if f.Severity == schedule.Fatal {
+			return f, true
+		}
+	}
+	return schedule.Finding{}, false
 }
 
 // startGates is the §5.2 step-2 gate set, shared verbatim with the failed →
