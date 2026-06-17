@@ -179,9 +179,9 @@ func TestWorstCasePeriodEmpty(t *testing.T) {
 }
 
 // TestShortestWindow covers the representative window length D fed to the
-// schedule's layer-2 throughput check (§3.2): the shortest single window
-// occurrence, the conservative worst case (a shorter D fits fewer rotations).
-// Overlapping/adjacent windows are not merged.
+// schedule's layer-2 throughput check (§3.2): the shortest occurrence of the
+// effective window union, the conservative worst case (a shorter D fits fewer
+// rotations). Overlapping/adjacent entries are merged into one occurrence.
 func TestShortestWindow(t *testing.T) {
 	tests := []struct {
 		name string
