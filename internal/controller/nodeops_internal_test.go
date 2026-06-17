@@ -97,6 +97,26 @@ func TestApplyCordonIdempotentOnOwnCordon(t *testing.T) {
 	}
 }
 
+func TestApplyFreezeProtectsNonTrueDoNotDisrupt(t *testing.T) {
+	// Karpenter blocks voluntary disruption only when the node value is exactly
+	// "true" (statenode.go: == "true"); "false" or any other value is NOT
+	// protection. A node carrying such a non-protective value without our owned
+	// marker is not an operator's active protection, so the controller must set
+	// "true" and take ownership — otherwise the surge pair stays disruptable.
+	for _, v := range []string{"false", ""} {
+		n := testNode(map[string]string{karpv1.DoNotDisruptAnnotationKey: v}, false)
+		if !applyFreeze(n, "nc-old") {
+			t.Fatalf("value %q: applyFreeze must report a change", v)
+		}
+		if n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "true" {
+			t.Errorf("value %q: do-not-disrupt must be set to true, got %q", v, n.Annotations[karpv1.DoNotDisruptAnnotationKey])
+		}
+		if n.Annotations[annotations.DoNotDisruptOwned] != "true" {
+			t.Errorf("value %q: controller must take ownership, owned marker got %q", v, n.Annotations[annotations.DoNotDisruptOwned])
+		}
+	}
+}
+
 func TestApplyUnfreezeRemovesMarkersAndUncordons(t *testing.T) {
 	n := testNode(map[string]string{
 		karpv1.DoNotDisruptAnnotationKey: "true",

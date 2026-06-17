@@ -35,11 +35,15 @@ func applyFreeze(n *corev1.Node, claimName string) bool {
 	return changed
 }
 
-// operatorOwnsDoNotDisrupt reports whether the node's karpenter.sh/do-not-disrupt
-// is an operator's: present without the controller's owned marker. Such a node
-// is never adopted by applyFreeze nor stripped by applyUnfreeze (spec §3.3, §5.3).
+// operatorOwnsDoNotDisrupt reports whether the node carries an operator's active
+// do-not-disrupt protection: the value is exactly "true" (the only value
+// Karpenter honors — its node disruption check is `== "true"`, so "false" or any
+// other value is not protection) and the controller's owned marker is absent.
+// Only such a node is left untouched by applyFreeze/applyUnfreeze; a
+// non-protective value is overwritten and taken over, so the surge pair is always
+// actually protected (spec §3.3, §5.3).
 func operatorOwnsDoNotDisrupt(n *corev1.Node) bool {
-	return hasAnnotation(n, karpv1.DoNotDisruptAnnotationKey) &&
+	return n.Annotations[karpv1.DoNotDisruptAnnotationKey] == "true" &&
 		!hasAnnotation(n, annotations.DoNotDisruptOwned)
 }
 
