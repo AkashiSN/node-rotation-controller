@@ -344,7 +344,7 @@ func TestSurgeReadyTransitionsToDraining(t *testing.T) {
 		ncFinalizer())
 	surgeClaim := testClaim("nc-new", time.Hour, ncNode(surgeNode))
 	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
-	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old"}, true)
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old"}, true)
 	newNode := testK8sNode(surgeNode, true, nil, false)
 	ph := placeholderPod(surgeNode, corev1.PodRunning)
 	r := newReconciler(t, testNow, nil, pool, cand, surgeClaim, oldNode, newNode, ph)
@@ -372,7 +372,7 @@ func TestSurgeNotReadyHostStaysPending(t *testing.T) {
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
 		ncAnn(annotations.State, annotations.StatePending, annotations.StartedAt, rfc(testNow.Add(-2*time.Minute))))
 	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
-	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old"}, true)
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old"}, true)
 	notReadyHost := testK8sNode(surgeNode, false, nil, false)
 	ph := placeholderPod(surgeNode, corev1.PodRunning)
 	r := newReconciler(t, testNow, nil, pool, cand, oldNode, notReadyHost, ph)
@@ -406,7 +406,7 @@ func TestReadyTimeoutFailsAndReaps(t *testing.T) {
 		annotations.ActiveRotation: "nc-old",
 		annotations.DrainingAt:     rfc(testNow.Add(-5 * time.Minute)),
 	}))
-	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
 	ph := placeholderPod("", corev1.PodPending)
 	r := newReconciler(t, testNow, rec, pool, cand, surgeClaim, oldNode, ph)
 
@@ -438,8 +438,9 @@ func TestReadyTimeoutFailsAndReaps(t *testing.T) {
 	if placeholderExists(t, r) {
 		t.Error("placeholder must be deleted on failure")
 	}
-	if n := getNodeObj(t, r, candNode); n.Spec.Unschedulable || n.Annotations[annotations.SurgeFor] != "" {
-		t.Error("candidate node must be unfrozen and uncordoned on failure")
+	if n := getNodeObj(t, r, candNode); n.Spec.Unschedulable || n.Annotations[annotations.SurgeFor] != "" ||
+		n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "" {
+		t.Error("candidate node must be unfrozen (surge-for + controller-owned do-not-disrupt removed) and uncordoned on failure")
 	}
 	if rec.failure != 1 {
 		t.Errorf("failure metric: got %d", rec.failure)
@@ -457,7 +458,7 @@ func TestPendingForceExpiryMarksExpired(t *testing.T) {
 	))
 	cand.DeletionTimestamp = &dt
 	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
-	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old"}, false)
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old"}, false)
 	ph := placeholderPod("", corev1.PodPending)
 	r := newReconciler(t, testNow, rec, pool, cand, oldNode, ph)
 
@@ -516,7 +517,7 @@ func TestCompletionSuccess(t *testing.T) {
 		annotations.ActiveRotationState: annotations.StateDraining,
 		annotations.DrainingAt:          rfc(testNow.Add(-30 * time.Minute)),
 	}))
-	surgeFrozen := testK8sNode(surgeNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old"}, false)
+	surgeFrozen := testK8sNode(surgeNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old"}, false)
 	ph := placeholderPod(surgeNode, corev1.PodRunning)
 	r := newReconciler(t, testNow, rec, pool, surgeFrozen, ph)
 
@@ -532,8 +533,9 @@ func TestCompletionSuccess(t *testing.T) {
 	if p.Annotations[annotations.LastRotationAt] == "" {
 		t.Error("last-rotation-at must be stamped on success")
 	}
-	if n := getNodeObj(t, r, surgeNode); n.Annotations[annotations.SurgeFor] != "" {
-		t.Error("surge target must be unfrozen")
+	if n := getNodeObj(t, r, surgeNode); n.Annotations[annotations.SurgeFor] != "" ||
+		n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "" {
+		t.Error("surge target must be unfrozen (surge-for + controller-owned do-not-disrupt removed)")
 	}
 	if placeholderExists(t, r) {
 		t.Error("placeholder must be deleted")
@@ -566,7 +568,7 @@ func TestCompletionWithoutDrainAnchorSkipsDuration(t *testing.T) {
 		annotations.ActiveRotation:      "nc-old",
 		annotations.ActiveRotationState: annotations.StateDraining,
 	}))
-	surgeFrozen := testK8sNode(surgeNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old"}, false)
+	surgeFrozen := testK8sNode(surgeNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old"}, false)
 	ph := placeholderPod(surgeNode, corev1.PodRunning)
 	r := newReconciler(t, testNow, rec, pool, surgeFrozen, ph)
 
@@ -668,7 +670,7 @@ func TestExpiredTerminalCleanup(t *testing.T) {
 		annotations.ActiveRotationState: annotations.StateDraining,
 		annotations.DrainingAt:          rfc(testNow.Add(-30 * time.Minute)), // reached draining, then force-expired
 	}))
-	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
 	ph := placeholderPod("", corev1.PodPending)
 	r := newReconciler(t, testNow, rec, pool, cand, oldNode, ph)
 
@@ -756,7 +758,7 @@ func TestReadyTimeoutDoesNotReapAbsorbHost(t *testing.T) {
 	// surge claim created after started-at AND registered a node → guarded by occupancy.
 	surgeClaim := testClaim("nc-new", 0, ncCreated(testNow.Add(-10*time.Minute)), ncNode(surgeNode))
 	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
-	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
 	surgeHost := testK8sNode(surgeNode, true, nil, false)
 	// an unrelated, reschedulable Pod bin-packed onto the surge node.
 	realPod := &corev1.Pod{

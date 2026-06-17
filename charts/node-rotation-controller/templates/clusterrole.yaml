@@ -21,8 +21,8 @@ rules:
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
     resources: ["nodes"]
-    # update/patch: do-not-disrupt / surge-for / cordoned annotations +
-    # spec.unschedulable. The controller mutates Nodes via full-object Update
+    # update/patch: do-not-disrupt / do-not-disrupt-owned / surge-for / cordoned
+    # annotations + spec.unschedulable. The controller mutates Nodes via full-object Update
     # under retry-on-conflict (patchNode), the same read-modify-write path used
     # for nodeclaims/nodepools, so update is required alongside patch.
     verbs: ["get", "list", "watch", "update", "patch"]

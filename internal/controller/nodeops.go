@@ -10,16 +10,41 @@ import (
 // The node side-effect mutators below are pure: each takes a *corev1.Node,
 // brings it to the desired state in place, and returns whether anything changed
 // so the caller can skip a no-op Update. Keeping the decision logic free of I/O
-// makes the §3.3/§5.3 cordon-ownership rules (never adopt an operator cordon,
-// never touch an operator cordon on cleanup) directly testable.
+// makes the §3.3/§5.3 ownership rules — never adopt an operator's cordon or
+// do-not-disrupt, never touch either on cleanup — directly testable.
 
 // applyFreeze marks the node as controller-frozen for the rotation named by
 // claimName: the karpenter.sh/do-not-disrupt annotation (blocks voluntary
-// disruption during the surge) plus the surge-for ownership marker (spec §5.3).
+// disruption during the surge), the do-not-disrupt-owned marker that attributes
+// that annotation to the controller, and the surge-for marker that pairs the
+// node with this rotation (spec §3.3, §5.3).
+//
+// do-not-disrupt is adopted conditionally, mirroring applyCordon: a node already
+// carrying do-not-disrupt without the controller's owned marker is an operator's
+// protection, so the controller leaves both the annotation and ownership alone —
+// no owned marker — and unfreeze later preserves it. surge-for is always written:
+// the node still belongs to this rotation and must be findable for cleanup even
+// when the controller does not own the do-not-disrupt.
 func applyFreeze(n *corev1.Node, claimName string) bool {
-	changed := setAnnotation(n, karpv1.DoNotDisruptAnnotationKey, "true")
+	changed := false
+	if !operatorOwnsDoNotDisrupt(n) {
+		changed = setAnnotation(n, karpv1.DoNotDisruptAnnotationKey, "true") || changed
+		changed = setAnnotation(n, annotations.DoNotDisruptOwned, "true") || changed
+	}
 	changed = setAnnotation(n, annotations.SurgeFor, claimName) || changed
 	return changed
+}
+
+// operatorOwnsDoNotDisrupt reports whether the node carries an operator's active
+// do-not-disrupt protection: the value is exactly "true" (the only value
+// Karpenter honors — its node disruption check is `== "true"`, so "false" or any
+// other value is not protection) and the controller's owned marker is absent.
+// Only such a node is left untouched by applyFreeze/applyUnfreeze; a
+// non-protective value is overwritten and taken over, so the surge pair is always
+// actually protected (spec §3.3, §5.3).
+func operatorOwnsDoNotDisrupt(n *corev1.Node) bool {
+	return n.Annotations[karpv1.DoNotDisruptAnnotationKey] == "true" &&
+		!hasAnnotation(n, annotations.DoNotDisruptOwned)
 }
 
 // applyCordon cordons the candidate node, recording the controller's ownership
@@ -41,16 +66,19 @@ func applyCordon(n *corev1.Node) bool {
 	return changed
 }
 
-// applyUnfreeze reverses applyFreeze (+ applyCordon) on a surge-frozen node:
-// it removes the freeze markers (do-not-disrupt + surge-for) and, when the
+// applyUnfreeze reverses applyFreeze (+ applyCordon) on a surge-frozen node: it
+// removes the surge-for marker, removes do-not-disrupt only when the controller
+// owns it (the do-not-disrupt-owned marker is present), and, when the
 // controller's cordoned marker is present, lifts the cordon too. Callers apply
-// it only to nodes carrying the controller's surge-for marker — the marker is
-// what attributes the do-not-disrupt to the controller, so stripping it is
-// correct only there. A cordon-only node (no surge-for) must use applyUncordon
-// instead, or an operator's do-not-disrupt would be removed (spec §5.3).
+// it to nodes carrying the controller's surge-for marker. An operator's
+// pre-existing do-not-disrupt (no owned marker) is preserved, mirroring the way
+// applyUncordon preserves an operator's cordon (spec §3.3, §5.3).
 func applyUnfreeze(n *corev1.Node) bool {
-	changed := removeAnnotation(n, karpv1.DoNotDisruptAnnotationKey)
-	changed = removeAnnotation(n, annotations.SurgeFor) || changed
+	changed := removeAnnotation(n, annotations.SurgeFor)
+	if hasAnnotation(n, annotations.DoNotDisruptOwned) {
+		changed = removeAnnotation(n, karpv1.DoNotDisruptAnnotationKey) || changed
+		changed = removeAnnotation(n, annotations.DoNotDisruptOwned) || changed
+	}
 	return applyUncordon(n) || changed
 }
 

@@ -21,11 +21,12 @@ import (
 //
 // It cleans:
 //   - placeholder Pods whose surge-for claim is not anchored — deleted;
-//   - node freeze markers (surge-for + the controller's own do-not-disrupt) and
-//     controller cordons (the cordoned marker) that no anchor references —
-//     reversed via applyUnfreeze for surge-frozen nodes and applyUncordon for
-//     cordon-only nodes; neither strips an operator's do-not-disrupt (no surge-for
-//     marker) or uncordons an operator's cordon (no cordoned marker);
+//   - node freeze markers (surge-for + the controller's own do-not-disrupt,
+//     attributed by the do-not-disrupt-owned marker) and controller cordons (the
+//     cordoned marker) that no anchor references — reversed via applyUnfreeze for
+//     surge-frozen nodes and applyUncordon for cordon-only nodes; neither strips
+//     an operator's do-not-disrupt (no owned marker) or uncordons an operator's
+//     cordon (no cordoned marker);
 //   - a pending/draining NodeClaim with no anchor — impossible from any crash
 //     point, so it is set to failed and alerted;
 //   - a NodePool active-rotation-state with no accompanying anchor — removed.
@@ -101,11 +102,11 @@ func (r *RotationReconciler) sweepPlaceholders(ctx context.Context, logger logr.
 }
 
 // sweepNodes reverses the freeze/cordon on every node whose controller markers
-// no anchor references. A surge-frozen node (surge-for marker) is fully
-// unfrozen via applyUnfreeze; a cordon-only node (no surge-for) has just its
-// cordon lifted via applyUncordon, so an operator's do-not-disrupt on it is
-// preserved (spec §5.3). Both mutators leave an operator's unmarked cordon or
-// do-not-disrupt untouched.
+// no anchor references. A surge-frozen node (surge-for marker) is unfrozen via
+// applyUnfreeze; a cordon-only node (no surge-for) has just its cordon lifted via
+// applyUncordon. Both mutators leave an operator's unmarked cordon or
+// do-not-disrupt untouched: applyUnfreeze strips do-not-disrupt only when the
+// controller's do-not-disrupt-owned marker is present (spec §3.3, §5.3).
 func (r *RotationReconciler) sweepNodes(ctx context.Context, logger logr.Logger, anchored map[string]bool) error {
 	var nodes corev1.NodeList
 	if err := r.List(ctx, &nodes); err != nil {
@@ -124,8 +125,9 @@ func (r *RotationReconciler) sweepNodes(ctx context.Context, logger logr.Logger,
 		case !surged && !cordoned:
 			continue
 		}
-		// A surge-for node is fully unfrozen (its do-not-disrupt is the
-		// controller's); a cordon-only node only has its cordon lifted.
+		// A surge-for node is unfrozen (applyUnfreeze removes its do-not-disrupt
+		// only if the owned marker attributes it to the controller); a cordon-only
+		// node only has its cordon lifted.
 		mutate := applyUnfreeze
 		if !surged {
 			mutate = applyUncordon
