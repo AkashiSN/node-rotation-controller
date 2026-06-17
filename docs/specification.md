@@ -455,8 +455,10 @@ Suggested alerts:
   verbs: ["get", "list", "watch", "update", "patch"]
 - apiGroups: [""]
   resources: ["nodes"]
-  # patch: do-not-disrupt / surge-for / cordoned annotations + spec.unschedulable (cordon, §3.3)
-  verbs: ["get", "list", "watch", "patch"]
+  # update/patch: do-not-disrupt / surge-for / cordoned annotations + spec.unschedulable
+  # (cordon, §3.3). Node writes use the same full-object update-under-retry path as
+  # nodeclaims/nodepools (§5.3), so update is required alongside patch
+  verbs: ["get", "list", "watch", "update", "patch"]
 - apiGroups: [""]
   resources: ["pods"]
   # the placeholder Pod is created and managed directly by the controller (§3.3)
