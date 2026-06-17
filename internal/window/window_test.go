@@ -165,3 +165,62 @@ func TestWorstCasePeriodEmpty(t *testing.T) {
 		t.Error("empty schedule InWindow should be false")
 	}
 }
+
+// TestShortestWindow covers the representative window length D fed to the
+// schedule's layer-2 throughput check (§3.2): the shortest single window
+// occurrence, the conservative worst case (a shorter D fits fewer rotations).
+// Overlapping/adjacent windows are not merged.
+func TestShortestWindow(t *testing.T) {
+	tests := []struct {
+		name string
+		ws   []policy.MaintenanceWindow
+		want time.Duration
+		ok   bool
+	}{
+		{
+			name: "single occurrence",
+			ws:   tokyoWedSat(), // 02:00–06:00
+			want: 4 * time.Hour,
+			ok:   true,
+		},
+		{
+			name: "shortest of several entries",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "UTC", Days: []string{"Wed"}, Start: "02:00", End: "06:00"}, // 4h
+				{Timezone: "UTC", Days: []string{"Sat"}, Start: "01:00", End: "02:30"}, // 1h30m — the min
+			},
+			want: 90 * time.Minute,
+			ok:   true,
+		},
+		{
+			name: "all-week long window",
+			ws: []policy.MaintenanceWindow{{
+				Timezone: "UTC",
+				Days:     []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"},
+				Start:    "00:00",
+				End:      "23:59",
+			}},
+			want: 23*time.Hour + 59*time.Minute,
+			ok:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newSchedule(t, tt.ws)
+			got, ok := s.ShortestWindow()
+			if ok != tt.ok {
+				t.Fatalf("ShortestWindow ok = %v, want %v", ok, tt.ok)
+			}
+			if got != tt.want {
+				t.Errorf("ShortestWindow = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShortestWindowEmpty(t *testing.T) {
+	s := newSchedule(t, nil)
+	if got, ok := s.ShortestWindow(); ok {
+		t.Errorf("ShortestWindow on empty schedule = (%v, %v), want (0, false)", got, ok)
+	}
+}

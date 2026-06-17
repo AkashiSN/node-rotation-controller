@@ -121,6 +121,33 @@ func (s *Schedule) WorstCasePeriod() (time.Duration, bool) {
 	return maxGap, true
 }
 
+// ShortestWindow returns D: the representative window-occurrence duration fed to
+// the layer-2 throughput check (spec §3.2). It is the shortest single window
+// occurrence across all entries — the conservative worst case, since a shorter D
+// fits fewer rotations (C = floor(D/(t_rot+cooldown))), so it never over-states
+// throughput. Overlapping or adjacent occurrences are deliberately not merged
+// into a longer effective window; the per-entry length is each one an operator
+// actually configured. The second return is false when the schedule has no
+// occurrences. Each entry's [StartMin, EndMin) is a same-day wall-clock interval
+// (policy.Validate enforces start < end), so its length is tz-independent.
+func (s *Schedule) ShortestWindow() (time.Duration, bool) {
+	var shortest time.Duration
+	found := false
+	for _, e := range s.entries {
+		if len(e.Days) == 0 {
+			continue
+		}
+		d := time.Duration(e.EndMin-e.StartMin) * time.Minute
+		if d <= 0 {
+			continue // defensive: policy.Validate already rejects start >= end
+		}
+		if !found || d < shortest {
+			shortest, found = d, true
+		}
+	}
+	return shortest, found
+}
+
 // startOffset projects one (weekday, start-time) occurrence in the entry's tz
 // onto the canonical weekly timeline as a duration in [0, week) since the anchor
 // Monday 00:00 UTC.

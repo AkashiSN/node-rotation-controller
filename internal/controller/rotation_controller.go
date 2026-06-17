@@ -331,17 +331,20 @@ func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now ti
 	rec.ObserveWindow(r.Schedule.InWindow(now))
 
 	// WorstCasePeriod's ok is always true here: policy.Validate rejects an empty
-	// maintenanceWindows (and empty days), so the Schedule always has ≥1 occurrence.
+	// maintenanceWindows (and empty days), so the Schedule always has ≥1 occurrence
+	// (and so a non-zero ShortestWindow). The node count N is the pool's in-scope
+	// claims, already listed for this reconcile (issue #36).
 	p, _ := r.Schedule.WorstCasePeriod()
-	a, g := r.derivedThresholds(pool, res, p)
+	d, _ := r.Schedule.ShortestWindow()
+	derived := r.derivedThresholds(pool, res, p, d, len(claims))
 	o := PoolObservation{
 		Candidates:      selection.CountEligible(claims, r.selInputs(res, now)),
 		ShortLeadNodes:  selection.CountShortLead(claims, res.leadTime),
 		RetryCount:      highestRetry(claims),
 		DrainStuck:      r.drainStuck(pool, claims, res, now),
 		WindowPeriod:    p,
-		AgeThreshold:    a,
-		RotationChances: g,
+		AgeThreshold:    derived.A,
+		RotationChances: derived.G,
 	}
 	if pool.Annotations[annotations.ActiveRotation] != "" {
 		o.InProgress = 1 // serial per NodePool in v1 (0 or 1)
@@ -381,33 +384,38 @@ func (r *RotationReconciler) drainStuck(pool *karpv1.NodePool, claims []karpv1.N
 	return false
 }
 
-// derivedThresholds returns the derived ageThreshold A and guaranteed chances G
-// for the pool's representative template expireAfter (§3.2) — the
-// noderotation_age_threshold_seconds and noderotation_rotation_chances gauges. A
-// never-expiring template has no derivation: an override A still applies, but no
-// chances can be guaranteed.
-func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolved, p time.Duration) (time.Duration, int) {
+// derivedThresholds runs the §3.2 derivation for the pool's representative
+// template expireAfter and returns the full schedule.Result: the derived
+// ageThreshold A and guaranteed chances G feed the
+// noderotation_age_threshold_seconds / noderotation_rotation_chances gauges, and
+// the Findings are consumed by the feasibility gate (issue #27). The layer-2
+// throughput inputs windowLen (D) and nodeCount (N) must be passed so the
+// throughput findings are meaningful (issue #36); A and G do not depend on them.
+// A never-expiring template has no derivation: an override A still applies, but
+// no chances can be guaranteed and no findings are produced.
+func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolved, p, windowLen time.Duration, nodeCount int) schedule.Result {
 	eptr := pool.Spec.Template.Spec.ExpireAfter.Duration
 	if eptr == nil {
 		if res.override != nil {
-			return *res.override, 0
+			return schedule.Result{A: *res.override}
 		}
-		return 0, 0
+		return schedule.Result{}
 	}
 	tgp, unset := poolTGP(pool)
-	out := schedule.Derive(schedule.Inputs{
+	return schedule.Derive(schedule.Inputs{
 		E:              *eptr,
 		TGP:            tgp,
 		TGPWasUnset:    unset,
 		P:              p,
+		WindowLen:      windowLen,
 		ReadyTimeout:   res.readyTimeout,
 		Cooldown:       res.cooldown,
 		RetryBackoff:   res.retryBackoff,
 		K:              r.Policy.K(),
 		MaxUnavailable: r.Policy.Surge.MaxUnavailable,
+		NodeCount:      nodeCount,
 		Override:       res.override,
 	})
-	return out.A, out.G
 }
 
 // startGates is the §5.2 step-2 gate set, shared verbatim with the failed →

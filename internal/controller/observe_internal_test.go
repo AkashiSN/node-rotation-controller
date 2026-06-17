@@ -12,7 +12,49 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
+	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
 )
+
+// hasFinding reports whether findings carry one with the given stable Code.
+func hasFinding(findings []schedule.Finding, code string) bool {
+	for _, f := range findings {
+		if f.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+// TestDerivedThresholdsPopulatesThroughputInputs covers issue #36: derivedThresholds
+// must feed the layer-2 throughput inputs (WindowLen D, NodeCount N) into
+// schedule.Derive, not leave them at zero. With the real 23h59m window no
+// ThroughputZero fires; a zero WindowLen (the pre-fix state) spuriously warns,
+// proving the input is load-bearing. A/G are unaffected by these layer-2 inputs.
+func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
+	pool := withExpireAfter(withTGP(testNodePool(nil)))
+	r := newReconciler(t, testNow, nil, pool)
+	res := r.resolve(pool)
+	p, _ := r.Schedule.WorstCasePeriod()
+	d, _ := r.Schedule.ShortestWindow()
+
+	got := r.derivedThresholds(pool, res, p, d, 3)
+	if got.A != 287*time.Hour {
+		t.Errorf("A: got %v, want 287h", got.A)
+	}
+	if got.G != 2 {
+		t.Errorf("G: got %d, want 2", got.G)
+	}
+	if hasFinding(got.Findings, "ThroughputZero") {
+		t.Errorf("ThroughputZero must not fire with a populated 23h59m window; findings=%+v", got.Findings)
+	}
+
+	// Regression guard: the pre-fix WindowLen=0 produces the spurious warning the
+	// issue describes, so the input genuinely drives the finding.
+	zero := r.derivedThresholds(pool, res, p, 0, 3)
+	if !hasFinding(zero.Findings, "ThroughputZero") {
+		t.Errorf("ThroughputZero expected when WindowLen=0; findings=%+v", zero.Findings)
+	}
+}
 
 // templateE is the representative NodePool template expireAfter used across the
 // observe tests; with leadTime 49h it yields A = 336h − 49h = 287h, G = 2.
