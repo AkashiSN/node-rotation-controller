@@ -122,6 +122,32 @@ func TestSweepUncordonsOrphanedCordon(t *testing.T) {
 	}
 }
 
+func TestSweepCordonOnlyKeepsOperatorDoNotDisrupt(t *testing.T) {
+	// A node the controller cordoned (cordoned marker) but never froze (no
+	// surge-for) may also carry an operator-applied do-not-disrupt. With no
+	// anchor the stale cordon must be lifted, but the operator's do-not-disrupt
+	// — not the controller's — must survive: the sweep strips do-not-disrupt
+	// only from nodes that also carry the surge-for marker (spec §5.3).
+	r := newReconciler(t, testNow, nil,
+		testNodePool(nil),
+		testK8sNode(candNode, true, map[string]string{
+			karpv1.DoNotDisruptAnnotationKey: "true",
+			annotations.Cordoned:             "true",
+		}, true),
+	)
+	sweep(t, r)
+	n := getNodeObj(t, r, candNode)
+	if n.Spec.Unschedulable {
+		t.Error("stale controller cordon should be lifted")
+	}
+	if _, ok := n.Annotations[annotations.Cordoned]; ok {
+		t.Error("cordoned marker should be removed")
+	}
+	if n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "true" {
+		t.Error("operator-applied do-not-disrupt (no surge-for) must be preserved")
+	}
+}
+
 func TestSweepPreservesOperatorCordon(t *testing.T) {
 	// Unschedulable with no cordoned marker is an operator cordon: never touched.
 	r := newReconciler(t, testNow, nil,

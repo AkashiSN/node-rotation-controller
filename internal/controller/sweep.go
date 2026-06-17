@@ -23,8 +23,9 @@ import (
 //   - placeholder Pods whose surge-for claim is not anchored — deleted;
 //   - node freeze markers (surge-for + the controller's own do-not-disrupt) and
 //     controller cordons (the cordoned marker) that no anchor references —
-//     reversed via applyUnfreeze, which never strips an operator's do-not-disrupt
-//     (no surge-for marker) or uncordons an operator's cordon (no cordoned marker);
+//     reversed via applyUnfreeze for surge-frozen nodes and applyUncordon for
+//     cordon-only nodes; neither strips an operator's do-not-disrupt (no surge-for
+//     marker) or uncordons an operator's cordon (no cordoned marker);
 //   - a pending/draining NodeClaim with no anchor — impossible from any crash
 //     point, so it is set to failed and alerted;
 //   - a NodePool active-rotation-state with no accompanying anchor — removed.
@@ -100,8 +101,11 @@ func (r *RotationReconciler) sweepPlaceholders(ctx context.Context, logger logr.
 }
 
 // sweepNodes reverses the freeze/cordon on every node whose controller markers
-// no anchor references. applyUnfreeze enforces the ownership rules, so an
-// operator's do-not-disrupt or cordon (no marker) is left untouched.
+// no anchor references. A surge-frozen node (surge-for marker) is fully
+// unfrozen via applyUnfreeze; a cordon-only node (no surge-for) has just its
+// cordon lifted via applyUncordon, so an operator's do-not-disrupt on it is
+// preserved (spec §5.3). Both mutators leave an operator's unmarked cordon or
+// do-not-disrupt untouched.
 func (r *RotationReconciler) sweepNodes(ctx context.Context, logger logr.Logger, anchored map[string]bool) error {
 	var nodes corev1.NodeList
 	if err := r.List(ctx, &nodes); err != nil {
@@ -120,7 +124,13 @@ func (r *RotationReconciler) sweepNodes(ctx context.Context, logger logr.Logger,
 		case !surged && !cordoned:
 			continue
 		}
-		if err := r.patchNode(ctx, n.Name, applyUnfreeze); err != nil {
+		// A surge-for node is fully unfrozen (its do-not-disrupt is the
+		// controller's); a cordon-only node only has its cordon lifted.
+		mutate := applyUnfreeze
+		if !surged {
+			mutate = applyUncordon
+		}
+		if err := r.patchNode(ctx, n.Name, mutate); err != nil {
 			errs = append(errs, err)
 			continue
 		}
