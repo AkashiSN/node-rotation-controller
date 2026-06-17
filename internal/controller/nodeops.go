@@ -41,19 +41,32 @@ func applyCordon(n *corev1.Node) bool {
 	return changed
 }
 
-// applyUnfreeze reverses applyFreeze/applyCordon: it always removes the freeze
-// markers (do-not-disrupt + surge-for), and uncordons only when the controller's
-// cordoned marker is present — an operator's pre-existing cordon (no marker) is
-// left in place (spec §5.3 sweep rule).
+// applyUnfreeze reverses applyFreeze (+ applyCordon) on a surge-frozen node:
+// it removes the freeze markers (do-not-disrupt + surge-for) and, when the
+// controller's cordoned marker is present, lifts the cordon too. Callers apply
+// it only to nodes carrying the controller's surge-for marker — the marker is
+// what attributes the do-not-disrupt to the controller, so stripping it is
+// correct only there. A cordon-only node (no surge-for) must use applyUncordon
+// instead, or an operator's do-not-disrupt would be removed (spec §5.3).
 func applyUnfreeze(n *corev1.Node) bool {
 	changed := removeAnnotation(n, karpv1.DoNotDisruptAnnotationKey)
 	changed = removeAnnotation(n, annotations.SurgeFor) || changed
-	if hasAnnotation(n, annotations.Cordoned) {
-		removeAnnotation(n, annotations.Cordoned)
-		n.Spec.Unschedulable = false
-		changed = true
+	return applyUncordon(n) || changed
+}
+
+// applyUncordon lifts the controller's cordon alone — the cordoned marker plus
+// Spec.Unschedulable — without touching do-not-disrupt or surge-for. The sweep
+// uses it on a cordon-only node (one the controller cordoned but never froze)
+// so an operator's do-not-disrupt on that node is preserved. A node without the
+// cordoned marker is an operator cordon (or uncordoned) and is left untouched
+// (spec §3.3, §5.3).
+func applyUncordon(n *corev1.Node) bool {
+	if !hasAnnotation(n, annotations.Cordoned) {
+		return false
 	}
-	return changed
+	removeAnnotation(n, annotations.Cordoned)
+	n.Spec.Unschedulable = false
+	return true
 }
 
 // setAnnotation sets key=value, returning true if that changed the object.

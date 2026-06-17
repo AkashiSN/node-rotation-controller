@@ -81,7 +81,7 @@ func main() {
 	// already serves on /metrics — no extra server.
 	recorder := appmetrics.New(ctrlmetrics.Registry)
 
-	if err := (&controller.RotationReconciler{
+	reconciler := &controller.RotationReconciler{
 		Client:            mgr.GetClient(),
 		Policy:            pol,
 		Schedule:          sched,
@@ -89,10 +89,18 @@ func main() {
 		PlaceholderImage:  placeholderImage,
 		PriorityClassName: priorityClassName,
 		Recorder:          recorder,
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "rotation")
 		os.Exit(1)
 	}
+
+	// The spec §5.3 startup sweep is gated into the reconciler's first Reconcile
+	// (see RotationReconciler.sweepOnce), so it completes before any NodePool can
+	// start or resume a rotation. A separate manager Runnable would not be ordered
+	// against the reconcile loop — controller-runtime starts leader runnables
+	// concurrently — so the sweep could read a stale anchor snapshot and reap a
+	// live rotation's artifacts (PR #33 review).
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

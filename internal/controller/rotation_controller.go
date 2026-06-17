@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -58,6 +59,14 @@ type RotationReconciler struct {
 	Recorder Recorder
 	// Clock is the time source; nil means time.Now (overridden in tests).
 	Clock func() time.Time
+
+	// sweepOnce gates the spec §5.3 startup sweep into the first Reconcile so it
+	// completes before any NodePool can start or resume a rotation. Registering
+	// the sweep as a separate manager Runnable did not order it against the
+	// reconcile loop — controller-runtime starts leader runnables concurrently —
+	// so the sweep could read a stale anchor snapshot and reap a live rotation's
+	// artifacts. Do blocks every concurrent reconcile until the sweep returns.
+	sweepOnce sync.Once
 }
 
 func (r *RotationReconciler) now() time.Time {
@@ -80,6 +89,17 @@ func (r *RotationReconciler) recorder() Recorder {
 // releases — spec §5.2) is realized by the self-requeue rather than a separate
 // Ticker.
 func (r *RotationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Run the §5.3 startup sweep exactly once, before any reconcile does work, so
+	// it never operates on a stale anchor snapshot while a new rotation is being
+	// created (PR #33 review). It is best-effort: errors are logged, never
+	// returned, so a transient API hiccup neither fails the reconcile nor
+	// re-arms the sweep — the next controller restart re-attempts.
+	r.sweepOnce.Do(func() {
+		if err := r.Sweep(ctx); err != nil {
+			log.FromContext(ctx).Error(err, "startup sweep encountered errors")
+		}
+	})
+
 	var pool karpv1.NodePool
 	if err := r.Get(ctx, req.NamespacedName, &pool); err != nil {
 		if apierrors.IsNotFound(err) {
