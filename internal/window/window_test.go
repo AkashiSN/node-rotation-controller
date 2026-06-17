@@ -141,6 +141,18 @@ func TestWorstCasePeriod(t *testing.T) {
 			want: 159 * time.Hour,
 			ok:   true,
 		},
+		{
+			// Adjacent entries are ONE effective occurrence (§3.1 union): their
+			// internal 02:00 start is not a separate occurrence, so the only start
+			// is Mon 00:00 and P is the full weekly cycle, not 6d22h.
+			name: "adjacent entries are one weekly occurrence",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "UTC", Days: []string{"Mon"}, Start: "00:00", End: "02:00"},
+				{Timezone: "UTC", Days: []string{"Mon"}, Start: "02:00", End: "06:00"},
+			},
+			want: 168 * time.Hour, // 7d
+			ok:   true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
