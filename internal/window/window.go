@@ -11,6 +11,7 @@
 package window
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"time"
@@ -122,30 +123,75 @@ func (s *Schedule) WorstCasePeriod() (time.Duration, bool) {
 }
 
 // ShortestWindow returns D: the representative window-occurrence duration fed to
-// the layer-2 throughput check (spec §3.2). It is the shortest single window
-// occurrence across all entries — the conservative worst case, since a shorter D
-// fits fewer rotations (C = floor(D/(t_rot+cooldown))), so it never over-states
-// throughput. Overlapping or adjacent occurrences are deliberately not merged
-// into a longer effective window; the per-entry length is each one an operator
-// actually configured. The second return is false when the schedule has no
-// occurrences. Each entry's [StartMin, EndMin) is a same-day wall-clock interval
-// (policy.Validate enforces start < end), so its length is tz-independent.
+// the layer-2 throughput check (spec §3.2). It is the duration of the shortest
+// occurrence of the **effective** maintenance window — the union of all entries
+// (§3.1) — so adjacent or overlapping entries that form one continuous window are
+// counted as a single occurrence. The shortest occurrence is the conservative
+// worst case (a shorter D fits fewer rotations, C = floor(D/(t_rot+cooldown))),
+// without the false pessimism of splitting a contiguous window into raw entry
+// pieces. The second return is false when the schedule has no occurrences.
+//
+// Occurrences are merged on the same canonical weekly timeline WorstCasePeriod
+// uses (each entry projected through startOffset, so cross-timezone overlaps are
+// handled). An occurrence whose end crosses the week boundary is split and
+// rejoined by the circular merge below.
 func (s *Schedule) ShortestWindow() (time.Duration, bool) {
-	var shortest time.Duration
-	found := false
+	type span struct{ start, end time.Duration } // 0 <= start < end <= week
+	var spans []span
 	for _, e := range s.entries {
-		if len(e.Days) == 0 {
-			continue
-		}
-		d := time.Duration(e.EndMin-e.StartMin) * time.Minute
-		if d <= 0 {
+		length := time.Duration(e.EndMin-e.StartMin) * time.Minute
+		if length <= 0 {
 			continue // defensive: policy.Validate already rejects start >= end
 		}
-		if !found || d < shortest {
-			shortest, found = d, true
+		for _, d := range e.Days {
+			st := e.startOffset(d) // [0, week)
+			if en := st + length; en > week {
+				// Wraps the week boundary (possible after a cross-tz projection):
+				// split into a head at the week start and a tail at the week end;
+				// the circular join below reconnects them.
+				spans = append(spans, span{0, en - week}, span{st, week})
+			} else {
+				spans = append(spans, span{st, en})
+			}
 		}
 	}
-	return shortest, found
+	if len(spans) == 0 {
+		return 0, false
+	}
+
+	slices.SortFunc(spans, func(a, b span) int {
+		if a.start != b.start {
+			return cmp.Compare(a.start, b.start)
+		}
+		return cmp.Compare(a.end, b.end)
+	})
+	// Merge overlapping/adjacent spans (next.start <= cur.end joins them).
+	merged := spans[:1]
+	for _, x := range spans[1:] {
+		last := &merged[len(merged)-1]
+		if x.start <= last.end {
+			if x.end > last.end {
+				last.end = x.end
+			}
+		} else {
+			merged = append(merged, x)
+		}
+	}
+
+	// Circular join: a span touching the week end (… , week] continues into a span
+	// starting at the week start [0, …) — one occurrence spanning the boundary.
+	shortest := time.Duration(-1)
+	n := len(merged)
+	if n > 1 && merged[0].start == 0 && merged[n-1].end == week {
+		shortest = (week - merged[n-1].start) + merged[0].end
+		merged = merged[1 : n-1] // the two joined ends are accounted for above
+	}
+	for _, m := range merged {
+		if d := m.end - m.start; shortest < 0 || d < shortest {
+			shortest = d
+		}
+	}
+	return shortest, true
 }
 
 // startOffset projects one (weekday, start-time) occurrence in the entry's tz

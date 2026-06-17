@@ -203,6 +203,39 @@ func TestShortestWindow(t *testing.T) {
 			want: 23*time.Hour + 59*time.Minute,
 			ok:   true,
 		},
+		{
+			// Adjacent entries form one effective occurrence (§3.1 union):
+			// Mon 00:00–02:00 + Mon 02:00–06:00 = a single 6h window, not 2h.
+			name: "adjacent entries merge",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "UTC", Days: []string{"Mon"}, Start: "00:00", End: "02:00"},
+				{Timezone: "UTC", Days: []string{"Mon"}, Start: "02:00", End: "06:00"},
+			},
+			want: 6 * time.Hour,
+			ok:   true,
+		},
+		{
+			// Overlapping entries merge to their span: Wed 01:00–04:00 ∪
+			// Wed 03:00–06:00 = 01:00–06:00 = 5h.
+			name: "overlapping entries merge",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "UTC", Days: []string{"Wed"}, Start: "01:00", End: "04:00"},
+				{Timezone: "UTC", Days: []string{"Wed"}, Start: "03:00", End: "06:00"},
+			},
+			want: 5 * time.Hour,
+			ok:   true,
+		},
+		{
+			// A single occurrence that crosses the week boundary on the canonical
+			// UTC timeline (Asia/Tokyo Mon 06:00–10:00 = Sun 21:00–Mon 01:00 UTC)
+			// must read as one 4h window, not its 3h/1h split halves.
+			name: "occurrence wraps the week boundary",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "Asia/Tokyo", Days: []string{"Mon"}, Start: "06:00", End: "10:00"},
+			},
+			want: 4 * time.Hour,
+			ok:   true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
