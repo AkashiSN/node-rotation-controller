@@ -336,6 +336,74 @@ func TestNoStartWhenHeadroomInsufficient(t *testing.T) {
 	}
 }
 
+// withTemplateE stamps the NodePool template's representative expireAfter so the
+// §3.2 feasibility derivation is deterministic. A short E (≤ K·P + t_rot) drives a
+// fatal A ≤ 0.
+func withTemplateE(p *karpv1.NodePool, d time.Duration) *karpv1.NodePool {
+	p.Spec.Template.Spec.ExpireAfter = karpv1.NillableDuration{Duration: &d}
+	return p
+}
+
+// TestNoStartWhenFeasibilityFatal covers issue #27: a NodePool whose schedule
+// derivation is fatal must not start a new rotation, even with an otherwise
+// eligible candidate. Here leadTime = K·P + t_rot = 2·24h + 1h = 49h, so a
+// template E of 40h gives A = 40h − 49h = −9h ≤ 0 (fatal ANonPositive, §3.2).
+func TestNoStartWhenFeasibilityFatal(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode)) // eligible
+	pool := withTemplateE(withTGP(testNodePool(nil)), 40*time.Hour)
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false))
+
+	step(t, r, pool)
+
+	if got := getPool(t, r).Annotations[annotations.ActiveRotation]; got != "" {
+		t.Errorf("no rotation may start under a fatal schedule; anchor = %q", got)
+	}
+	if c := getClaimOrNil(t, r, "nc-old"); c != nil && c.Annotations[annotations.State] != "" {
+		t.Errorf("candidate must not be anchored into pending; state = %q", c.Annotations[annotations.State])
+	}
+	if placeholderExists(t, r) {
+		t.Error("no placeholder may be created under a fatal schedule")
+	}
+}
+
+// TestStartWhenFeasibilityHealthy is the gate's negative control: a feasible
+// template E (14d ⇒ A = 287h > 0) still starts normally, so the fatal gate does
+// not over-block.
+func TestStartWhenFeasibilityHealthy(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode))
+	pool := withTemplateE(withTGP(testNodePool(nil)), 14*24*time.Hour)
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false))
+
+	step(t, r, pool)
+
+	if got := getPool(t, r).Annotations[annotations.ActiveRotation]; got != "nc-old" {
+		t.Errorf("a feasible NodePool must start; anchor = %q, want nc-old", got)
+	}
+	if !placeholderExists(t, r) {
+		t.Error("placeholder must be created for a feasible NodePool")
+	}
+}
+
+// TestFatalDoesNotBlockInFlightRotation: the fatal gate blocks only NEW starts.
+// An already-anchored rotation must keep advancing even while the schedule is
+// fatal — step 1 (drive in-flight) runs before the gate.
+func TestFatalDoesNotBlockInFlightRotation(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
+		ncAnn(annotations.State, annotations.StatePending, annotations.StartedAt, rfc(testNow.Add(-1*time.Minute))),
+		ncFinalizer())
+	pool := withTemplateE(withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"})), 40*time.Hour)
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false))
+
+	step(t, r, pool)
+
+	if !placeholderExists(t, r) {
+		t.Error("an in-flight rotation must keep advancing despite a fatal schedule")
+	}
+	if got := getPool(t, r).Annotations[annotations.ActiveRotation]; got != "nc-old" {
+		t.Errorf("in-flight anchor must be preserved; got %q", got)
+	}
+}
+
 // --- pending → draining ----------------------------------------------------
 
 func TestSurgeReadyTransitionsToDraining(t *testing.T) {
