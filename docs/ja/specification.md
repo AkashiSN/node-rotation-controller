@@ -272,7 +272,8 @@ ROTATION（論理シーケンス。各ステップは別々の reconcile）
   │           emit_metrics(expired); alert              // 決して success にしない。cooldown も無し — 何も回転していない
   │           clear(nodepool, active-rotation, active-rotation-state)
   │
-  ├─ surge_ready?（placeholder が candidate.node 以外の Ready なホストノード上で Running、
+  ├─ surge_ready?（placeholder が Running かつ terminating でない（deletionTimestamp 未設定）状態で
+  │                 candidate.node 以外の Ready なホストノード上にあり、
   │                 かつホストの karpenter.sh/nodepool ラベル == candidate のプール）  [state: pending]
   │     // placeholder のバインド先（spec.nodeName）が観測可能になり次第、pending ハンドラがそれを
   │     //   永続化する: annotate(candidate, surge-claim=<誘発した NodeClaim>) — 特定を失敗パスまで
@@ -644,9 +645,13 @@ advance(np, name):
                                              #   annotation; required な karpenter.sh/nodepool セレクタ（§3.3）;
                                              #   nodeAffinity hostname NotIn {cand.node, 期限間近のノード}
                                              #   — どちらの除外リストも（再）作成のたびに再計算
-      if surge_ready(cand):                  # placeholder が cand.node 以外の Ready なホスト上で Running、かつ
+      if surge_ready(cand):                  # placeholder が Running かつ terminating でない（deletionTimestamp 未設定）
+                                             #   状態で cand.node 以外の Ready なホスト上にあり、かつ
                                              #   ホストの karpenter.sh/nodepool ラベル == np.name（placeholder の
-                                             #   required セレクタへの belt-and-suspenders、§3.3）
+                                             #   required セレクタへの belt-and-suspenders、§3.3）。grace 中に preempt
+                                             #   された placeholder は deletionTimestamp 付きのまま Running に留まる;
+                                             #   その予約は既に除去されつつあるため ready とはしない（§5.2 が消滅後に
+                                             #   再作成、readyTimeout で有界）。
           host := placeholder_node(name)     # 新規プロビジョニングまたは既存（capacity-absorb、§3.3）
           freeze(host, surge-for=name)
           annotate(np, active-rotation-state=draining, draining-at=now)   # 永続的なフェーズ記録を delete より

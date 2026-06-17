@@ -272,7 +272,8 @@ ROTATION (logical sequence; each step is a separate reconcile)
   │           emit_metrics(expired); alert              // never success; no cooldown — nothing was rotated
   │           clear(nodepool, active-rotation, active-rotation-state)
   │
-  ├─ surge_ready?  (placeholder Running on a Ready host node ≠ candidate.node,
+  ├─ surge_ready?  (placeholder Running AND not terminating (deletionTimestamp unset)
+  │                 on a Ready host node ≠ candidate.node,
   │                 host's karpenter.sh/nodepool label == candidate's pool)      [state: pending]
   │     // as soon as the placeholder's bind target (spec.nodeName) is observable, the pending handler
   │     //   PERSISTS it: annotate(candidate, surge-claim=<induced NodeClaim>) — identification must
@@ -643,9 +644,13 @@ advance(np, name):
                                              #   annotation; required karpenter.sh/nodepool selector (§3.3);
                                              #   nodeAffinity hostname NotIn {cand.node, near-deadline nodes}
                                              #   — both exclusion lists recomputed on every (re)creation
-      if surge_ready(cand):                  # placeholder Running on a Ready host ≠ cand.node, AND the host's
+      if surge_ready(cand):                  # placeholder Running AND not terminating (deletionTimestamp unset)
+                                             #   on a Ready host ≠ cand.node, AND the host's
                                              #   karpenter.sh/nodepool label == np.name (belt-and-suspenders
-                                             #   for the placeholder's required selector, §3.3)
+                                             #   for the placeholder's required selector, §3.3). A placeholder
+                                             #   preempted mid-grace stays Running with deletionTimestamp set;
+                                             #   its reservation is already being removed, so it is not ready
+                                             #   (§5.2 recreates it once gone, bounded by readyTimeout).
           host := placeholder_node(name)     # newly provisioned or pre-existing (capacity-absorb, §3.3)
           freeze(host, surge-for=name)
           annotate(np, active-rotation-state=draining, draining-at=now)   # durable phase record BEFORE the
