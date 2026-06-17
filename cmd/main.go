@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"os"
 
@@ -15,7 +14,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -97,20 +95,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Register the spec §5.3 startup sweep: a leader-only Runnable (the default
-	// for a RunnableFunc) the manager starts once after the cache syncs, to
-	// repair rotation artifacts a crash left orphaned. It is best-effort — a
-	// sweep error is logged, never fatal, so a transient API hiccup does not
-	// crash-loop the controller; the next restart re-attempts.
-	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		if err := reconciler.Sweep(ctx); err != nil {
-			setupLog.Error(err, "startup sweep encountered errors")
-		}
-		return nil
-	})); err != nil {
-		setupLog.Error(err, "unable to register startup sweep")
-		os.Exit(1)
-	}
+	// The spec §5.3 startup sweep is gated into the reconciler's first Reconcile
+	// (see RotationReconciler.sweepOnce), so it completes before any NodePool can
+	// start or resume a rotation. A separate manager Runnable would not be ordered
+	// against the reconcile loop — controller-runtime starts leader runnables
+	// concurrently — so the sweep could read a stale anchor snapshot and reap a
+	// live rotation's artifacts (PR #33 review).
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

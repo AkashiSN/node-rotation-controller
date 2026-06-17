@@ -6,6 +6,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -214,5 +216,59 @@ func TestSweepKeepsRotationStateWithAnchor(t *testing.T) {
 	p := getPool(t, r)
 	if p.Annotations[annotations.ActiveRotationState] != annotations.StateDraining {
 		t.Error("active-rotation-state with an anchor must be preserved")
+	}
+}
+
+// --- reconcile gates the sweep (issue #25 / PR #33 review) ------------------
+
+// reconcile drives one Reconcile of the named NodePool and fails on a hard
+// error — exercising the public entry point that gates the startup sweep.
+func runReconcile(t *testing.T, r *RotationReconciler, poolName string) {
+	t.Helper()
+	if _, err := r.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: types.NamespacedName{Name: poolName}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+}
+
+// TestReconcileRunsSweepBeforeRotation proves the sweep is ordered before any
+// reconcile work: a crash-orphaned placeholder (no anchor) must be cleaned by
+// the first Reconcile itself, not only by the dedicated Sweep entry point. The
+// pool is out of window so the reconcile body starts nothing — the deletion can
+// only come from the gated sweep.
+func TestReconcileRunsSweepBeforeRotation(t *testing.T) {
+	r := newReconciler(t, testNowOut, nil,
+		testNodePool(nil),
+		placeholderPod(surgeNode, corev1.PodRunning),
+	)
+
+	runReconcile(t, r, testPoolName)
+
+	if placeholderExists(t, r) {
+		t.Fatal("first Reconcile must run the startup sweep and delete the orphaned placeholder")
+	}
+}
+
+// TestReconcileSweepsOnlyOnce proves the sweep is a one-time startup operation,
+// not a per-reconcile pass: once the first Reconcile has swept, a placeholder
+// created afterward (standing in for a live rotation's artifact) must survive a
+// second Reconcile. Re-sweeping on every reconcile would race new rotations and
+// wrongly reap their artifacts.
+func TestReconcileSweepsOnlyOnce(t *testing.T) {
+	r := newReconciler(t, testNowOut, nil, testNodePool(nil))
+
+	// First reconcile: sweep fires with nothing to clean.
+	runReconcile(t, r, testPoolName)
+
+	// A placeholder appears after the sweep window — e.g. a rotation that just
+	// started. A second sweep would treat it as orphaned (no anchor) and delete it.
+	if err := r.Create(context.Background(), placeholderPod(surgeNode, corev1.PodRunning)); err != nil {
+		t.Fatalf("create placeholder: %v", err)
+	}
+
+	runReconcile(t, r, testPoolName)
+
+	if !placeholderExists(t, r) {
+		t.Fatal("the sweep must run once at startup, not on every reconcile")
 	}
 }
