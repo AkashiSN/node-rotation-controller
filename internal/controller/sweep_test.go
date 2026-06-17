@@ -26,10 +26,11 @@ func sweep(t *testing.T, r *RotationReconciler) {
 }
 
 // frozenNode builds a controller-frozen node for the named rotation: the
-// do-not-disrupt + surge-for markers applyFreeze writes.
+// do-not-disrupt + do-not-disrupt-owned + surge-for markers applyFreeze writes.
 func frozenNode(name, claimName string) *corev1.Node {
 	return testK8sNode(name, true, map[string]string{
 		karpv1.DoNotDisruptAnnotationKey: "true",
+		annotations.DoNotDisruptOwned:    "true",
 		annotations.SurgeFor:             claimName,
 	}, false)
 }
@@ -107,6 +108,29 @@ func TestSweepPreservesOperatorDoNotDisrupt(t *testing.T) {
 	}
 }
 
+func TestSweepUnfreezeKeepsOperatorDoNotDisruptOnSurgedNode(t *testing.T) {
+	// An operator had already protected the node with do-not-disrupt before the
+	// controller froze it for the rotation (surge-for, but no owned marker). With
+	// no anchor the surge-for marker is orphaned and must be removed, but the
+	// operator's do-not-disrupt — which the controller never owned — must survive
+	// (spec §3.3, §5.3).
+	r := newReconciler(t, testNow, nil,
+		testNodePool(nil),
+		testK8sNode(surgeNode, true, map[string]string{
+			karpv1.DoNotDisruptAnnotationKey: "true",
+			annotations.SurgeFor:             "nc-old",
+		}, false),
+	)
+	sweep(t, r)
+	n := getNodeObj(t, r, surgeNode)
+	if _, ok := n.Annotations[annotations.SurgeFor]; ok {
+		t.Error("orphaned surge-for marker should be removed")
+	}
+	if n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "true" {
+		t.Error("operator do-not-disrupt (no owned marker) must be preserved")
+	}
+}
+
 func TestSweepUncordonsOrphanedCordon(t *testing.T) {
 	r := newReconciler(t, testNow, nil,
 		testNodePool(nil),
@@ -127,7 +151,7 @@ func TestSweepCordonOnlyKeepsOperatorDoNotDisrupt(t *testing.T) {
 	// surge-for) may also carry an operator-applied do-not-disrupt. With no
 	// anchor the stale cordon must be lifted, but the operator's do-not-disrupt
 	// — not the controller's — must survive: the sweep strips do-not-disrupt
-	// only from nodes that also carry the surge-for marker (spec §5.3).
+	// only from nodes carrying the controller's do-not-disrupt-owned marker (spec §5.3).
 	r := newReconciler(t, testNow, nil,
 		testNodePool(nil),
 		testK8sNode(candNode, true, map[string]string{

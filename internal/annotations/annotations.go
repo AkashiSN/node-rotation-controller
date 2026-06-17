@@ -77,6 +77,17 @@ const (
 // an operator's pre-existing cordon (no marker) is never touched (spec §5.3).
 const Cordoned = Prefix + "cordoned"
 
+// DoNotDisruptOwned marks a node's karpenter.sh/do-not-disrupt as
+// controller-applied, so rollback and the startup sweep remove only the
+// protection the controller itself set — an operator's pre-existing
+// do-not-disrupt (no marker) is never touched (spec §5.3). It is the
+// do-not-disrupt analogue of Cordoned: freeze() sets it only when the
+// controller actually applies do-not-disrupt, never when do-not-disrupt is
+// already present without this marker. SurgeFor alone cannot attribute
+// ownership, because the controller still freezes (and so labels with SurgeFor)
+// a node an operator had already protected.
+const DoNotDisruptOwned = Prefix + "do-not-disrupt-owned"
+
 // State annotation values (spec §5.3). An empty/absent State means a fresh claim.
 const (
 	// StatePending: a rotation is in flight, surge not yet ready (driven by §5.2 step 1).

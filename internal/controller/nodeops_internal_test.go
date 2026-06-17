@@ -25,6 +25,9 @@ func TestApplyFreezeSetsMarkers(t *testing.T) {
 	if n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "true" {
 		t.Errorf("do-not-disrupt: got %q", n.Annotations[karpv1.DoNotDisruptAnnotationKey])
 	}
+	if n.Annotations[annotations.DoNotDisruptOwned] != "true" {
+		t.Errorf("do-not-disrupt-owned marker: got %q", n.Annotations[annotations.DoNotDisruptOwned])
+	}
 	if n.Annotations[annotations.SurgeFor] != "nc-old" {
 		t.Errorf("surge-for: got %q", n.Annotations[annotations.SurgeFor])
 	}
@@ -33,10 +36,32 @@ func TestApplyFreezeSetsMarkers(t *testing.T) {
 func TestApplyFreezeIdempotent(t *testing.T) {
 	n := testNode(map[string]string{
 		karpv1.DoNotDisruptAnnotationKey: "true",
+		annotations.DoNotDisruptOwned:    "true",
 		annotations.SurgeFor:             "nc-old",
 	}, false)
 	if applyFreeze(n, "nc-old") {
 		t.Error("applyFreeze on an already-frozen node must report no change")
+	}
+}
+
+func TestApplyFreezeNeverAdoptsOperatorDoNotDisrupt(t *testing.T) {
+	// do-not-disrupt already present without the owned marker is an operator's.
+	// The controller still freezes the node (surge-for) so it can find and clean
+	// up the rotation, but it must not claim ownership of the do-not-disrupt —
+	// no owned marker — so unfreeze later preserves the operator's protection
+	// (spec §3.3, §5.3).
+	n := testNode(map[string]string{karpv1.DoNotDisruptAnnotationKey: "true"}, false)
+	if !applyFreeze(n, "nc-old") {
+		t.Fatal("applyFreeze must report a change for the added surge-for marker")
+	}
+	if n.Annotations[annotations.SurgeFor] != "nc-old" {
+		t.Errorf("surge-for: got %q", n.Annotations[annotations.SurgeFor])
+	}
+	if _, ok := n.Annotations[annotations.DoNotDisruptOwned]; ok {
+		t.Error("an operator's do-not-disrupt must never gain the controller owned marker")
+	}
+	if n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "true" {
+		t.Error("operator do-not-disrupt must be left in place")
 	}
 }
 
@@ -75,6 +100,7 @@ func TestApplyCordonIdempotentOnOwnCordon(t *testing.T) {
 func TestApplyUnfreezeRemovesMarkersAndUncordons(t *testing.T) {
 	n := testNode(map[string]string{
 		karpv1.DoNotDisruptAnnotationKey: "true",
+		annotations.DoNotDisruptOwned:    "true",
 		annotations.SurgeFor:             "nc-old",
 		annotations.Cordoned:             "true",
 	}, true)
@@ -83,6 +109,9 @@ func TestApplyUnfreezeRemovesMarkersAndUncordons(t *testing.T) {
 	}
 	if _, ok := n.Annotations[karpv1.DoNotDisruptAnnotationKey]; ok {
 		t.Error("do-not-disrupt must be removed")
+	}
+	if _, ok := n.Annotations[annotations.DoNotDisruptOwned]; ok {
+		t.Error("do-not-disrupt-owned marker must be removed")
 	}
 	if _, ok := n.Annotations[annotations.SurgeFor]; ok {
 		t.Error("surge-for must be removed")
@@ -95,16 +124,40 @@ func TestApplyUnfreezeRemovesMarkersAndUncordons(t *testing.T) {
 	}
 }
 
-func TestApplyUnfreezeLeavesOperatorCordon(t *testing.T) {
-	// surge-for present (controller froze it) but no cordoned marker: the node was
-	// already operator-cordoned, so unfreeze drops the freeze markers but must not
-	// uncordon (spec §5.3 sweep rule).
+func TestApplyUnfreezePreservesOperatorDoNotDisrupt(t *testing.T) {
+	// surge-for present (controller froze it) but no owned marker: the
+	// do-not-disrupt was an operator's, present before the controller froze the
+	// node. Unfreeze drops the controller's own markers but must leave the
+	// operator's do-not-disrupt in place (spec §3.3, §5.3).
 	n := testNode(map[string]string{
 		karpv1.DoNotDisruptAnnotationKey: "true",
+		annotations.SurgeFor:             "nc-old",
+	}, false)
+	if !applyUnfreeze(n) {
+		t.Fatal("applyUnfreeze must report a change for the removed surge-for marker")
+	}
+	if _, ok := n.Annotations[annotations.SurgeFor]; ok {
+		t.Error("surge-for must be removed")
+	}
+	if n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "true" {
+		t.Error("an operator's do-not-disrupt (no owned marker) must be preserved")
+	}
+}
+
+func TestApplyUnfreezeLeavesOperatorCordon(t *testing.T) {
+	// owned marker present (controller froze it) but no cordoned marker: the node
+	// was already operator-cordoned, so unfreeze drops the freeze markers (and the
+	// controller's do-not-disrupt) but must not uncordon (spec §5.3 sweep rule).
+	n := testNode(map[string]string{
+		karpv1.DoNotDisruptAnnotationKey: "true",
+		annotations.DoNotDisruptOwned:    "true",
 		annotations.SurgeFor:             "nc-old",
 	}, true)
 	if !applyUnfreeze(n) {
 		t.Fatal("applyUnfreeze must report a change for the removed freeze markers")
+	}
+	if _, ok := n.Annotations[karpv1.DoNotDisruptAnnotationKey]; ok {
+		t.Error("a controller-owned do-not-disrupt must be removed")
 	}
 	if !n.Spec.Unschedulable {
 		t.Error("an operator cordon (no marker) must be left in place")
