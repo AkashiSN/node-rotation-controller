@@ -3,6 +3,7 @@ package controller_test
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -50,7 +51,11 @@ func smokePolicy(t *testing.T) (*policy.Policy, *window.Schedule) {
 // and asserts the rotation reconciler observes it — an end-to-end proof of the
 // bootstrap (scheme, cache, watch, reconcile).
 func TestManagerReconcilesNodePool(t *testing.T) {
-	if testing.Short() {
+	// envtest needs the etcd/kube-apiserver binaries that KUBEBUILDER_ASSETS
+	// points at; without them it falls back to a default path that does not
+	// exist. 'make test' sets the variable, so skip rather than fail when a
+	// plain 'go test ./...' (or 'go test -short') runs without it.
+	if testing.Short() || os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("envtest requires KUBEBUILDER_ASSETS; run via 'make test'")
 	}
 
