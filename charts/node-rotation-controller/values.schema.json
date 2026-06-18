@@ -97,9 +97,9 @@
                   "const": 1,
                   "description": "v1 is surge-only and serial per NodePool (spec §5.4)."
                 },
-                "readyTimeout": { "type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" },
-                "cooldownAfter": { "type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" },
-                "retryBackoff": { "type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" },
+                "readyTimeout": { "type": "string", "pattern": "^(?!(0+(\\.0+)?(ns|us|ms|s|m|h))+$)([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" },
+                "cooldownAfter": { "type": "string", "pattern": "^(?!(0+(\\.0+)?(ns|us|ms|s|m|h))+$)([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" },
+                "retryBackoff": { "type": "string", "pattern": "^(?!(0+(\\.0+)?(ns|us|ms|s|m|h))+$)([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" },
                 "matchNodeRequirements": {
                   "type": "object",
                   "properties": {

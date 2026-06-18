@@ -43,12 +43,15 @@ type MaintenanceWindow struct {
 	End      string   `json:"end"`      // "HH:MM" 24-hour, must be after Start (no overnight wrap)
 }
 
-// Surge holds the v1 surge-orchestration knobs (spec §3.3, §5.4).
+// Surge holds the v1 surge-orchestration knobs (spec §3.3, §5.4). The three
+// durations are pointers so an unset field (nil → defaulted) is distinguishable
+// from an explicitly configured non-positive value (e.g. 0m), which Validate
+// rejects rather than silently defaulting (issue #30).
 type Surge struct {
 	MaxUnavailable        int                   `json:"maxUnavailable"` // v1: fixed at 1 (serial)
-	ReadyTimeout          metav1.Duration       `json:"readyTimeout"`
-	CooldownAfter         metav1.Duration       `json:"cooldownAfter"`
-	RetryBackoff          metav1.Duration       `json:"retryBackoff"`
+	ReadyTimeout          *metav1.Duration      `json:"readyTimeout"`
+	CooldownAfter         *metav1.Duration      `json:"cooldownAfter"`
+	RetryBackoff          *metav1.Duration      `json:"retryBackoff"`
 	MatchNodeRequirements MatchNodeRequirements `json:"matchNodeRequirements"`
 }
 
@@ -121,14 +124,18 @@ func (p *Policy) ApplyDefaults() {
 	if p.Surge.MaxUnavailable == 0 {
 		p.Surge.MaxUnavailable = 1
 	}
-	if p.Surge.ReadyTimeout.Duration == 0 {
-		p.Surge.ReadyTimeout = metav1.Duration{Duration: 15 * time.Minute}
+	// Only an UNSET (nil) duration is defaulted. An explicitly configured value —
+	// including a non-positive one like 0m or -1m — is preserved so Validate can
+	// reject it; silently rewriting it to the default would hide a misconfiguration
+	// (issue #30).
+	if p.Surge.ReadyTimeout == nil {
+		p.Surge.ReadyTimeout = &metav1.Duration{Duration: 15 * time.Minute}
 	}
-	if p.Surge.CooldownAfter.Duration == 0 {
-		p.Surge.CooldownAfter = metav1.Duration{Duration: 10 * time.Minute}
+	if p.Surge.CooldownAfter == nil {
+		p.Surge.CooldownAfter = &metav1.Duration{Duration: 10 * time.Minute}
 	}
-	if p.Surge.RetryBackoff.Duration == 0 {
-		p.Surge.RetryBackoff = metav1.Duration{Duration: 30 * time.Minute}
+	if p.Surge.RetryBackoff == nil {
+		p.Surge.RetryBackoff = &metav1.Duration{Duration: 30 * time.Minute}
 	}
 	if len(p.Surge.MatchNodeRequirements.Required) == 0 {
 		p.Surge.MatchNodeRequirements.Required = append([]string(nil), defaultRequiredRequirements...)
@@ -162,22 +169,23 @@ func (p *Policy) Validate() error {
 	}
 
 	// Surge durations drive safety-critical timing in the rotation state machine
-	// and schedule derivation (spec §5.2/§3.2). Zero is defaulted in ApplyDefaults,
-	// so after defaulting any non-positive value is an explicitly configured
-	// negative — reject it rather than silently entering an unsafe mode (a negative
-	// readyTimeout fails attempts instantly, a negative cooldownAfter bypasses the
-	// start gates, a negative retryBackoff makes failed-claim retry timing
-	// nonsensical).
+	// and schedule derivation (spec §5.2/§3.2). An unset field is defaulted to a
+	// positive value in ApplyDefaults; an explicitly configured non-positive value
+	// (0m, -1m) is preserved and rejected here rather than silently entering an
+	// unsafe mode — a non-positive readyTimeout fails attempts instantly, a
+	// non-positive cooldownAfter bypasses the start gates, a non-positive
+	// retryBackoff makes failed-claim retry timing nonsensical. The nil guard only
+	// matters when Validate runs without ApplyDefaults; Load always defaults first.
 	for _, d := range []struct {
 		name string
-		val  time.Duration
+		val  *metav1.Duration
 	}{
-		{"surge.readyTimeout", p.Surge.ReadyTimeout.Duration},
-		{"surge.cooldownAfter", p.Surge.CooldownAfter.Duration},
-		{"surge.retryBackoff", p.Surge.RetryBackoff.Duration},
+		{"surge.readyTimeout", p.Surge.ReadyTimeout},
+		{"surge.cooldownAfter", p.Surge.CooldownAfter},
+		{"surge.retryBackoff", p.Surge.RetryBackoff},
 	} {
-		if d.val <= 0 {
-			errs = append(errs, fmt.Errorf("%s must be positive, got %v", d.name, d.val))
+		if d.val != nil && d.val.Duration <= 0 {
+			errs = append(errs, fmt.Errorf("%s must be positive, got %v", d.name, d.val.Duration))
 		}
 	}
 
