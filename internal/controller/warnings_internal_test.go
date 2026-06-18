@@ -26,15 +26,15 @@ func drain(rec *record.FakeRecorder) []string {
 	}
 }
 
-func warnPool(name string) *karpv1.NodePool {
-	return &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: name}}
+func warnPool() *karpv1.NodePool {
+	return &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: "np"}}
 }
 
 func TestEmitFindingsWarnOnlyAndDedup(t *testing.T) {
 	rec := record.NewFakeRecorder(16)
 	w := newWarningEmitter(rec)
 	ctx := context.Background()
-	pool := warnPool("np")
+	pool := warnPool()
 	findings := []schedule.Finding{
 		{Severity: schedule.Warn, Code: "KBelowTwo", Message: "k=1 risky"},
 		{Severity: schedule.Fatal, Code: "ANonPositive", Message: "fatal, skipped"},
@@ -60,7 +60,7 @@ func TestEmitFindingsRefiresAfterClear(t *testing.T) {
 	rec := record.NewFakeRecorder(16)
 	w := newWarningEmitter(rec)
 	ctx := context.Background()
-	pool := warnPool("np")
+	pool := warnPool()
 	warn := []schedule.Finding{{Severity: schedule.Warn, Code: "TGPUnset", Message: "tgp unset"}}
 
 	w.EmitFindings(ctx, pool, warn)
@@ -79,7 +79,7 @@ func TestEmitShortLeadPerClaimAndDedup(t *testing.T) {
 	rec := record.NewFakeRecorder(16)
 	w := newWarningEmitter(rec)
 	ctx := context.Background()
-	pool := warnPool("np")
+	pool := warnPool()
 	short := time.Hour
 	long := 30 * 24 * time.Hour
 	claims := []karpv1.NodeClaim{
@@ -106,7 +106,7 @@ func TestForgetClearsDedup(t *testing.T) {
 	rec := record.NewFakeRecorder(16)
 	w := newWarningEmitter(rec)
 	ctx := context.Background()
-	pool := warnPool("np")
+	pool := warnPool()
 	warn := []schedule.Finding{{Severity: schedule.Warn, Code: "KBelowTwo", Message: "m"}}
 
 	w.EmitFindings(ctx, pool, warn)
@@ -121,9 +121,9 @@ func TestForgetClearsDedup(t *testing.T) {
 func TestNilRecorderIsSafe(t *testing.T) {
 	w := newWarningEmitter(nil)
 	// Must not panic.
-	w.EmitFindings(context.Background(), warnPool("np"),
+	w.EmitFindings(context.Background(), warnPool(),
 		[]schedule.Finding{{Severity: schedule.Warn, Code: "KBelowTwo", Message: "m"}})
-	w.EmitShortLead(context.Background(), warnPool("np"),
+	w.EmitShortLead(context.Background(), warnPool(),
 		[]karpv1.NodeClaim{shortLeadClaim("a", time.Hour)}, 24*time.Hour)
 }
 

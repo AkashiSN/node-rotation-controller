@@ -397,10 +397,10 @@ func TestCountEligibleZeroWhenNoneEligible(t *testing.T) {
 
 func TestShortLeadClaims(t *testing.T) {
 	claims := []karpv1.NodeClaim{
-		claim("ample", 1*day, expireAfter(30*day)),      // not short-lead
+		claim("ample", 1*day, expireAfter(30*day)), // not short-lead
 		claim("short-a", 1*day, expireAfter(1*time.Hour)),
 		claim("short-b", 1*day, expireAfter(1*time.Hour)),
-		claim("never", 1*day, neverExpire()),             // nil expireAfter excluded
+		claim("never", 1*day, neverExpire()), // nil expireAfter excluded
 	}
 	got := selection.ShortLeadClaims(claims, 24*time.Hour)
 	if len(got) != 2 {
