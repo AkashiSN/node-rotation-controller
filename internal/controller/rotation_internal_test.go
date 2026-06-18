@@ -455,6 +455,32 @@ func TestSurgeNotReadyHostStaysPending(t *testing.T) {
 	}
 }
 
+func TestSurgeTerminatingPlaceholderStaysPending(t *testing.T) {
+	// Placeholder is Running on a Ready host in the same NodePool, but it is already
+	// terminating (deletionTimestamp set, e.g. preempted by a higher-priority Pod):
+	// its reservation capacity is being removed, so surge_ready must not hold and the
+	// old NodeClaim must not be deleted (issue #28).
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
+		ncAnn(annotations.State, annotations.StatePending, annotations.StartedAt, rfc(testNow.Add(-2*time.Minute))))
+	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old"}, true)
+	readyHost := testK8sNode(surgeNode, true, nil, false)
+	ph := placeholderPod(surgeNode, corev1.PodRunning)
+	dt := metav1.NewTime(testNow.Add(-time.Second))
+	ph.DeletionTimestamp = &dt
+	ph.Finalizers = []string{"noderotation.io/test"} // keep the terminating Pod in the fake store
+	r := newReconciler(t, testNow, nil, pool, cand, oldNode, readyHost, ph)
+
+	step(t, r, pool)
+
+	if getPool(t, r).Annotations[annotations.ActiveRotationState] == annotations.StateDraining {
+		t.Error("a terminating placeholder must not trigger the draining transition")
+	}
+	if c := getClaimOrNil(t, r, "nc-old"); c == nil || c.DeletionTimestamp != nil {
+		t.Error("the old NodeClaim must not be deleted while the placeholder is terminating")
+	}
+}
+
 // --- pending timeout → failed ----------------------------------------------
 
 func TestReadyTimeoutFailsAndReaps(t *testing.T) {

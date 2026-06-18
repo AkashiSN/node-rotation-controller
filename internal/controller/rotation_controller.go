@@ -837,8 +837,15 @@ func (r *RotationReconciler) candidateRequests(ctx context.Context, cand *karpv1
 // from the candidate node and in the same NodePool (spec §5.2). It takes the
 // already-fetched placeholder (the pending handler reads it once per pass) to
 // avoid a second Get.
+//
+// A terminating placeholder (deletionTimestamp set, e.g. preempted by a
+// higher-priority Pod during its grace period) does not count as ready: its
+// reservation capacity is already being removed, so advancing to old NodeClaim
+// deletion would violate make-before-break (issue #28). The pending handler then
+// stays pending until the terminating placeholder is gone and a fresh one is
+// recreated, bounded by readyTimeout.
 func (r *RotationReconciler) surgeReady(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim, ph *corev1.Pod) (string, bool, error) {
-	if ph == nil || ph.Status.Phase != corev1.PodRunning {
+	if ph == nil || ph.Status.Phase != corev1.PodRunning || ph.DeletionTimestamp != nil {
 		return "", false, nil
 	}
 	host := ph.Spec.NodeName

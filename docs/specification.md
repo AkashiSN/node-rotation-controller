@@ -272,7 +272,8 @@ ROTATION (logical sequence; each step is a separate reconcile)
   │           emit_metrics(expired); alert              // never success; no cooldown — nothing was rotated
   │           clear(nodepool, active-rotation, active-rotation-state)
   │
-  ├─ surge_ready?  (placeholder Running on a Ready host node ≠ candidate.node,
+  ├─ surge_ready?  (placeholder Running AND not terminating (deletionTimestamp unset)
+  │                 on a Ready host node ≠ candidate.node,
   │                 host's karpenter.sh/nodepool label == candidate's pool)      [state: pending]
   │     // as soon as the placeholder's bind target (spec.nodeName) is observable, the pending handler
   │     //   PERSISTS it: annotate(candidate, surge-claim=<induced NodeClaim>) — identification must
@@ -643,9 +644,13 @@ advance(np, name):
                                              #   annotation; required karpenter.sh/nodepool selector (§3.3);
                                              #   nodeAffinity hostname NotIn {cand.node, near-deadline nodes}
                                              #   — both exclusion lists recomputed on every (re)creation
-      if surge_ready(cand):                  # placeholder Running on a Ready host ≠ cand.node, AND the host's
+      if surge_ready(cand):                  # placeholder Running AND not terminating (deletionTimestamp unset)
+                                             #   on a Ready host ≠ cand.node, AND the host's
                                              #   karpenter.sh/nodepool label == np.name (belt-and-suspenders
-                                             #   for the placeholder's required selector, §3.3)
+                                             #   for the placeholder's required selector, §3.3). A placeholder
+                                             #   preempted mid-grace stays Running with deletionTimestamp set;
+                                             #   its reservation is already being removed, so it is not ready
+                                             #   (§5.2 recreates it once gone, bounded by readyTimeout).
           host := placeholder_node(name)     # newly provisioned or pre-existing (capacity-absorb, §3.3)
           freeze(host, surge-for=name)
           annotate(np, active-rotation-state=draining, draining-at=now)   # durable phase record BEFORE the
@@ -739,7 +744,7 @@ The old NodeClaim's `noderotation.io/state` drives the machine in §5.2, anchore
 |------|-------|----|--------------|
 | *(none)* | selected in window | `pending` | write NodePool `active-rotation` anchor (first; conflict-checked, only-if-absent — §5.2); freeze old node (`do-not-disrupt` + `do-not-disrupt-owned` marker + `surge-for`, unless the node already carries an operator's active `do-not-disrupt: true`); cordon old node (+ `cordoned` marker); create placeholder (required `karpenter.sh/nodepool` selector; pod-level `do-not-disrupt`; hostname `NotIn` exclusion of the old node and near-deadline hosts, §3.3) |
 | `pending` | each reconcile (recovery) | `pending` | re-assert old-node freeze + cordon and persist `surge-claim` as soon as the placeholder's bind target is observable — passive steps that run **even while the NodePool is frozen**; recreate missing placeholder (only while `readyTimeout` has not elapsed — the timeout is checked first, §5.2; exclusion lists recomputed) — placeholder (re)creation and escalation are **held** during a freeze (§3.1) |
-| `pending` | placeholder Running on Ready host ≠ old node, host in the same NodePool | `draining` | freeze surge target (`do-not-disrupt` + `do-not-disrupt-owned` marker + `surge-for`, unless the node already carries an operator's active `do-not-disrupt: true`); write NodePool `active-rotation-state=draining` + `draining-at=now` (write-once, before the delete — the §4.2 drain-duration anchor); `delete` old NodeClaim |
+| `pending` | placeholder Running **and not terminating** (`deletionTimestamp` unset) on Ready host ≠ old node, host in the same NodePool | `draining` | freeze surge target (`do-not-disrupt` + `do-not-disrupt-owned` marker + `surge-for`, unless the node already carries an operator's active `do-not-disrupt: true`); write NodePool `active-rotation-state=draining` + `draining-at=now` (write-once, before the delete — the §4.2 drain-duration anchor); `delete` old NodeClaim |
 | `pending` | `readyTimeout` elapsed | `failed` | reap the induced claim from `surge-claim` (persisted during `pending`; when unset, re-resolved from a still-present placeholder or as the pool's claim created after `started-at` with no registered Node; guards: created after `started-at` **and** hosting only the placeholder — no registered Node passes trivially — §3.3 *Rollback*); delete placeholder; unfreeze + uncordon node(s) carrying this rotation's markers; one update: `state=failed`, `failed-at`, `retry-count += 1`, clear `started-at` + `surge-claim`; emit failure + alert; one NodePool update (last): write `last-failure-at`, clear anchor + `active-rotation-state` |
 | `pending` | old NodeClaim force-expiring (`deletionTimestamp` observed — checked first in the handler, §5.2) | `expired` (terminal) | delete placeholder; unfreeze + uncordon node(s) carrying the markers; write `state=expired` (clear `started-at` + `surge-claim`) **before** the pool clear — blocks re-selection (with the §3.2 `deletionTimestamp` exclusion) and keeps the sweep invariant; emit `expired` + alert (once); **no** `last-rotation-at` (nothing was rotated → no cooldown); clear anchor + `active-rotation-state` (last) |
 | `pending` | old NodeClaim already **gone** with no `draining` mirror (§3.3) | *(aborted)* | delete placeholder; unfreeze + uncordon node(s) carrying the markers; emit `expired` + alert; **no** `last-rotation-at` (no cooldown); clear anchor + `active-rotation-state` (last) |
