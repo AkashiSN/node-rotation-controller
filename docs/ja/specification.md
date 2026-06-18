@@ -811,13 +811,11 @@ data:
           - karpenter.sh/capacity-type
         preferred: []          # ソフト nodeAffinity。容量逼迫時は緩和。例: node.kubernetes.io/instance-type
 
-    prePull:                   # v2（v1 では無効）
+    prePull:                   # v2（v1 では無効）。v1 では `enabled` のみ受理
       enabled: false
-      images: []
 
-    warmup:                    # v3（v1 では無効）
+    warmup:                    # v3（v1 では無効）。v1 では `enabled` のみ受理
       enabled: false
-      jobTemplate: {}
 ```
 
 ---
