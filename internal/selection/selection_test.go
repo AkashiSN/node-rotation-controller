@@ -96,6 +96,12 @@ func expireAfter(d time.Duration) claimOpt {
 	return func(c *karpv1.NodeClaim) { c.Spec.ExpireAfter = karpv1.NillableDuration{Duration: &d} }
 }
 
+// tgp stamps the NodeClaim's own terminationGracePeriod — the authoritative
+// per-node value the lead time must anchor on (spec §3.2).
+func tgp(d time.Duration) claimOpt {
+	return func(c *karpv1.NodeClaim) { c.Spec.TerminationGracePeriod = &metav1.Duration{Duration: d} }
+}
+
 func neverExpire() claimOpt {
 	return func(c *karpv1.NodeClaim) { c.Spec.ExpireAfter = karpv1.NillableDuration{Duration: nil} }
 }
@@ -137,10 +143,12 @@ func claim(name string, age time.Duration, opts ...claimOpt) karpv1.NodeClaim {
 }
 
 // baseInputs: auto mode, leadTime 8d ⇒ trigger age threshold = 14d − 8d = 6d.
+// Base carries the whole 8d (DrainFallback 0); the test claims set no tGP, so
+// LeadTime.For resolves to 8d for each.
 func baseInputs() selection.Inputs {
 	return selection.Inputs{
 		Now:          now,
-		LeadTime:     8 * day,
+		LeadTime:     selection.LeadTime{Base: 8 * day},
 		RetryBackoff: 30 * time.Minute,
 	}
 }
@@ -402,7 +410,7 @@ func TestShortLeadClaims(t *testing.T) {
 		claim("short-b", 1*day, expireAfter(1*time.Hour)),
 		claim("never", 1*day, neverExpire()), // nil expireAfter excluded
 	}
-	got := selection.ShortLeadClaims(claims, 24*time.Hour)
+	got := selection.ShortLeadClaims(claims, selection.LeadTime{Base: 24 * time.Hour})
 	if len(got) != 2 {
 		t.Fatalf("want 2 short-lead claims, got %d", len(got))
 	}
@@ -415,7 +423,7 @@ func TestShortLeadClaims(t *testing.T) {
 func TestCountShortLeadCountsClaimsThatCannotGuaranteeKChances(t *testing.T) {
 	// A claim whose own expireAfter ≤ leadTime (K·P + t_rot) has per-node A ≤ 0
 	// and can no longer guarantee K chances (§3.2 layer 3).
-	leadTime := 8 * day
+	leadTime := selection.LeadTime{Base: 8 * day}
 	claims := []karpv1.NodeClaim{
 		claim("short", 1*day, expireAfter(7*day)),                // 7d ≤ 8d → counted
 		claim("exact", 1*day, expireAfter(8*day)),                // 8d ≤ 8d (A == 0) → counted
@@ -425,5 +433,56 @@ func TestCountShortLeadCountsClaimsThatCannotGuaranteeKChances(t *testing.T) {
 	}
 	if got := selection.CountShortLead(claims, leadTime); got != 2 {
 		t.Fatalf("want 2 short-lead, got %d", got)
+	}
+}
+
+func TestLeadTimeForUsesPerClaimTGPWithFallback(t *testing.T) {
+	lt := selection.LeadTime{Base: 48 * time.Hour, DrainFallback: time.Hour}
+	// A claim with its own tGP: lead = Base + tGP.
+	withTGP := claim("with", 1*day, tgp(3*time.Hour))
+	if got := lt.For(&withTGP); got != 51*time.Hour {
+		t.Errorf("For(withTGP) = %v, want 51h (Base 48h + tGP 3h)", got)
+	}
+	// A claim that leaves tGP unset falls back to DrainFallback.
+	noTGP := claim("none", 1*day)
+	if got := lt.For(&noTGP); got != 49*time.Hour {
+		t.Errorf("For(noTGP) = %v, want 49h (Base 48h + fallback 1h)", got)
+	}
+}
+
+// A NodePool template tGP shortened after a NodeClaim was stamped with a longer
+// value must not shrink that claim's lead time: the trigger anchors on the
+// claim's own (longer) tGP, so it becomes a candidate earlier (spec §3.2). This
+// is the regression #54 guards — using the template tGP would select too late.
+func TestTriggeredAnchorsOnPerClaimTGPNotTemplate(t *testing.T) {
+	// Base = K·P + readyTimeout + buffer with no tGP term. The candidate carries a
+	// 4d tGP, so its lead = 8d + 4d = 12d ⇒ trigger age threshold = 14d − 12d = 2d.
+	in := selection.Inputs{Now: now, LeadTime: selection.LeadTime{Base: 8 * day, DrainFallback: time.Hour}}
+	c := claim("long-tgp", 3*day, tgp(4*day)) // age 3d > 2d ⇒ triggered
+	if !selection.Triggered(&c, in) {
+		t.Error("claim with a long per-claim tGP must trigger on its own (longer) lead time")
+	}
+	// Same claim without the long tGP: lead = 8d + 1h fallback, threshold ≈ 6d, so
+	// at age 3d it would NOT yet be triggered — proving the tGP drove the result.
+	short := claim("short-tgp", 3*day)
+	if selection.Triggered(&short, in) {
+		t.Error("claim relying on the short fallback tGP must not trigger at age 3d")
+	}
+}
+
+// ShortLeadClaims must flag a claim whose own (longer) tGP pushes its per-node
+// lead time above its expireAfter, even when the tGP-independent base alone would
+// not (spec §3.2 layer 3).
+func TestShortLeadClaimsUsesPerClaimTGP(t *testing.T) {
+	lt := selection.LeadTime{Base: 6 * day, DrainFallback: time.Hour}
+	claims := []karpv1.NodeClaim{
+		// E = 7d. Base alone (6d) < 7d, but Base + 2d tGP = 8d ≥ 7d ⇒ short-lead.
+		claim("long-tgp", 1*day, expireAfter(7*day), tgp(2*day)),
+		// E = 7d, no tGP ⇒ lead = 6d + 1h < 7d ⇒ not short-lead.
+		claim("short-tgp", 1*day, expireAfter(7*day)),
+	}
+	got := selection.ShortLeadClaims(claims, lt)
+	if len(got) != 1 || got[0].Name != "long-tgp" {
+		t.Fatalf("want only long-tgp short-lead, got %v", got)
 	}
 }

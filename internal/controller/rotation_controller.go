@@ -229,8 +229,8 @@ func nodeReadyObj(obj client.Object) bool {
 
 // resolved holds the per-NodePool durations derived from policy + schedule.
 type resolved struct {
-	leadTime     time.Duration  // K·P + t_rot, for candidate selection (§3.2)
-	override     *time.Duration // explicit ageThreshold, nil in auto mode
+	leadTime     selection.LeadTime // K·P + t_rot, resolved per claim (§3.2)
+	override     *time.Duration     // explicit ageThreshold, nil in auto mode
 	retryBackoff time.Duration
 	readyTimeout time.Duration
 	cooldown     time.Duration
@@ -241,7 +241,6 @@ func (r *RotationReconciler) resolve(pool *karpv1.NodePool) resolved {
 	s := r.Policy.Surge
 	tgp, unset := poolTGP(pool)
 	p, _ := r.Schedule.WorstCasePeriod()
-	tRot := s.ReadyTimeout.Duration + tgp + schedule.Buffer
 
 	override, isAuto, _ := r.Policy.AgeThresholdOverride()
 	var ov *time.Duration
@@ -256,7 +255,14 @@ func (r *RotationReconciler) resolve(pool *karpv1.NodePool) resolved {
 	}
 
 	return resolved{
-		leadTime:     time.Duration(r.Policy.K())*p + tRot,
+		// Base omits tGP; LeadTime.For adds each claim's own terminationGracePeriod
+		// so a template tGP shortened after a claim was stamped cannot under-estimate
+		// the per-node lead time (§3.2, per-node trigger). The pool tGP above feeds
+		// only the representative drainBound (§5.2) and schedule.Derive validation.
+		leadTime: selection.LeadTime{
+			Base:          time.Duration(r.Policy.K())*p + s.ReadyTimeout.Duration + schedule.Buffer,
+			DrainFallback: schedule.DrainFallback,
+		},
 		override:     ov,
 		retryBackoff: s.RetryBackoff.Duration,
 		readyTimeout: s.ReadyTimeout.Duration,
