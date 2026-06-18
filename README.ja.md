@@ -1,7 +1,7 @@
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-specification-orange.svg)](docs/ja/specification.md)
+[![Status](https://img.shields.io/badge/status-v0.3_MVP_(pre--1.0)-blue.svg)](docs/ja/specification.md)
 
 Karpenter 配下の Node を、設定可能なメンテナンスウィンドウ内で **make-before-break（surge）** 型に先回り置換し、Karpenter の Forceful な `expireAfter` 発火を実質起こさないようにする Kubernetes コントローラ。
 
@@ -9,7 +9,7 @@ EKS Auto Mode をはじめ、Node Expiration が Forceful で Disruption Budgets
 
 ## Status
 
-**初期開発（v0.2 skeleton）。** 設計は確定済みで、controller-runtime のスケルトン（manager・leader election・CI）から実装を開始した。置換ロジック（仕様 §5.2）は v0.3 で実装する。設計の source of truth は引き続き [docs/ja/specification.md](docs/ja/specification.md)。
+**v0.3 — v1 surge MVP 実装済み（pre-1.0）。** v1 の make-before-break 置換ステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。これは **早期検証段階であり、まだ production-ready ではない** — 実際の EKS Auto Mode クラスタでの soak テストは未実施（v1.0 に向けた[ロードマップ](docs/ja/specification.md#62-ロードマップ)を参照）。設計の source of truth は引き続き [docs/ja/specification.md](docs/ja/specification.md)。Karpenter の契約は[互換性](#互換性)を参照。
 
 English: [README.md](README.md) / [docs/specification.md](docs/specification.md)
 
@@ -60,9 +60,10 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 │   ├── specification.md       仕様書（英語）
 │   └── ja/specification.md    日本語訳
 ├── charts/                    Helm chart（node-rotation-controller）
-├── cmd/                       Controller エントリポイント（manager bootstrap）
-├── api/                       CRD types（必要なら）（予定）
-└── internal/                  Reconciler 実装（skeleton；本実装は予定）
+├── cmd/                       Controller エントリポイント（manager bootstrap + 起動時プリフライト）
+└── internal/                  Reconciler と関連パッケージ: 置換ステートマシン
+                               （controller）、schedule/selection、surge placeholder、
+                               window、policy、metrics、preflight
 ```
 
 ## インストール
