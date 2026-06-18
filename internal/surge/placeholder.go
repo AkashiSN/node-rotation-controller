@@ -2,6 +2,7 @@ package surge
 
 import (
 	"slices"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -186,10 +187,14 @@ func poolAllows(pool *karpv1.NodePool, key, value string) bool {
 	return true
 }
 
-// requirementPermits evaluates one NodeSelector operator against value. Gt/Lt
-// are not used by the categorical node labels this replicates; an unrecognized
-// operator is treated as not permitting, which drops the key — the
-// schedulability-preserving default (spec §3.3).
+// requirementPermits evaluates one NodeSelector operator against value, matching
+// Kubernetes' own NodeSelector semantics. Gt/Lt compare integers — a NodePool
+// that constrains a numeric Karpenter requirement (e.g.
+// karpenter.k8s.aws/instance-generation) with these operators still has its
+// candidate-node value replicated rather than silently dropped (issue #49). When
+// a numeric comparison cannot be evaluated (malformed bound or non-integer node
+// value) the key is dropped — the schedulability-preserving default (spec §3.3),
+// shared with any unrecognized operator.
 func requirementPermits(op corev1.NodeSelectorOperator, values []string, value string) bool {
 	switch op {
 	case corev1.NodeSelectorOpIn:
@@ -200,7 +205,31 @@ func requirementPermits(op corev1.NodeSelectorOperator, values []string, value s
 		return true // the key is present (value is non-empty by construction)
 	case corev1.NodeSelectorOpDoesNotExist:
 		return false // the NodePool forbids the key
+	case corev1.NodeSelectorOpGt, corev1.NodeSelectorOpLt:
+		return numericPermits(op, values, value)
 	default:
 		return false
 	}
+}
+
+// numericPermits evaluates a Gt or Lt requirement. Per Kubernetes NodeSelector
+// semantics the requirement carries exactly one integer bound, and the candidate
+// node value must parse as an integer; any deviation drops the key (returns
+// false), the schedulability-preserving default.
+func numericPermits(op corev1.NodeSelectorOperator, values []string, value string) bool {
+	if len(values) != 1 {
+		return false
+	}
+	bound, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		return false
+	}
+	got, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return false
+	}
+	if op == corev1.NodeSelectorOpGt {
+		return got > bound
+	}
+	return got < bound
 }
