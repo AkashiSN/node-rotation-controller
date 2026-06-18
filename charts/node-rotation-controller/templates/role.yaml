@@ -6,9 +6,11 @@ metadata:
   labels:
     {{- include "node-rotation-controller.labels" . | nindent 4 }}
 # Namespaced resources (spec §4.3). The placeholder Pods are created in this
-# namespace (--namespace), and leader-election Leases live here too.
-# Events are NOT granted here — see the ClusterRole (cluster-scoped objects'
-# Events land in the "default" namespace via client-go's recorder fallback).
+# namespace (--namespace), and leader-election Leases live here too. Leader
+# election also records its Lease events in this namespace via controller-runtime's
+# legacy core/v1 recorder, so core Events are granted here. The issue #50 warning
+# Events use the new events.k8s.io API on cluster-scoped objects and are granted
+# cluster-wide in the ClusterRole instead.
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -16,6 +18,11 @@ rules:
     # (--namespace, spec §3.3). Cluster-wide reads (the headroom gate, the
     # manager cache) are granted via the ClusterRole.
     verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    # Leader election records its Lease events in this namespace via the legacy
+    # core/v1 recorder. The issue #50 warnings instead use events.k8s.io (ClusterRole).
+    verbs: ["create", "patch"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

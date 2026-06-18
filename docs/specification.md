@@ -485,6 +485,13 @@ Suggested alerts:
   # the placeholder Pod is created and managed directly by the controller (§3.3)
   verbs: ["get", "list", "watch", "create", "delete"]
 - apiGroups: [""]
+  # core/v1 Events: leader election records its Lease events via the legacy recorder
+  resources: ["events"]
+  verbs: ["create", "patch"]
+- apiGroups: ["events.k8s.io"]
+  # events.k8s.io/v1 Events: the §4.2 / §3.2-layer-3 warning Events on the
+  # cluster-scoped NodePool/NodeClaim objects use the new recorder API, which
+  # writes those Events into the "default" namespace (granted cluster-wide)
   resources: ["events"]
   verbs: ["create", "patch"]
 - apiGroups: ["coordination.k8s.io"]

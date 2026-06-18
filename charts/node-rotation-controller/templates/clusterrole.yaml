@@ -5,10 +5,12 @@ metadata:
   labels:
     {{- include "node-rotation-controller.labels" . | nindent 4 }}
 # Cluster-scoped resources, plus the cluster-wide pods read the headroom gate
-# needs (spec §4.3). Namespaced writes (placeholder pods create/delete,
-# leases) are granted via a namespaced Role so they stay in the controller
-# namespace. Events are granted here (cluster-wide) because client-go's
-# recorder writes cluster-scoped objects' Events into the "default" namespace.
+# needs (spec §4.3). Namespaced writes (placeholder pods create/delete, leases,
+# leader-election core/v1 Events) are granted via a namespaced Role so they stay
+# in the controller namespace. The issue #50 warning Events use the new
+# events.k8s.io API and are granted cluster-wide here because the controller
+# records them on cluster-scoped NodePool/NodeClaim objects, whose Events land in
+# the "default" namespace.
 rules:
   - apiGroups: ["karpenter.sh"]
     resources: ["nodeclaims"]
@@ -34,10 +36,10 @@ rules:
     # arbitrary namespaces (spec §3.3). The manager cache also watches Pods
     # cluster-wide. create/delete (placeholder Pods) stay in the namespaced Role.
     verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
+  - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     # Cluster-wide: the controller records Warning Events on the cluster-scoped
-    # NodePool and NodeClaim objects (issue #50). client-go's recorder writes a
-    # cluster-scoped object's Event into the "default" namespace, so a namespaced
-    # Role in the release namespace would not authorize it.
+    # NodePool and NodeClaim objects (issue #50) via the new events.k8s.io API
+    # (mgr.GetEventRecorder). client-go writes a cluster-scoped object's Event into
+    # the "default" namespace, so a namespaced Role would not authorize it.
     verbs: ["create", "patch"]
