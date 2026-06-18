@@ -26,7 +26,7 @@ import (
 // active warning re-fires once, consistent with the Event recorder's own
 // re-aggregation window.
 type warningEmitter struct {
-	events record.EventRecorder // nil disables events (log-only); used by tests
+	events record.EventRecorder // nil disables events (log-only)
 	mu     sync.Mutex
 	state  map[string]*poolWarnState // key: NodePool name
 }

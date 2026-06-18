@@ -5,9 +5,10 @@ metadata:
   labels:
     {{- include "node-rotation-controller.labels" . | nindent 4 }}
 # Cluster-scoped resources, plus the cluster-wide pods read the headroom gate
-# needs (spec §4.3). Namespaced writes (placeholder pods create/delete, events,
+# needs (spec §4.3). Namespaced writes (placeholder pods create/delete,
 # leases) are granted via a namespaced Role so they stay in the controller
-# namespace.
+# namespace. Events are granted here (cluster-wide) because client-go's
+# recorder writes cluster-scoped objects' Events into the "default" namespace.
 rules:
   - apiGroups: ["karpenter.sh"]
     resources: ["nodeclaims"]
@@ -33,3 +34,10 @@ rules:
     # arbitrary namespaces (spec §3.3). The manager cache also watches Pods
     # cluster-wide. create/delete (placeholder Pods) stay in the namespaced Role.
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    # Cluster-wide: the controller records Warning Events on the cluster-scoped
+    # NodePool and NodeClaim objects (issue #50). client-go's recorder writes a
+    # cluster-scoped object's Event into the "default" namespace, so a namespaced
+    # Role in the release namespace would not authorize it.
+    verbs: ["create", "patch"]
