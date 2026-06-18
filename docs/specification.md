@@ -790,11 +790,11 @@ data:
 
     surge:
       maxUnavailable: 1        # v1 fixed at 1 (serial); > 1 reserved for a later version
-      readyTimeout: 15m        # surge node must reach Ready within this, else state=failed
+      readyTimeout: 15m        # surge node must reach Ready within this, else state=failed; must be > 0 (validation rejects ≤ 0)
       cooldownAfter: 10m       # settle pause between consecutive rotations in a window (not part of t_rot; affects
                                #   throughput, §3.2); also reused as the pool-level inter-attempt pause after a
-                               #   FAILED attempt (anchored on last-failure-at, §5.2 step 2 / §4.4) — no separate knob in v1
-      retryBackoff: 30m        # base wait before re-selecting a failed NodeClaim; doubles per consecutive failure, capped at 8x (§5.3)
+                               #   FAILED attempt (anchored on last-failure-at, §5.2 step 2 / §4.4) — no separate knob in v1; must be > 0
+      retryBackoff: 30m        # base wait before re-selecting a failed NodeClaim; doubles per consecutive failure, capped at 8x (§5.3); must be > 0
       matchNodeRequirements:   # which candidate-node requirements the placeholder replicates (§3.3 "Stateful and zonal
                                #   workloads"). The required karpenter.sh/nodepool selector is NOT listed here — it is
                                #   always applied, unconditionally: same-NodePool is a structural invariant (§3.3), not a tunable

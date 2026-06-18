@@ -161,6 +161,26 @@ func (p *Policy) Validate() error {
 		errs = append(errs, fmt.Errorf("surge.maxUnavailable must be 1 in v1, got %d", p.Surge.MaxUnavailable))
 	}
 
+	// Surge durations drive safety-critical timing in the rotation state machine
+	// and schedule derivation (spec §5.2/§3.2). Zero is defaulted in ApplyDefaults,
+	// so after defaulting any non-positive value is an explicitly configured
+	// negative — reject it rather than silently entering an unsafe mode (a negative
+	// readyTimeout fails attempts instantly, a negative cooldownAfter bypasses the
+	// start gates, a negative retryBackoff makes failed-claim retry timing
+	// nonsensical).
+	for _, d := range []struct {
+		name string
+		val  time.Duration
+	}{
+		{"surge.readyTimeout", p.Surge.ReadyTimeout.Duration},
+		{"surge.cooldownAfter", p.Surge.CooldownAfter.Duration},
+		{"surge.retryBackoff", p.Surge.RetryBackoff.Duration},
+	} {
+		if d.val <= 0 {
+			errs = append(errs, fmt.Errorf("%s must be positive, got %v", d.name, d.val))
+		}
+	}
+
 	if _, _, err := p.AgeThresholdOverride(); err != nil {
 		errs = append(errs, err)
 	}

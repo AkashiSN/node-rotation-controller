@@ -791,11 +791,11 @@ data:
 
     surge:
       maxUnavailable: 1        # v1 は 1 固定（直列）。> 1 は将来バージョン用の予約
-      readyTimeout: 15m        # surge ノードがこの時間内に Ready にならなければ state=failed
+      readyTimeout: 15m        # surge ノードがこの時間内に Ready にならなければ state=failed。0 超でなければならない（バリデーションが ≤ 0 を拒否）
       cooldownAfter: 10m       # ウィンドウ内で連続するローテーション間の整定休止（t_rot には含めない。スループットに
                                #   影響、§3.2）。「失敗した」試行後の NodePool レベルの試行間休止としても再利用される
-                               #   （last-failure-at をアンカーに、§5.2 ステップ2 / §4.4） — v1 では別ノブを設けない
-      retryBackoff: 30m        # failed な NodeClaim を再選定するまでの基本待機。連続失敗ごとに倍増、上限 8 倍（§5.3）
+                               #   （last-failure-at をアンカーに、§5.2 ステップ2 / §4.4） — v1 では別ノブを設けない。0 超でなければならない
+      retryBackoff: 30m        # failed な NodeClaim を再選定するまでの基本待機。連続失敗ごとに倍増、上限 8 倍（§5.3）。0 超でなければならない
       matchNodeRequirements:   # placeholder が複製する候補ノードの requirement（§3.3「ステートフル／ゾーン制約の
                                #   ワークロード」）。required な karpenter.sh/nodepool セレクタはここには載らない —
                                #   常に無条件で適用される: 同一 NodePool は構造的不変条件（§3.3）でありチューニング項目ではない
