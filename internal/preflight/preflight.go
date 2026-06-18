@@ -56,7 +56,7 @@ func Check(ctx context.Context, disco ResourceLister, reader client.Reader) erro
 func checkAPISurface(disco ResourceLister) error {
 	rl, err := disco.ServerResourcesForGroupVersion(GroupVersion)
 	if err != nil {
-		return fmt.Errorf("Karpenter API %q is not served; the controller requires Karpenter v1+ (EKS Auto Mode or self-managed Karpenter): %w", GroupVersion, err)
+		return fmt.Errorf("the Karpenter API %q is not served; the controller requires Karpenter v1+ (EKS Auto Mode or self-managed Karpenter): %w", GroupVersion, err)
 	}
 	served := make(map[string]bool, len(rl.APIResources))
 	for _, r := range rl.APIResources {
@@ -64,7 +64,7 @@ func checkAPISurface(disco ResourceLister) error {
 	}
 	for _, name := range requiredResources {
 		if !served[name] {
-			return fmt.Errorf("Karpenter resource %q is not served under %q; the cluster's Karpenter API surface is incompatible", name, GroupVersion)
+			return fmt.Errorf("the Karpenter resource %q is not served under %q; the cluster's Karpenter API surface is incompatible", name, GroupVersion)
 		}
 	}
 	return nil

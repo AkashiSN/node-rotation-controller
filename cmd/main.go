@@ -14,6 +14,7 @@ import (
 	_ "time/tzdata"
 
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -93,12 +94,20 @@ func main() {
 	// checks run against a direct (non-cached) client and the discovery endpoint,
 	// both usable before mgr.Start; an incompatible cluster exits cleanly here
 	// rather than failing on the first reconcile.
-	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
+	//
+	// The timeout is enforced on a rest.Config copy (transport-level), not just via
+	// context: client-go's discovery ServerResourcesForGroupVersion is not
+	// context-aware (it issues Do(context.TODO()) internally), so a wedged
+	// discovery request would otherwise hang past the context deadline. The Config
+	// Timeout bounds every preflight request, discovery included.
+	preflightCfg := rest.CopyConfig(cfg)
+	preflightCfg.Timeout = preflightTimeout
+	disco, err := discovery.NewDiscoveryClientForConfig(preflightCfg)
 	if err != nil {
 		setupLog.Error(err, "unable to build discovery client for the Karpenter API preflight")
 		os.Exit(1)
 	}
-	directClient, err := client.New(cfg, client.Options{Scheme: scheme.New()})
+	directClient, err := client.New(preflightCfg, client.Options{Scheme: scheme.New()})
 	if err != nil {
 		setupLog.Error(err, "unable to build client for the Karpenter API preflight")
 		os.Exit(1)
