@@ -213,6 +213,10 @@ func TestReschedulableRequestsHostnamePinningPrecision(t *testing.T) {
 		{"two terms pin different hosts", withTerms(term(hostname(corev1.NodeSelectorOpIn, candidateNode)), term(hostname(corev1.NodeSelectorOpIn, "other-node"))), false},
 		{"one term pins, one term unbounded on hostname", withTerms(term(hostname(corev1.NodeSelectorOpIn, candidateNode)), term(zone)), false},
 		{"hostname Exists only", withTerms(term(hostname(corev1.NodeSelectorOpExists))), false},
+		// A singleton hostname In to a host OTHER than the candidate does not pin
+		// the Pod here — it can re-land on that other host after drain, so it must
+		// still count toward sizing (PR #46 review).
+		{"In single non-candidate host", withTerms(term(hostname(corev1.NodeSelectorOpIn, "other-node"))), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := surge.ReschedulableRequests([]corev1.Pod{pod("p", reqs(rl("cpu", "1")), tc.opt)}, candidateNode)
@@ -225,6 +229,16 @@ func TestReschedulableRequestsHostnamePinningPrecision(t *testing.T) {
 			wantEqual(t, got, rl("cpu", "1"))
 		})
 	}
+}
+
+func TestReschedulableRequestsHostnameSelectorNonCandidateCounts(t *testing.T) {
+	// A kubernetes.io/hostname nodeSelector to a host other than the candidate is
+	// not a pin to the candidate — the Pod can re-land there, so it must count
+	// toward sizing (PR #46 review).
+	p := pod("p", reqs(rl("cpu", "1")))
+	p.Spec.NodeSelector = map[string]string{corev1.LabelHostname: "other-node"}
+	got := surge.ReschedulableRequests([]corev1.Pod{p}, candidateNode)
+	wantEqual(t, got, rl("cpu", "1"))
 }
 
 func TestReschedulableRequestsKeepsReplicaSetAndStatefulSet(t *testing.T) {
