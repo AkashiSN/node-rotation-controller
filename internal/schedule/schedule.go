@@ -5,11 +5,12 @@
 // values. Layer 1 (scheduling feasibility) and layer 2 (throughput) are returned
 // as structured Findings; layer 3 (per-node runtime) is the caller's job.
 //
-// Two layer-1 rows from spec §3.2 are intentionally NOT evaluated here because
-// they need cluster context this pure-logic layer does not have; they belong to
-// the reconcile/startup wiring (a follow-up): the Auto Mode "E + tGP > 21d" cap,
-// and the NodePool spec.limits headroom check (the authoritative, candidate-
-// dependent surge_headroom check runs at rotation start, §5.2 step 3).
+// One layer-1 row from spec §3.2 is intentionally NOT evaluated here because it
+// needs cluster context this pure-logic layer does not have; it belongs to the
+// reconcile/startup wiring: the NodePool spec.limits headroom check (the
+// authoritative, candidate-dependent surge_headroom check runs at rotation start,
+// §5.2 step 3). The Auto Mode "E + tGP > 21d" cap is evaluated here — it is pure
+// arithmetic over E and tGP, which Derive already has (issue #59).
 package schedule
 
 import (
@@ -20,6 +21,15 @@ import (
 // Buffer is the fixed slack added to t_rot beyond readyTimeout + tGP (spec §3.2
 // symbol table). 15m makes the worked example's t_rot land at 1.5h.
 const Buffer = 15 * time.Minute
+
+// HardCap is the EKS Auto Mode ceiling on a node's true end-of-life: Auto Mode
+// enforces expireAfter + terminationGracePeriod ≤ 21d (§1.1), a limit operators
+// can lower but not remove. A NodePool whose representative E + tGP exceeds it is
+// surfaced as a non-fatal HardCapExceeded warning (spec §3.2 layer 1). Self-
+// managed Karpenter is not subject to the cap, but the sum is evaluated
+// unconditionally (Auto Mode is not reliably detectable from the NodePool API and
+// is the primary target, §1.1); the warning is advisory and never changes A.
+const HardCap = 21 * 24 * time.Hour
 
 // DrainFallback is the fixed bound substituted for tGP when it is unset
 // (self-managed Karpenter allows nil); it matches the §5.2 stuck-drain bound.
@@ -163,6 +173,11 @@ func layer1(in Inputs, r Result) []Finding {
 	if in.TGPWasUnset {
 		fs = append(fs, Finding{Severity: Warn, Code: "TGPUnset",
 			Message: fmt.Sprintf("terminationGracePeriod is unset; drain is unbounded by Karpenter and t_rot falls back to %v", DrainFallback)})
+	}
+
+	if in.E+in.TGP > HardCap {
+		fs = append(fs, Finding{Severity: Warn, Code: "HardCapExceeded",
+			Message: fmt.Sprintf("expireAfter %v + terminationGracePeriod %v = %v exceeds the EKS Auto Mode 21d hard cap (§1.1); under Auto Mode this NodePool is rejected — lower expireAfter or terminationGracePeriod", in.E, in.TGP, in.E+in.TGP)})
 	}
 
 	if in.RetryBackoff < in.ReadyTimeout {

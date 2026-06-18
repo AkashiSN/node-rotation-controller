@@ -144,6 +144,32 @@ func TestDeriveTGPUnsetWarn(t *testing.T) {
 	}
 }
 
+func TestDeriveHardCapExceededWarn(t *testing.T) {
+	in := baseAuto()
+	in.E = 20 * 24 * time.Hour  // 20d
+	in.TGP = 2 * 24 * time.Hour // 2d → E + tGP = 22d > 21d
+	r := Derive(in)
+	has(t, r, "HardCapExceeded", Warn)
+	// Non-fatal: the cap warning must not change the derived A. tRot = 15m + 48h +
+	// 15m = 48.5h; A = 480h − (2·96h + 48.5h) = 239.5h.
+	if want := 239*time.Hour + 30*time.Minute; r.A != want {
+		t.Errorf("A = %v, want %v (cap warning must not change A)", r.A, want)
+	}
+}
+
+func TestDeriveHardCapAtBoundaryNoWarn(t *testing.T) {
+	// E + tGP == 21d exactly is at the cap, not over it (the cap is a strict >).
+	in := baseAuto()
+	in.E = 20 * 24 * time.Hour // 20d
+	in.TGP = 24 * time.Hour    // 1d → E + tGP = 21d exactly
+	absent(t, Derive(in), "HardCapExceeded")
+}
+
+func TestDeriveHardCapUnderCapNoWarn(t *testing.T) {
+	// The worked example (E = 14d, tGP = 1h) is well under the cap.
+	absent(t, Derive(baseAuto()), "HardCapExceeded")
+}
+
 func TestDeriveThroughputZeroWarn(t *testing.T) {
 	in := baseAuto()
 	in.TGP = 24 * time.Hour // Auto Mode stock default → tRot ≈ 24.5h
