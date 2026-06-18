@@ -93,6 +93,11 @@ func TestBuildPlaceholderPodShape(t *testing.T) {
 	if p.Spec.PreemptionPolicy == nil || *p.Spec.PreemptionPolicy != corev1.PreemptNever {
 		t.Errorf("preemptionPolicy: want Never, got %v", p.Spec.PreemptionPolicy)
 	}
+	// The pause Pod never calls the Kubernetes API, so it must not receive a
+	// service account token (issue #35, least privilege).
+	if p.Spec.AutomountServiceAccountToken == nil || *p.Spec.AutomountServiceAccountToken {
+		t.Errorf("automountServiceAccountToken: want explicit false, got %v", p.Spec.AutomountServiceAccountToken)
+	}
 	if len(p.Spec.Containers) != 1 {
 		t.Fatalf("want exactly one container, got %d", len(p.Spec.Containers))
 	}

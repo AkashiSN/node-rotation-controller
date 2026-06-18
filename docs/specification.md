@@ -252,6 +252,7 @@ ROTATION (logical sequence; each step is a separate reconcile)
   │         requests     = sum(requests of reschedulable pods on candidate), // excl. DaemonSet / mirror / completed / node-pinned
   │         annotations  = {do-not-disrupt: true},
   │         priority     = placeholderPriorityClass,        // dedicated, negative value; preemptionPolicy=Never
+  │         automountServiceAccountToken = false,           // pause Pod never calls the API → no token (least privilege)
   │         labels       = {surge-for: candidate.name,
   │                         karpenter.sh/nodepool: candidate.nodepool}, // lets the Pod watch map the
   │                                                       //   placeholder back to its NodePool with no client lookup (§5.1)

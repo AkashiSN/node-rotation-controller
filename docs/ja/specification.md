@@ -252,6 +252,7 @@ ROTATION（論理シーケンス。各ステップは別々の reconcile）
   │         requests     = sum(candidate 上の再スケジュール対象 Pod の requests), // DaemonSet / mirror / 完了済 / ノード固定は除外
   │         annotations  = {do-not-disrupt: true},
   │         priority     = placeholderPriorityClass,        // 専用・負値; preemptionPolicy=Never
+  │         automountServiceAccountToken = false,           // pause Pod は API を呼ばない → トークン不要（最小権限）
   │         labels       = {surge-for: candidate.name,
   │                         karpenter.sh/nodepool: candidate.nodepool}, // Pod watch が client lookup なしで
   │                                                       //   placeholder を NodePool へマップできるようにする（§5.1）
