@@ -4,14 +4,19 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
+	"time"
 
 	// tzdata embeds the IANA timezone database so time.LoadLocation resolves
 	// names like "Asia/Tokyo" on a distroless image (spec §3.1, internal/window).
 	_ "time/tzdata"
 
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -20,9 +25,14 @@ import (
 	"github.com/AkashiSN/node-rotation-controller/internal/controller"
 	appmetrics "github.com/AkashiSN/node-rotation-controller/internal/metrics"
 	"github.com/AkashiSN/node-rotation-controller/internal/policy"
+	"github.com/AkashiSN/node-rotation-controller/internal/preflight"
 	"github.com/AkashiSN/node-rotation-controller/internal/scheme"
 	"github.com/AkashiSN/node-rotation-controller/internal/window"
 )
+
+// preflightTimeout bounds the startup Karpenter v1 API checks so a wedged API
+// server surfaces as a clear timeout error rather than a hung process.
+const preflightTimeout = 30 * time.Second
 
 func main() {
 	var metricsAddr string
@@ -60,7 +70,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	cfg := ctrl.GetConfigOrDie()
+
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme.New(),
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: probeAddr,
@@ -76,6 +88,37 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+
+	// Fail fast on an incompatible or unreadable Karpenter v1 API surface before
+	// the manager begins reconciling (issue #58, spec §1.1 compatibility). The
+	// checks run against a direct (non-cached) client and the discovery endpoint,
+	// both usable before mgr.Start; an incompatible cluster exits cleanly here
+	// rather than failing on the first reconcile.
+	//
+	// The timeout is enforced on a rest.Config copy (transport-level), not just via
+	// context: client-go's discovery ServerResourcesForGroupVersion is not
+	// context-aware (it issues Do(context.TODO()) internally), so a wedged
+	// discovery request would otherwise hang past the context deadline. The Config
+	// Timeout bounds every preflight request, discovery included.
+	preflightCfg := rest.CopyConfig(cfg)
+	preflightCfg.Timeout = preflightTimeout
+	disco, err := discovery.NewDiscoveryClientForConfig(preflightCfg)
+	if err != nil {
+		setupLog.Error(err, "unable to build discovery client for the Karpenter API preflight")
+		os.Exit(1)
+	}
+	directClient, err := client.New(preflightCfg, client.Options{Scheme: scheme.New()})
+	if err != nil {
+		setupLog.Error(err, "unable to build client for the Karpenter API preflight")
+		os.Exit(1)
+	}
+	preflightCtx, cancel := context.WithTimeout(context.Background(), preflightTimeout)
+	if err := preflight.Check(preflightCtx, disco, directClient); err != nil {
+		cancel()
+		setupLog.Error(err, "Karpenter v1 API preflight failed")
+		os.Exit(1)
+	}
+	cancel()
 
 	// Register the §4.2 metrics on the controller-runtime registry the manager
 	// already serves on /metrics — no extra server.

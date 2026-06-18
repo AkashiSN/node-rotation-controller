@@ -540,6 +540,20 @@ Each rotation creates a brief overlap during which both the old and new nodes ar
 └───────────────────────────────────────────────────────────────┘
 ```
 
+**Startup preflight (Karpenter v1 API surface).** Before the manager begins
+reconciling, the controller fails fast if the public Karpenter API it depends on
+is absent or unreadable: it verifies that the cluster serves **`karpenter.sh/v1`**
+with both the `nodeclaims` and `nodepools` resources, and that its RBAC permits
+listing each kind. The compatibility contract is the `karpenter.sh/v1` **group/
+version**, deliberately independent of the managed Karpenter minor (EKS Auto Mode
+does not expose it) — see §1.1. A missing/incompatible CRD surface or an RBAC gap
+becomes an immediate, actionable startup error instead of a deferred reconcile
+failure. The typed list also serves as a schema-compatibility probe (a successful
+decode of the v1 types the controller is built against confirms the served schema
+is wire-compatible); per-field CRD OpenAPI introspection is intentionally not
+attempted, as the typed `karpenter.sh/v1` contract already covers the required
+fields.
+
 ## 5.2 Reconcile Loop
 
 Implemented with [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime). The reconciler is keyed on the `NodePool` and watches `NodeClaim` (mapped to its owning NodePool), plus the placeholder `Pod` reaching `Running` and the surge host `Node` reaching `Ready` — the two readiness signals that advance an in-flight `pending` rotation, watched so they are observed promptly rather than only on the next periodic pass. A periodic self-requeue remains the backstop that detects window edges, freeze releases, drain progress, and force-expiry.
