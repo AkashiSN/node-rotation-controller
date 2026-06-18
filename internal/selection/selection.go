@@ -56,13 +56,45 @@ func matchesAll(labels, want map[string]string) bool {
 	return true
 }
 
+// LeadTime resolves the per-NodeClaim rotation lead time K·P + t_rot, where
+// t_rot = readyTimeout + tGP + buffer (spec §3.2). Base is the tGP-independent
+// part (K·P + readyTimeout + buffer); the tGP term is read from each NodeClaim's
+// own spec.terminationGracePeriod — the authoritative per-node value — so a
+// NodePool template shortened after a claim was stamped cannot under-estimate the
+// lead time. DrainFallback is substituted when a claim leaves tGP unset
+// (self-managed Karpenter allows nil), matching the §3.2 derivation. The NodePool
+// template tGP stays the representative input for per-NodePool validation/logging
+// (schedule.Derive), not the per-node trigger.
+type LeadTime struct {
+	// Base is K·P + readyTimeout + buffer — everything in K·P + t_rot except tGP.
+	Base time.Duration
+	// DrainFallback is the fixed bound used when a NodeClaim's tGP is unset.
+	DrainFallback time.Duration
+}
+
+// For returns the lead time for one claim: Base plus the claim's own
+// terminationGracePeriod (DrainFallback when unset).
+func (lt LeadTime) For(c *karpv1.NodeClaim) time.Duration {
+	return lt.Base + claimTGP(c, lt.DrainFallback)
+}
+
+// claimTGP reads a NodeClaim's own spec.terminationGracePeriod, substituting the
+// fallback bound when Karpenter leaves it nil (spec §3.2).
+func claimTGP(c *karpv1.NodeClaim, fallback time.Duration) time.Duration {
+	if d := c.Spec.TerminationGracePeriod; d != nil {
+		return d.Duration
+	}
+	return fallback
+}
+
 // Inputs are the resolved per-NodePool selection inputs.
 type Inputs struct {
 	// Now is the evaluation instant.
 	Now time.Time
-	// LeadTime is K·P + t_rot. In auto mode the trigger is now > deadline − LeadTime,
-	// where deadline = NodeClaim.creationTimestamp + NodeClaim.spec.expireAfter.
-	LeadTime time.Duration
+	// LeadTime resolves K·P + t_rot per claim. In auto mode the trigger is
+	// now > deadline − LeadTime.For(claim), where deadline =
+	// NodeClaim.creationTimestamp + NodeClaim.spec.expireAfter.
+	LeadTime LeadTime
 	// Override is the explicit ageThreshold; when set, the trigger is age > *Override
 	// (purely age-based, ignoring the per-claim expireAfter) — spec §3.2.
 	Override *time.Duration
@@ -107,10 +139,11 @@ func CountEligible(claims []karpv1.NodeClaim, in Inputs) int {
 // chances against their own spec.expireAfter — the short-lead set (§3.2 layer 3,
 // surfaced as noderotation_short_lead_nodes and a per-claim warning event). A
 // claim is short-lead when its expireAfter ≤ leadTime (K·P + t_rot, i.e. per-node
-// A ≤ 0). A nil (Never) expireAfter never races forceful expiration, and a claim
-// already on the forceful path (deletionTimestamp set) is excluded — both mirror
-// selection eligibility. The returned pointers alias the input slice.
-func ShortLeadClaims(claims []karpv1.NodeClaim, leadTime time.Duration) []*karpv1.NodeClaim {
+// A ≤ 0), the lead time resolved against the claim's own terminationGracePeriod
+// (LeadTime.For). A nil (Never) expireAfter never races forceful expiration, and a
+// claim already on the forceful path (deletionTimestamp set) is excluded — both
+// mirror selection eligibility. The returned pointers alias the input slice.
+func ShortLeadClaims(claims []karpv1.NodeClaim, leadTime LeadTime) []*karpv1.NodeClaim {
 	var out []*karpv1.NodeClaim
 	for i := range claims {
 		c := &claims[i]
@@ -121,7 +154,7 @@ func ShortLeadClaims(claims []karpv1.NodeClaim, leadTime time.Duration) []*karpv
 		if e == nil {
 			continue
 		}
-		if *e <= leadTime {
+		if *e <= leadTime.For(c) {
 			out = append(out, c)
 		}
 	}
@@ -130,7 +163,7 @@ func ShortLeadClaims(claims []karpv1.NodeClaim, leadTime time.Duration) []*karpv
 
 // CountShortLead returns how many claims are short-lead (§4.2
 // noderotation_short_lead_nodes gauge); see ShortLeadClaims for the predicate.
-func CountShortLead(claims []karpv1.NodeClaim, leadTime time.Duration) int {
+func CountShortLead(claims []karpv1.NodeClaim, leadTime LeadTime) int {
 	return len(ShortLeadClaims(claims, leadTime))
 }
 
@@ -206,7 +239,7 @@ func triggered(c *karpv1.NodeClaim, in Inputs) bool {
 	if e == nil {
 		return false
 	}
-	return age > *e-in.LeadTime
+	return age > *e-in.LeadTime.For(c)
 }
 
 // isReady reports whether the NodeClaim's Ready condition is True.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/events"
@@ -90,7 +89,7 @@ func (w *warningEmitter) EmitFindings(ctx context.Context, pool *karpv1.NodePool
 
 // EmitShortLead logs and emits a Warning Event on each NodeClaim that is newly
 // short-lead since the last pass — the spec §3.2 layer-3 "warned via an event".
-func (w *warningEmitter) EmitShortLead(ctx context.Context, pool *karpv1.NodePool, claims []karpv1.NodeClaim, leadTime time.Duration) {
+func (w *warningEmitter) EmitShortLead(ctx context.Context, pool *karpv1.NodePool, claims []karpv1.NodeClaim, leadTime selection.LeadTime) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	s := w.poolStateLocked(pool.Name)

@@ -11,6 +11,7 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
+	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 )
 
 // drain returns all events currently buffered in the fake recorder.
@@ -87,7 +88,7 @@ func TestEmitShortLeadPerClaimAndDedup(t *testing.T) {
 		shortLeadClaim("b", short),
 		shortLeadClaim("ample", long),
 	}
-	lead := 24 * time.Hour
+	lead := selection.LeadTime{Base: 24 * time.Hour}
 
 	w.EmitShortLead(ctx, pool, claims, lead)
 	got := drain(rec)
@@ -124,7 +125,7 @@ func TestNilRecorderIsSafe(t *testing.T) {
 	w.EmitFindings(context.Background(), warnPool(),
 		[]schedule.Finding{{Severity: schedule.Warn, Code: "KBelowTwo", Message: "m"}})
 	w.EmitShortLead(context.Background(), warnPool(),
-		[]karpv1.NodeClaim{shortLeadClaim("a", time.Hour)}, 24*time.Hour)
+		[]karpv1.NodeClaim{shortLeadClaim("a", time.Hour)}, selection.LeadTime{Base: 24 * time.Hour})
 }
 
 func shortLeadClaim(name string, expire time.Duration) karpv1.NodeClaim {
