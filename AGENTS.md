@@ -30,6 +30,19 @@ started. See the roadmap in the specification (§6.2) for the planned milestones
   - `docs(spec): clarify backstop semantics`
 - **Milestones** (`v0.2`, `v0.3`, …) group issues toward each release.
 
+## Parallel development with worktrees
+
+- **One Issue = one PR = one branch = one git worktree.** Each unit of work
+  lives in its own `git worktree` so concurrent work streams never share a
+  working tree and cannot interfere with one another.
+- **Tear down after merge.** Once a PR is squash-merged, remove its worktree
+  (`git worktree remove`) and delete the branch. Worktrees are disposable and
+  must not accumulate.
+- **No stacked branches.** Do not branch off another in-flight feature branch.
+  If a change depends on work that is not yet merged, land the base change
+  first: open and merge the base PR, then start the dependent work on a fresh
+  branch off the updated `main`. Keep every branch rooted at `main`.
+
 ## Specification rules
 
 - `docs/specification.md` (English) is the canonical spec. `docs/ja/specification.md`
