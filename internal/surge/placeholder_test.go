@@ -235,6 +235,75 @@ func TestBuildPlaceholderNodePoolNotInExclusion(t *testing.T) {
 	}
 }
 
+// customKey is a parity key a workload's nodeAffinity depends on that Karpenter
+// constrains on the NodeClaim but does not surface as a node label (issue #60).
+const customKey = "example.com/rack"
+
+// claimWithReqs builds the candidate NodeClaim (matching baseInputs' name)
+// carrying spec.requirements.
+func claimWithReqs(reqs ...karpv1.NodeSelectorRequirementWithMinValues) *karpv1.NodeClaim {
+	c := claimNamed("nc-old")
+	c.Spec.Requirements = reqs
+	return c
+}
+
+func TestBuildPlaceholderReplicatesKeyOnlyOnNodeClaimRequirements(t *testing.T) {
+	// The key lives on the candidate NodeClaim's requirements but is NOT a node
+	// label, so the node-labels-only path silently dropped it (issue #60).
+	in := baseInputs()
+	in.Candidate = claimWithReqs(req(customKey, corev1.NodeSelectorOpIn, "r7"))
+	in.Match = policy.MatchNodeRequirements{Required: []string{customKey}}
+	e, ok := requiredExprs(t, surge.BuildPlaceholder(in))[customKey]
+	if !ok || e.Operator != corev1.NodeSelectorOpIn || len(e.Values) != 1 || e.Values[0] != "r7" {
+		t.Errorf("key present only on NodeClaim requirements must be replicated: got %+v, want In [r7]", e)
+	}
+}
+
+func TestBuildPlaceholderNodeLabelWinsOverNodeClaimRequirement(t *testing.T) {
+	// The candidate node's label is its actual placement and must win over the
+	// NodeClaim's (broader/stale) requirement on conflict (issue #60).
+	in := baseInputs()
+	in.Candidate = claimWithReqs(req(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, "us-east-1b"))
+	e := requiredExprs(t, surge.BuildPlaceholder(in))[corev1.LabelTopologyZone]
+	if len(e.Values) != 1 || e.Values[0] != "us-east-1a" {
+		t.Errorf("node label must win on conflict: got %+v, want In [us-east-1a]", e)
+	}
+}
+
+func TestBuildPlaceholderReplicatesMultipleNodeClaimRequirementValues(t *testing.T) {
+	in := baseInputs()
+	in.Candidate = claimWithReqs(req(customKey, corev1.NodeSelectorOpIn, "r7", "r8"))
+	in.Match = policy.MatchNodeRequirements{Required: []string{customKey}}
+	e := requiredExprs(t, surge.BuildPlaceholder(in))[customKey]
+	if len(e.Values) != 2 || e.Values[0] != "r7" || e.Values[1] != "r8" {
+		t.Errorf("multi-value NodeClaim requirement must replicate all allowed values: got %+v, want In [r7 r8]", e)
+	}
+}
+
+func TestBuildPlaceholderIntersectsNodeClaimRequirementWithNodePoolAllowed(t *testing.T) {
+	// A NodeClaim-sourced value the NodePool no longer allows is dropped, same as a
+	// node-label value (spec §3.3 intersection).
+	in := baseInputs()
+	in.Candidate = claimWithReqs(req(customKey, corev1.NodeSelectorOpIn, "r7", "r9"))
+	in.Pool = nodepool(req(customKey, corev1.NodeSelectorOpIn, "r7", "r8"))
+	in.Match = policy.MatchNodeRequirements{Required: []string{customKey}}
+	e, ok := requiredExprs(t, surge.BuildPlaceholder(in))[customKey]
+	if !ok || len(e.Values) != 1 || e.Values[0] != "r7" {
+		t.Errorf("only NodePool-allowed NodeClaim values must survive: got %+v, want In [r7]", e)
+	}
+}
+
+func TestBuildPlaceholderSkipsNonInNodeClaimRequirement(t *testing.T) {
+	// A key the NodeClaim constrains only with a non-In operator carries no concrete
+	// value to pin, so it is skipped (not surfaced as a node label either).
+	in := baseInputs()
+	in.Candidate = claimWithReqs(req(customKey, corev1.NodeSelectorOpExists))
+	in.Match = policy.MatchNodeRequirements{Required: []string{customKey}}
+	if _, ok := requiredExprs(t, surge.BuildPlaceholder(in))[customKey]; ok {
+		t.Error("a non-In NodeClaim requirement carries no value to pin and must be skipped")
+	}
+}
+
 // instanceGen is a numeric Karpenter requirement key whose NodePool constraints
 // use the Gt/Lt operators (issue #49).
 const instanceGen = "karpenter.k8s.aws/instance-generation"

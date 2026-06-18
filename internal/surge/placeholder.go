@@ -20,9 +20,13 @@ const placeholderContainerName = "pause"
 // and the reschedulable request sum and passes them in.
 type PlaceholderInputs struct {
 	// Candidate is the old NodeClaim being rotated; its name pairs the placeholder
-	// to the rotation via the surge-for marker.
+	// to the rotation via the surge-for marker, and its spec.requirements are a
+	// source of replicated requirement values for keys not surfaced as node labels
+	// (spec §3.3).
 	Candidate *karpv1.NodeClaim
-	// Node is the candidate node — the source of the replicated requirement values.
+	// Node is the candidate node; its labels are the authoritative source of the
+	// replicated requirement values (the node's actual placement), winning over the
+	// candidate NodeClaim's requirements on conflict (spec §3.3).
 	Node *corev1.Node
 	// Pool is the candidate's NodePool; its allowed requirements bound the
 	// replicated values so the placeholder stays schedulable (spec §3.3).
@@ -151,26 +155,52 @@ func nodeAffinity(in PlaceholderInputs) *corev1.NodeAffinity {
 	return na
 }
 
-// replicatedRequirements copies each requested key's value from the candidate
-// node into an In requirement, skipping keys absent on the node or whose value
-// the NodePool no longer allows (spec §3.3 intersection).
+// replicatedRequirements copies each requested key's candidate value(s) into an
+// In requirement, intersected with the NodePool's allowed set (spec §3.3). Values
+// come from the candidate node's label (its actual placement — authoritative) or,
+// for a key not surfaced as a node label, the candidate NodeClaim's own
+// spec.requirements; the node label wins on conflict. A key absent from both
+// sources, or whose every candidate value the NodePool no longer allows, is
+// skipped — the schedulability-preserving default.
 func replicatedRequirements(in PlaceholderInputs, keys []string) []corev1.NodeSelectorRequirement {
 	var out []corev1.NodeSelectorRequirement
 	for _, key := range keys {
-		value, ok := in.Node.Labels[key]
-		if !ok {
-			continue // key not present on the candidate node
+		var allowed []string
+		for _, value := range candidateValues(in, key) {
+			if poolAllows(in.Pool, key, value) {
+				allowed = append(allowed, value)
+			}
 		}
-		if !poolAllows(in.Pool, key, value) {
-			continue // narrowed out of the NodePool's allowed set
+		if len(allowed) == 0 {
+			continue // absent from both sources, or narrowed out of the allowed set
 		}
 		out = append(out, corev1.NodeSelectorRequirement{
 			Key:      key,
 			Operator: corev1.NodeSelectorOpIn,
-			Values:   []string{value},
+			Values:   allowed,
 		})
 	}
 	return out
+}
+
+// candidateValues resolves the parity value(s) for one key. The candidate node's
+// label — its actual placement — is authoritative and wins on conflict, so when
+// present it is the sole value. Otherwise the candidate NodeClaim's own
+// spec.requirements supply the values (covering custom parity keys that never
+// surface as node labels, spec §3.3); only In requirements carry concrete values
+// to pin — NotIn/Exists/DoesNotExist/Gt/Lt express no positive value and yield
+// nothing.
+func candidateValues(in PlaceholderInputs, key string) []string {
+	if value, ok := in.Node.Labels[key]; ok {
+		return []string{value}
+	}
+	var vals []string
+	for _, r := range in.Candidate.Spec.Requirements {
+		if r.Key == key && r.Operator == corev1.NodeSelectorOpIn {
+			vals = append(vals, r.Values...)
+		}
+	}
+	return vals
 }
 
 // poolAllows reports whether value for key satisfies every NodePool requirement
