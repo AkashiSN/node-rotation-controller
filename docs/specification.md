@@ -114,6 +114,7 @@ The compatibility contract is the **stable `karpenter.sh/v1` CRD surface — not
 | `NodeClaim`, `NodePool` (`karpenter.sh/v1`) | the rotation unit and its owning pool (§3.2, §3.3) |
 | `NodeClaim.spec.expireAfter` | per-node deadline anchoring the trigger (§3.2) |
 | `NodeClaim.spec.terminationGracePeriod` | per-node drain bound feeding `t_rot` / lead time (§3.2) |
+| `NodeClaim.spec.requirements` | fallback source for placeholder requirement replication when a parity key is not surfaced as a node label (§3.3) |
 | `NodeClaim.status.nodeName` | mapping a claim to its Node (§3.3, §5.2) |
 | `NodeClaim.status.conditions[Ready]` | selection eligibility (§3.2) |
 | `NodePool.spec.template.spec.expireAfter` | representative `E` for per-pool validation (§3.2) |
