@@ -186,7 +186,7 @@ This holds because the usable interval `[A, E − t_rot]` then spans at least `K
 | `0 < A < P` (a node becomes a candidate before it has lived even one window period) | **warn** — extremely aggressive: nodes rotate very young, maximizing churn/surge cost. Raise `E` or lower `K` |
 | explicit `ageThreshold` override with recomputed `G < 1` (i.e. `floor(((E − t_rot) − A) / P) < 1` for the overridden `A`; see the `G` note below) | **fatal** — the override leaves no completable window occurrence before `E`, so the §2.2 invariant ("validation fails when the schedule cannot guarantee the configured chances") would be silently broken. The override is rejected, not merely observed |
 | explicit `ageThreshold` override with recomputed `1 ≤ G < K` | **warn** — the override weakens the requested `minRotationChances`; `G` (not `K`) is what the schedule actually guarantees |
-| Auto Mode and `E + tGP > 21d` | **warn** — violates the hard cap |
+| Auto Mode and `E + tGP > 21d` | **warn** (`HardCapExceeded`) — violates the hard cap. Because Auto Mode is not reliably detectable from the NodePool API, the representative `E + tGP` is checked **unconditionally** against `21d` (a strict `>`); on self-managed Karpenter, where the cap does not apply, the warning is merely advisory and never changes `A` |
 | `tGP` unset (self-managed Karpenter allows nil) | **warn** — the drain phase is then unbounded by Karpenter (a blocking PDB or stuck finalizer can hold it forever); the §5.2 stuck-drain alert **and the `t_rot` used by this derivation and layer 2** fall back to the same fixed bound (symbol table above) |
 | `retryBackoff < readyTimeout` | **warn** — a failed attempt runs for up to `readyTimeout` before rolling back, so a shorter base backoff lets retries repeat the failed-surge cost (§4.4) faster than a single attempt even lasts. The per-attempt `started-at` re-stamp (§5.3) keeps retries *correct* regardless; the configuration just defeats the cost-bounding intent of the escalating backoff. The defaults (30m vs 15m) satisfy this |
 | NodePool `spec.limits` resource budget (`{cpu, memory, …}`) leaves no room for the surge node's requests (the headroom for one more node is exhausted) | **warn** — surge cannot land without free budget; raise `limits` to leave headroom for one node's worth of resources. Startup uses a representative footprint; the authoritative, candidate-dependent check (`surge_headroom`, the selected candidate's reschedulable-Pod request sum) runs at rotation start, **after** candidate selection (§5.2 step 3) |
@@ -441,7 +441,7 @@ them with `kubectl describe` without reading metrics:
 
 | Surface | Object | Reason | When |
 |---------|--------|--------|------|
-| Non-fatal schedule finding (§3.2 layers 1–2) | NodePool | the finding code (e.g. `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `RetryBackoffShort`, `ThroughputZero`, `ThroughputBelowArrival`, `OverrideGBelowK`) | the finding becomes active for the NodePool |
+| Non-fatal schedule finding (§3.2 layers 1–2) | NodePool | the finding code (e.g. `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `ThroughputZero`, `ThroughputBelowArrival`, `OverrideGBelowK`) | the finding becomes active for the NodePool |
 | Short-lead NodeClaim (§3.2 layer 3) | NodeClaim | `ShortLead` | the claim's own `expireAfter` can no longer guarantee `K` chances |
 
 Events are **deduplicated by emitting on the transition into the condition**:
