@@ -168,6 +168,57 @@ func TestWorstCasePeriod(t *testing.T) {
 	}
 }
 
+// allWeekdays is Sunday..Saturday, for building a full-week window.
+func allWeekdays() []time.Weekday {
+	return []time.Weekday{
+		time.Sunday, time.Monday, time.Tuesday, time.Wednesday,
+		time.Thursday, time.Friday, time.Saturday,
+	}
+}
+
+// TestWorstCasePeriodFullWeekIsNotSevenDays covers the issue #62 regression: a
+// continuously-open (24/7) union must not report P = 7d (a spurious week wrap)
+// and must not report P = 0 (which would surface as a NoWindows fatal, §3.2). The
+// entry is built directly with a full 24h day (EndMin = 1440) so the per-day
+// spans abut with no midnight gap and merge into one week-long occurrence — the
+// shape a real cross-timezone full-week union produces.
+func TestWorstCasePeriodFullWeekIsNotSevenDays(t *testing.T) {
+	s := &Schedule{entries: []Entry{{
+		Loc: time.UTC, Days: allWeekdays(), StartMin: 0, EndMin: 24 * 60,
+	}}}
+	got, ok := s.WorstCasePeriod()
+	if !ok {
+		t.Fatal("full-week schedule must have a worst-case period")
+	}
+	if got == 7*24*time.Hour {
+		t.Error("full-week union must not report the spurious 7d week wrap")
+	}
+	if got <= 0 {
+		t.Errorf("full-week P must be positive (a zero P trips a NoWindows fatal); got %v", got)
+	}
+	if got != continuousWindowPeriod {
+		t.Errorf("full-week P = %v, want continuousWindowPeriod %v", got, continuousWindowPeriod)
+	}
+	// D is unchanged: the window is genuinely open the whole week.
+	if d, ok := s.ShortestWindow(); !ok || d != week {
+		t.Errorf("full-week D = %v (ok=%v), want %v", d, ok, week)
+	}
+}
+
+// TestWorstCasePeriodFullWeekViaMergedSpans builds the full week from two tiling
+// entries (00:00–12:00 and 12:00–24:00 every day) that merge into a single
+// week-long occurrence, exercising the merge path rather than a single span.
+func TestWorstCasePeriodFullWeekViaMergedSpans(t *testing.T) {
+	s := &Schedule{entries: []Entry{
+		{Loc: time.UTC, Days: allWeekdays(), StartMin: 0, EndMin: 12 * 60},
+		{Loc: time.UTC, Days: allWeekdays(), StartMin: 12 * 60, EndMin: 24 * 60},
+	}}
+	got, ok := s.WorstCasePeriod()
+	if !ok || got != continuousWindowPeriod {
+		t.Errorf("tiled full-week P = %v (ok=%v), want %v", got, ok, continuousWindowPeriod)
+	}
+}
+
 func TestWorstCasePeriodEmpty(t *testing.T) {
 	s := newSchedule(t, nil)
 	if got, ok := s.WorstCasePeriod(); ok {
