@@ -810,13 +810,11 @@ data:
           - karpenter.sh/capacity-type
         preferred: []          # soft nodeAffinity; relaxed under capacity pressure. e.g. node.kubernetes.io/instance-type
 
-    prePull:                   # v2 (disabled in v1)
+    prePull:                   # v2 (disabled in v1); only `enabled` is accepted in v1
       enabled: false
-      images: []
 
-    warmup:                    # v3 (disabled in v1)
+    warmup:                    # v3 (disabled in v1); only `enabled` is accepted in v1
       enabled: false
-      jobTemplate: {}
 ```
 
 ---

@@ -167,11 +167,11 @@ config:
         preferred: []
 
     # v2 (disabled in v1). The v1 parser accepts only `enabled` here; the
-    # images list (spec §5.4) lands when pre-pull ships in v0.4.
+    # images list lands when pre-pull ships in v0.4.
     prePull:
       enabled: false
 
     # v3 (disabled in v1). The v1 parser accepts only `enabled` here; the
-    # jobTemplate (spec §5.4) lands when warm-up ships in v0.5.
+    # jobTemplate lands when warm-up ships in v0.5.
     warmup:
       enabled: false
