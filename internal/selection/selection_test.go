@@ -395,6 +395,23 @@ func TestCountEligibleZeroWhenNoneEligible(t *testing.T) {
 	}
 }
 
+func TestShortLeadClaims(t *testing.T) {
+	claims := []karpv1.NodeClaim{
+		claim("ample", 1*day, expireAfter(30*day)), // not short-lead
+		claim("short-a", 1*day, expireAfter(1*time.Hour)),
+		claim("short-b", 1*day, expireAfter(1*time.Hour)),
+		claim("never", 1*day, neverExpire()), // nil expireAfter excluded
+	}
+	got := selection.ShortLeadClaims(claims, 24*time.Hour)
+	if len(got) != 2 {
+		t.Fatalf("want 2 short-lead claims, got %d", len(got))
+	}
+	names := map[string]bool{got[0].Name: true, got[1].Name: true}
+	if !names["short-a"] || !names["short-b"] {
+		t.Fatalf("unexpected short-lead set: %v", names)
+	}
+}
+
 func TestCountShortLeadCountsClaimsThatCannotGuaranteeKChances(t *testing.T) {
 	// A claim whose own expireAfter ≤ leadTime (K·P + t_rot) has per-node A ≤ 0
 	// and can no longer guarantee K chances (§3.2 layer 3).

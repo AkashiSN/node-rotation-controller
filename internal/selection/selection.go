@@ -103,14 +103,15 @@ func CountEligible(claims []karpv1.NodeClaim, in Inputs) int {
 	return n
 }
 
-// CountShortLead returns how many claims can no longer guarantee K rotation
-// chances against their own spec.expireAfter — the §4.2 noderotation_short_lead_nodes
-// gauge (§3.2 layer 3). A claim is short-lead when its expireAfter ≤ leadTime
-// (K·P + t_rot, i.e. per-node A ≤ 0). A nil (Never) expireAfter never races
-// forceful expiration, and a claim already on the forceful path
-// (deletionTimestamp set) is excluded — both mirror selection eligibility.
-func CountShortLead(claims []karpv1.NodeClaim, leadTime time.Duration) int {
-	n := 0
+// ShortLeadClaims returns the claims that can no longer guarantee K rotation
+// chances against their own spec.expireAfter — the short-lead set (§3.2 layer 3,
+// surfaced as noderotation_short_lead_nodes and a per-claim warning event). A
+// claim is short-lead when its expireAfter ≤ leadTime (K·P + t_rot, i.e. per-node
+// A ≤ 0). A nil (Never) expireAfter never races forceful expiration, and a claim
+// already on the forceful path (deletionTimestamp set) is excluded — both mirror
+// selection eligibility. The returned pointers alias the input slice.
+func ShortLeadClaims(claims []karpv1.NodeClaim, leadTime time.Duration) []*karpv1.NodeClaim {
+	var out []*karpv1.NodeClaim
 	for i := range claims {
 		c := &claims[i]
 		if c.DeletionTimestamp != nil {
@@ -121,10 +122,16 @@ func CountShortLead(claims []karpv1.NodeClaim, leadTime time.Duration) int {
 			continue
 		}
 		if *e <= leadTime {
-			n++
+			out = append(out, c)
 		}
 	}
-	return n
+	return out
+}
+
+// CountShortLead returns how many claims are short-lead (§4.2
+// noderotation_short_lead_nodes gauge); see ShortLeadClaims for the predicate.
+func CountShortLead(claims []karpv1.NodeClaim, leadTime time.Duration) int {
+	return len(ShortLeadClaims(claims, leadTime))
 }
 
 // isOlder orders candidates oldest-first by creationTimestamp, breaking ties on

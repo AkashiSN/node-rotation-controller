@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -57,8 +58,18 @@ type RotationReconciler struct {
 
 	// Recorder emits the §4.2 metrics/alerts; nil means no-op.
 	Recorder Recorder
+	// Events emits the §4.2 / §3.2-layer-3 warning Events (issue #50); nil
+	// disables event emission (log-only).
+	Events events.EventRecorder
+
 	// Clock is the time source; nil means time.Now (overridden in tests).
 	Clock func() time.Time
+
+	// warnOnce lazily builds the single warningEmitter so its in-memory dedup
+	// state persists across reconciles even when the reconciler is constructed
+	// directly (tests) rather than through SetupWithManager.
+	warnOnce    sync.Once
+	warnEmitter *warningEmitter
 
 	// sweepOnce gates the spec §5.3 startup sweep into the first Reconcile so it
 	// completes before any NodePool can start or resume a rotation. Registering
@@ -81,6 +92,11 @@ func (r *RotationReconciler) recorder() Recorder {
 		return r.Recorder
 	}
 	return noopRecorder{}
+}
+
+func (r *RotationReconciler) warn() *warningEmitter {
+	r.warnOnce.Do(func() { r.warnEmitter = newWarningEmitter(r.Events) })
+	return r.warnEmitter
 }
 
 // Reconcile resolves the request to its NodePool and runs one rotation step.
@@ -107,6 +123,7 @@ func (r *RotationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			// don't latch at their last value once its reconciles stop (§4.2).
 			// NodePool is cluster-scoped, so the request name is the pool name.
 			r.recorder().ForgetPool(req.Name)
+			r.warn().Forget(req.Name)
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -292,6 +309,12 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 
 	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
 	r.observe(pool, res, now, claims, p, derived)
+
+	// Surface non-fatal feasibility findings and per-node short-lead conditions
+	// (issue #50): deduplicated logs + Warning Events. Fatal findings keep their
+	// own §5.2 gate behavior below.
+	r.warn().EmitFindings(ctx, pool, derived.Findings)
+	r.warn().EmitShortLead(ctx, pool, claims, res.leadTime)
 
 	// ── 1. Drive the in-flight rotation, keyed on the anchor (it outlives the
 	//        old NodeClaim's deletion on success).

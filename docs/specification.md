@@ -195,7 +195,7 @@ This holds because the usable interval `[A, E − t_rot]` then spans at least `K
 
 - **warn**: widen windows (larger `D`), add occurrences (smaller `P`), or raise `maxUnavailable` (reserved for a later version).
 
-**Validation** (layer 3 — per-node, runtime) — the two layers above use the NodePool **template** `E`/`tGP` as representatives, but the actual trigger is per-NodeClaim (*Authoritative expiry source* above), so a passing template does not prove every *existing* claim is satisfiable — e.g. after the template `E` was raised to clear a fatal, the already-stamped claims still carry the short value. On each reconcile the controller therefore also checks every in-scope NodeClaim against its **own** `spec.expireAfter`: a claim with `E_node ≤ K·P + t_rot` (per-node `A ≤ 0`) can no longer be guaranteed `K` chances — it is counted in `noderotation_short_lead_nodes` (§4.2), warned via an event, and rotated **best-effort at the earliest opportunity** (by the trigger above it is already a candidate) — until Karpenter's forceful path actually begins: once its `deletionTimestamp` is set, it is excluded from selection (the table above) and only the §5.2 abort path applies.
+**Validation** (layer 3 — per-node, runtime) — the two layers above use the NodePool **template** `E`/`tGP` as representatives, but the actual trigger is per-NodeClaim (*Authoritative expiry source* above), so a passing template does not prove every *existing* claim is satisfiable — e.g. after the template `E` was raised to clear a fatal, the already-stamped claims still carry the short value. On each reconcile the controller therefore also checks every in-scope NodeClaim against its **own** `spec.expireAfter`: a claim with `E_node ≤ K·P + t_rot` (per-node `A ≤ 0`) can no longer be guaranteed `K` chances — it is counted in `noderotation_short_lead_nodes` (§4.2), warned via a `ShortLead` Warning Event on the NodeClaim (§4.2), and rotated **best-effort at the earliest opportunity** (by the trigger above it is already a candidate) — until Karpenter's forceful path actually begins: once its `deletionTimestamp` is set, it is excluded from selection (the table above) and only the §5.2 abort path applies.
 
 > **Worked example.** Auto Mode with the NodePool's `terminationGracePeriod` **lowered from its `24h` default to `1h`** (see the calibration note below), `E = 14d`, union `{Wed, Sat} 02:00–06:00` → `P = 4d`, `t_rot ≈ 1.5h` (`readyTimeout 15m + tGP 1h + buffer`), `K = 2`. Then `A = 14d − (2·4d + 1.5h) ≈ 5.9d`: nodes become candidates at ~5.9d and are guaranteed 2 windows before 14d. Throughput `C = floor(4h / (1.5h + 10m)) = 2` per occurrence (conservative — a third rotation can still *start* before the window closes and complete past it, §3.1).
 >
@@ -435,6 +435,21 @@ Prometheus metrics exposed on `/metrics`:
 
 > **Lifecycle note.** The per-`nodepool` series are **cleared when the NodePool is deleted** — the controller drops them on the delete reconcile. The gauges are recomputed each reconcile, so a deleted pool whose reconciles stop would otherwise latch its last value forever (a since-removed `noderotation_drain_stuck = 1` would alert indefinitely). The label-free `noderotation_window_active` is cluster-wide and unaffected.
 
+**Kubernetes Events.** Warning-level conditions that are computed every
+reconcile are also surfaced as Kubernetes `Warning` Events, so operators see
+them with `kubectl describe` without reading metrics:
+
+| Surface | Object | Reason | When |
+|---------|--------|--------|------|
+| Non-fatal schedule finding (§3.2 layers 1–2) | NodePool | the finding code (e.g. `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `RetryBackoffShort`, `ThroughputZero`, `ThroughputBelowArrival`, `OverrideGBelowK`) | the finding becomes active for the NodePool |
+| Short-lead NodeClaim (§3.2 layer 3) | NodeClaim | `ShortLead` | the claim's own `expireAfter` can no longer guarantee `K` chances |
+
+Events are **deduplicated by emitting on the transition into the condition**:
+a finding/claim that clears and later returns re-fires. The dedup state is
+in-memory, so a controller restart re-emits each active warning once. Fatal
+findings are not events — they block the start of a rotation and are logged by
+the §5.2 feasibility gate.
+
 Suggested alerts:
 
 - `increase(noderotation_completed_total{outcome=~"failure|expired"}[1h]) > 0`
@@ -470,6 +485,13 @@ Suggested alerts:
   # the placeholder Pod is created and managed directly by the controller (§3.3)
   verbs: ["get", "list", "watch", "create", "delete"]
 - apiGroups: [""]
+  # core/v1 Events: leader election records its Lease events via the legacy recorder
+  resources: ["events"]
+  verbs: ["create", "patch"]
+- apiGroups: ["events.k8s.io"]
+  # events.k8s.io/v1 Events: the §4.2 / §3.2-layer-3 warning Events on the
+  # cluster-scoped NodePool/NodeClaim objects use the new recorder API, which
+  # writes those Events into the "default" namespace (granted cluster-wide)
   resources: ["events"]
   verbs: ["create", "patch"]
 - apiGroups: ["coordination.k8s.io"]
