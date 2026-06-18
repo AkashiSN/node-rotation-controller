@@ -48,6 +48,11 @@ type PlaceholderInputs struct {
 // creates the returned Pod.
 func BuildPlaceholder(in PlaceholderInputs) *corev1.Pod {
 	preempt := corev1.PreemptNever
+	// The placeholder is a pause Pod that only reserves capacity; it never calls
+	// the Kubernetes API, so it must not be handed a service account token. Set
+	// this explicitly rather than relying on namespace/ServiceAccount defaults
+	// (issue #35, least privilege).
+	noAutomount := false
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      PlaceholderName(in.Candidate.Name),
@@ -65,8 +70,9 @@ func BuildPlaceholder(in PlaceholderInputs) *corev1.Pod {
 			Annotations: map[string]string{karpv1.DoNotDisruptAnnotationKey: "true"},
 		},
 		Spec: corev1.PodSpec{
-			PriorityClassName: in.PriorityClassName,
-			PreemptionPolicy:  &preempt,
+			PriorityClassName:            in.PriorityClassName,
+			PreemptionPolicy:             &preempt,
+			AutomountServiceAccountToken: &noAutomount,
 			Containers: []corev1.Container{{
 				Name:      placeholderContainerName,
 				Image:     in.Image,
