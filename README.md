@@ -1,7 +1,7 @@
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-specification-orange.svg)](docs/specification.md)
+[![Status](https://img.shields.io/badge/status-v0.3_MVP_(pre--1.0)-blue.svg)](docs/specification.md)
 
 A Kubernetes controller that proactively rotates Karpenter-managed nodes within a defined maintenance window, using **make-before-break (surge)** semantics, before Karpenter's forceful `expireAfter` triggers.
 
@@ -9,7 +9,7 @@ Designed for EKS Auto Mode and any Karpenter v1+ environment where node expirati
 
 ## Status
 
-**Early development (v0.2 skeleton).** The design is locked; implementation has begun with the controller-runtime skeleton (manager, leader election, CI). The rotation logic (spec §5.2) lands in v0.3. [docs/specification.md](docs/specification.md) remains the source of truth for the design.
+**v0.3 — v1 surge MVP implemented (pre-1.0).** The v1 make-before-break rotation state machine (spec §5.2), `ageThreshold`/candidate derivation (§3.2), surge placeholder (§3.3), metrics and Warning Events (§4.2), the Helm chart, and the Karpenter v1 startup preflight (§5.1) are implemented, with unit tests and an envtest smoke test in CI. This is **early validation, not yet production-ready** — it has not been soak-tested on a real EKS Auto Mode cluster (see the [roadmap](docs/specification.md#62-roadmap) toward v1.0). [docs/specification.md](docs/specification.md) remains the source of truth for the design; see [Compatibility](#compatibility) for the Karpenter contract.
 
 日本語版: [README.ja.md](README.ja.md) / [docs/ja/specification.md](docs/ja/specification.md)
 
@@ -60,9 +60,10 @@ See the [compatibility policy](docs/specification.md#21-scope-and-compatibility)
 │   ├── specification.md       Full design specification (English)
 │   └── ja/specification.md    Japanese translation
 ├── charts/                    Helm chart (node-rotation-controller)
-├── cmd/                       Controller entry point (manager bootstrap)
-├── api/                       CRD types (planned, if needed beyond ConfigMap)
-└── internal/                  Reconciler implementation (skeleton; full logic planned)
+├── cmd/                       Controller entry point (manager bootstrap + startup preflight)
+└── internal/                  Reconciler and supporting packages: rotation state machine
+                               (controller), schedule/selection, surge placeholder, window,
+                               policy, metrics, preflight
 ```
 
 ## Installation
@@ -85,7 +86,7 @@ rotation by editing `config.policy` (the spec §5.4 schema) — see
 
 ## Getting involved
 
-This project is in the specification phase. Feedback on the design is welcome via GitHub Issues. Implementation contributions will be accepted once v1 scope is locked.
+This project is pre-1.0 and under active development; the v1 scope is the surge MVP described in the specification. Design feedback and implementation contributions are both welcome via GitHub Issues and PRs.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
 
