@@ -426,7 +426,7 @@ func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolv
 		Cooldown:       res.cooldown,
 		RetryBackoff:   res.retryBackoff,
 		K:              r.Policy.K(),
-		MaxUnavailable: r.Policy.Surge.MaxUnavailable,
+		MaxUnavailable: r.Policy.SurgeMaxUnavailable(),
 		NodeCount:      nodeCount,
 		Override:       res.override,
 	})

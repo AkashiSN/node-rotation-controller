@@ -48,7 +48,7 @@ type MaintenanceWindow struct {
 // from an explicitly configured non-positive value (e.g. 0m), which Validate
 // rejects rather than silently defaulting (issue #30).
 type Surge struct {
-	MaxUnavailable        int                   `json:"maxUnavailable"` // v1: fixed at 1 (serial)
+	MaxUnavailable        *int                  `json:"maxUnavailable"` // v1: fixed at 1 (serial). Pointer distinguishes unset (default 1) from an explicit 0 (invalid).
 	ReadyTimeout          *metav1.Duration      `json:"readyTimeout"`
 	CooldownAfter         *metav1.Duration      `json:"cooldownAfter"`
 	RetryBackoff          *metav1.Duration      `json:"retryBackoff"`
@@ -117,12 +117,14 @@ func (p *Policy) ApplyDefaults() {
 		two := 2
 		p.MinRotationChances = &two
 	}
-	// An unset maxUnavailable defaults to 1; an explicit 0 is also coerced to 1
-	// here. Unlike minRotationChances, v1 permits only the single value 1
-	// (Validate rejects anything else), so the unset-vs-explicit-0 distinction
-	// carries no meaning worth a pointer.
-	if p.Surge.MaxUnavailable == 0 {
-		p.Surge.MaxUnavailable = 1
+	// An unset maxUnavailable defaults to 1. An explicit 0 is preserved (not
+	// coerced) so Validate can reject it: v1 permits only the literal value 1,
+	// and silently rewriting 0 → 1 would hide a misconfiguration and make the
+	// controller laxer than the Helm schema (which requires const 1). The pointer
+	// is what makes the unset-vs-explicit-0 distinction.
+	if p.Surge.MaxUnavailable == nil {
+		one := 1
+		p.Surge.MaxUnavailable = &one
 	}
 	// Only an UNSET (nil) duration is defaulted. An explicitly configured value —
 	// including a non-positive one like 0m or -1m — is preserved so Validate can
@@ -164,8 +166,15 @@ func (p *Policy) Validate() error {
 	}
 
 	// v1 is surge-only and serial per NodePool (CLAUDE.md invariant; spec §5.4).
-	if p.Surge.MaxUnavailable != 1 {
-		errs = append(errs, fmt.Errorf("surge.maxUnavailable must be 1 in v1, got %d", p.Surge.MaxUnavailable))
+	// The only valid explicit value is 1; an explicit 0 (or any other value)
+	// fails. After ApplyDefaults an unset field is already 1, so nil here only
+	// occurs when Validate is called without defaulting.
+	if p.Surge.MaxUnavailable == nil || *p.Surge.MaxUnavailable != 1 {
+		got := "unset"
+		if p.Surge.MaxUnavailable != nil {
+			got = strconv.Itoa(*p.Surge.MaxUnavailable)
+		}
+		errs = append(errs, fmt.Errorf("surge.maxUnavailable must be 1 in v1, got %s", got))
 	}
 
 	// Surge durations drive safety-critical timing in the rotation state machine
@@ -218,6 +227,15 @@ func (p *Policy) K() int {
 		return 0
 	}
 	return *p.MinRotationChances
+}
+
+// SurgeMaxUnavailable returns the resolved surge.maxUnavailable, or 0 when unset
+// (before ApplyDefaults). Callers should run ApplyDefaults/Load first.
+func (p *Policy) SurgeMaxUnavailable() int {
+	if p.Surge.MaxUnavailable == nil {
+		return 0
+	}
+	return *p.Surge.MaxUnavailable
 }
 
 // AgeThresholdOverride resolves the ageThreshold field: ("auto") => isAuto=true;
