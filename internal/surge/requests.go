@@ -80,10 +80,24 @@ func isCompleted(p *corev1.Pod) bool {
 	return p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed
 }
 
-// isNodePinned reports whether the Pod is constrained to one specific host by a
-// required kubernetes.io/hostname nodeSelector or nodeAffinity term. Such a Pod
-// (already running on the candidate node) cannot re-land elsewhere, so it must
-// not be reserved for on the surge node (spec §3.3).
+// isNodePinned reports whether the Pod is confined to the single host it is
+// already running on, so it cannot re-land elsewhere and must not be reserved
+// for on the surge node (spec §3.3). It must distinguish a real pin from a
+// hostname constraint that still leaves the Pod reschedulable — over-excluding
+// reschedulable Pods under-sizes the placeholder (issue #29).
+//
+//   - A kubernetes.io/hostname nodeSelector pins to one host (the Pod runs here,
+//     so that host is the candidate).
+//   - For required nodeAffinity, the Pod is pinned only when its hostname
+//     constraints permit exactly one host across all ORed NodeSelectorTerms:
+//     every term must positively bound the hostname with an In expression, and
+//     the union of those permitted hosts must be a single value. A term with no
+//     hostname In (only a NotIn, an Exists, or no hostname key at all) leaves the
+//     Pod free to schedule elsewhere via that term, so it is not pinned; an In
+//     spanning more than one host is likewise not a pin.
+//
+// When uncertain the predicate errs toward "not pinned": counting the Pod toward
+// surge sizing over-provisions (safe) rather than under-provisions (unsafe).
 func isNodePinned(p *corev1.Pod) bool {
 	if _, ok := p.Spec.NodeSelector[corev1.LabelHostname]; ok {
 		return true
@@ -92,14 +106,29 @@ func isNodePinned(p *corev1.Pod) bool {
 	if aff == nil || aff.NodeAffinity == nil || aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
 		return false
 	}
-	for _, term := range aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+	terms := aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) == 0 {
+		return false
+	}
+	hosts := map[string]struct{}{}
+	for _, term := range terms {
+		bounded := false
 		for _, expr := range term.MatchExpressions {
-			if expr.Key == corev1.LabelHostname {
-				return true
+			if expr.Key != corev1.LabelHostname {
+				continue
+			}
+			if expr.Operator == corev1.NodeSelectorOpIn && len(expr.Values) > 0 {
+				bounded = true
+				for _, v := range expr.Values {
+					hosts[v] = struct{}{}
+				}
 			}
 		}
+		if !bounded {
+			return false // this ORed term lets the Pod schedule on another host
+		}
 	}
-	return false
+	return len(hosts) == 1
 }
 
 // add accumulates src into dst (dst is modified in place).

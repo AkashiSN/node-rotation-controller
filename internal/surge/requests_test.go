@@ -180,6 +180,53 @@ func TestReschedulableRequestsExclusions(t *testing.T) {
 	}
 }
 
+func TestReschedulableRequestsHostnamePinningPrecision(t *testing.T) {
+	// isNodePinned must exclude a Pod only when a required hostname constraint
+	// actually confines it to the candidate node; a NotIn, a multi-host In, or a
+	// hostname expression that does not force the candidate must NOT exclude it,
+	// or the placeholder is under-sized (issue #29).
+	hostname := func(op corev1.NodeSelectorOperator, vals ...string) corev1.NodeSelectorRequirement {
+		return corev1.NodeSelectorRequirement{Key: corev1.LabelHostname, Operator: op, Values: vals}
+	}
+	zone := corev1.NodeSelectorRequirement{Key: corev1.LabelTopologyZone, Operator: corev1.NodeSelectorOpIn, Values: []string{"us-east-1a"}}
+	term := func(exprs ...corev1.NodeSelectorRequirement) corev1.NodeSelectorTerm {
+		return corev1.NodeSelectorTerm{MatchExpressions: exprs}
+	}
+	withTerms := func(terms ...corev1.NodeSelectorTerm) podOpt {
+		return func(p *corev1.Pod) {
+			p.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: terms},
+			}}
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		opt    podOpt
+		pinned bool
+	}{
+		{"In single candidate host", withTerms(term(hostname(corev1.NodeSelectorOpIn, candidateNode))), true},
+		{"In candidate ANDed with zone", withTerms(term(hostname(corev1.NodeSelectorOpIn, candidateNode), zone)), true},
+		{"two terms both pin the same host", withTerms(term(hostname(corev1.NodeSelectorOpIn, candidateNode)), term(hostname(corev1.NodeSelectorOpIn, candidateNode))), true},
+		{"NotIn another host", withTerms(term(hostname(corev1.NodeSelectorOpNotIn, "other-node"))), false},
+		{"In spanning multiple hosts", withTerms(term(hostname(corev1.NodeSelectorOpIn, candidateNode, "other-node"))), false},
+		{"two terms pin different hosts", withTerms(term(hostname(corev1.NodeSelectorOpIn, candidateNode)), term(hostname(corev1.NodeSelectorOpIn, "other-node"))), false},
+		{"one term pins, one term unbounded on hostname", withTerms(term(hostname(corev1.NodeSelectorOpIn, candidateNode)), term(zone)), false},
+		{"hostname Exists only", withTerms(term(hostname(corev1.NodeSelectorOpExists))), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := surge.ReschedulableRequests([]corev1.Pod{pod("p", reqs(rl("cpu", "1")), tc.opt)}, candidateNode)
+			if tc.pinned {
+				if len(got) != 0 {
+					t.Errorf("a hostname-pinned Pod must be excluded from sizing, got %v", got)
+				}
+				return
+			}
+			wantEqual(t, got, rl("cpu", "1"))
+		})
+	}
+}
+
 func TestReschedulableRequestsKeepsReplicaSetAndStatefulSet(t *testing.T) {
 	pods := []corev1.Pod{
 		pod("rs", reqs(rl("cpu", "100m")), ownedBy("ReplicaSet")),
