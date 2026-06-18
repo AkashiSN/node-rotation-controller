@@ -21,6 +21,17 @@ import (
 
 const week = 7 * 24 * time.Hour
 
+// continuousWindowPeriod is the worst-case period P reported for a continuously-
+// open (full-week) maintenance window. Such a union has no gap between rotation
+// opportunities, so P is effectively zero — but the derivation needs a *positive*
+// P (a zero P is undefined and surfaced as a NoWindows fatal, §3.2), and the
+// generic weekly-wrap below would otherwise report a spurious 7d. One reconcile
+// tick (the controller's longRequeue cadence, §5.2) is the true granularity at
+// which an always-open window offers a rotation chance, so P collapses to that
+// rather than the week wrap, keeping leadTime ≈ t_rot and avoiding a spurious
+// feasibility fatal (issue #62).
+const continuousWindowPeriod = time.Minute
+
 // Entry is a single normalized recurrence: a set of weekdays in one timezone
 // with a daily [StartMin, EndMin) wall-clock interval (minutes since midnight).
 type Entry struct {
@@ -170,6 +181,14 @@ func (s *Schedule) WorstCasePeriod() (time.Duration, bool) {
 	occs := s.mergedOccurrences()
 	if len(occs) == 0 {
 		return 0, false
+	}
+	// A continuously-open union is a single occurrence spanning the whole week
+	// (overlapping/adjacent spans always merge into one, so full coverage ⟹ one
+	// week-long occurrence). There is no gap between rotation opportunities, so the
+	// 7d week-wrap the generic logic below would compute is spurious; collapse P to
+	// the reconcile-tick granularity (issue #62).
+	if len(occs) == 1 && occs[0].length >= week {
+		return continuousWindowPeriod, true
 	}
 	starts := make([]time.Duration, len(occs))
 	for i, o := range occs {
