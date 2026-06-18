@@ -7,12 +7,21 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
 	"github.com/AkashiSN/node-rotation-controller/internal/selection"
+)
+
+// Event action verbs (the events.k8s.io "action" field — the machine-readable
+// operation the controller was performing). The specific condition is carried by
+// the reason (the finding code, or "ShortLead"); these name the operation.
+const (
+	actionEvaluateSchedule = "EvaluateSchedule"
+	actionCheckExpiry      = "CheckExpiry"
+	reasonShortLead        = "ShortLead"
 )
 
 // warningEmitter surfaces non-fatal schedule findings and per-node short-lead
@@ -26,7 +35,7 @@ import (
 // active warning re-fires once, consistent with the Event recorder's own
 // re-aggregation window.
 type warningEmitter struct {
-	events record.EventRecorder // nil disables events (log-only)
+	events events.EventRecorder // nil disables events (log-only)
 	mu     sync.Mutex
 	state  map[string]*poolWarnState // key: NodePool name
 }
@@ -36,8 +45,8 @@ type poolWarnState struct {
 	shortLead    map[string]bool // last-warned short-lead NodeClaim names
 }
 
-func newWarningEmitter(events record.EventRecorder) *warningEmitter {
-	return &warningEmitter{events: events, state: map[string]*poolWarnState{}}
+func newWarningEmitter(rec events.EventRecorder) *warningEmitter {
+	return &warningEmitter{events: rec, state: map[string]*poolWarnState{}}
 }
 
 // poolStateLocked returns (creating if needed) the dedup state for pool. Callers
@@ -71,7 +80,9 @@ func (w *warningEmitter) EmitFindings(ctx context.Context, pool *karpv1.NodePool
 		}
 		l.Info("schedule feasibility warning", "code", f.Code, "detail", f.Message)
 		if w.events != nil {
-			w.events.Event(pool, corev1.EventTypeWarning, f.Code, f.Message)
+			// note is a format string in the events API; pass the message as an
+			// arg so a literal % in it is never interpreted.
+			w.events.Eventf(pool, nil, corev1.EventTypeWarning, f.Code, actionEvaluateSchedule, "%s", f.Message)
 		}
 	}
 	s.findingCodes = current
@@ -94,7 +105,7 @@ func (w *warningEmitter) EmitShortLead(ctx context.Context, pool *karpv1.NodePoo
 		msg := fmt.Sprintf("NodeClaim %s can no longer guarantee the configured rotation chances against its own expireAfter (short-lead, spec §3.2 layer 3); it will be rotated best-effort before forceful expiration", c.Name)
 		l.Info("short-lead NodeClaim", "nodeclaim", c.Name)
 		if w.events != nil {
-			w.events.Event(c, corev1.EventTypeWarning, "ShortLead", msg)
+			w.events.Eventf(c, nil, corev1.EventTypeWarning, reasonShortLead, actionCheckExpiry, "%s", msg)
 		}
 	}
 	s.shortLead = current

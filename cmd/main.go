@@ -89,7 +89,7 @@ func main() {
 		PlaceholderImage:  placeholderImage,
 		PriorityClassName: priorityClassName,
 		Recorder:          recorder,
-		Events:            mgr.GetEventRecorderFor("node-rotation-controller"),
+		Events:            mgr.GetEventRecorder("node-rotation-controller"),
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "rotation")

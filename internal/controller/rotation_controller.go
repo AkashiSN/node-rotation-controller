@@ -11,7 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -60,7 +60,7 @@ type RotationReconciler struct {
 	Recorder Recorder
 	// Events emits the §4.2 / §3.2-layer-3 warning Events (issue #50); nil
 	// disables event emission (log-only).
-	Events record.EventRecorder
+	Events events.EventRecorder
 
 	// Clock is the time source; nil means time.Now (overridden in tests).
 	Clock func() time.Time

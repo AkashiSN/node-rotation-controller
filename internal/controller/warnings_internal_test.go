@@ -7,14 +7,14 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
 )
 
 // drain returns all events currently buffered in the fake recorder.
-func drain(rec *record.FakeRecorder) []string {
+func drain(rec *events.FakeRecorder) []string {
 	var out []string
 	for {
 		select {
@@ -31,7 +31,7 @@ func warnPool() *karpv1.NodePool {
 }
 
 func TestEmitFindingsWarnOnlyAndDedup(t *testing.T) {
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	w := newWarningEmitter(rec)
 	ctx := context.Background()
 	pool := warnPool()
@@ -57,7 +57,7 @@ func TestEmitFindingsWarnOnlyAndDedup(t *testing.T) {
 }
 
 func TestEmitFindingsRefiresAfterClear(t *testing.T) {
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	w := newWarningEmitter(rec)
 	ctx := context.Background()
 	pool := warnPool()
@@ -76,7 +76,7 @@ func TestEmitFindingsRefiresAfterClear(t *testing.T) {
 }
 
 func TestEmitShortLeadPerClaimAndDedup(t *testing.T) {
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	w := newWarningEmitter(rec)
 	ctx := context.Background()
 	pool := warnPool()
@@ -103,7 +103,7 @@ func TestEmitShortLeadPerClaimAndDedup(t *testing.T) {
 }
 
 func TestForgetClearsDedup(t *testing.T) {
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	w := newWarningEmitter(rec)
 	ctx := context.Background()
 	pool := warnPool()
