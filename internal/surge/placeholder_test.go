@@ -235,6 +235,92 @@ func TestBuildPlaceholderNodePoolNotInExclusion(t *testing.T) {
 	}
 }
 
+// instanceGen is a numeric Karpenter requirement key whose NodePool constraints
+// use the Gt/Lt operators (issue #49).
+const instanceGen = "karpenter.k8s.aws/instance-generation"
+
+// numericInputs replicates a single numeric required key whose value on the
+// candidate node is nodeValue.
+func numericInputs(nodeValue string, reqs ...karpv1.NodeSelectorRequirementWithMinValues) surge.PlaceholderInputs {
+	in := baseInputs()
+	in.Node.Labels[instanceGen] = nodeValue
+	in.Match = policy.MatchNodeRequirements{Required: []string{instanceGen}}
+	in.Pool = nodepool(reqs...)
+	return in
+}
+
+func TestBuildPlaceholderKeepsValueAllowedByNumericGt(t *testing.T) {
+	// NodePool allows generations > 5; the candidate's 6 satisfies it, so the key
+	// must be replicated, not silently dropped (issue #49).
+	in := numericInputs("6", req(instanceGen, corev1.NodeSelectorOpGt, "5"))
+	p := surge.BuildPlaceholder(in)
+	e, ok := requiredExprs(t, p)[instanceGen]
+	if !ok || e.Operator != corev1.NodeSelectorOpIn || len(e.Values) != 1 || e.Values[0] != "6" {
+		t.Errorf("numeric Gt-allowed value must be kept as In [6]: got %+v (present=%v)", e, ok)
+	}
+}
+
+func TestBuildPlaceholderDropsValueExcludedByNumericGt(t *testing.T) {
+	// 5 is not > 5, so the NodePool no longer allows it; the key is dropped to keep
+	// the placeholder schedulable (issue #49).
+	in := numericInputs("5", req(instanceGen, corev1.NodeSelectorOpGt, "5"))
+	p := surge.BuildPlaceholder(in)
+	if _, ok := requiredExprs(t, p)[instanceGen]; ok {
+		t.Error("a value not satisfying a numeric Gt requirement must be dropped")
+	}
+}
+
+func TestBuildPlaceholderKeepsValueAllowedByNumericLt(t *testing.T) {
+	in := numericInputs("6", req(instanceGen, corev1.NodeSelectorOpLt, "8"))
+	p := surge.BuildPlaceholder(in)
+	e, ok := requiredExprs(t, p)[instanceGen]
+	if !ok || e.Values[0] != "6" {
+		t.Errorf("numeric Lt-allowed value must be kept: got %+v (present=%v)", e, ok)
+	}
+}
+
+func TestBuildPlaceholderNumericRequirementBracketsValue(t *testing.T) {
+	// Both Gt and Lt on the same key AND together; 6 satisfies 5 < x < 8.
+	in := numericInputs("6",
+		req(instanceGen, corev1.NodeSelectorOpGt, "5"),
+		req(instanceGen, corev1.NodeSelectorOpLt, "8"),
+	)
+	p := surge.BuildPlaceholder(in)
+	if _, ok := requiredExprs(t, p)[instanceGen]; !ok {
+		t.Error("a value inside the Gt/Lt bracket must be kept")
+	}
+
+	// 9 violates the Lt bound, so the bracketed key is dropped.
+	in = numericInputs("9",
+		req(instanceGen, corev1.NodeSelectorOpGt, "5"),
+		req(instanceGen, corev1.NodeSelectorOpLt, "8"),
+	)
+	p = surge.BuildPlaceholder(in)
+	if _, ok := requiredExprs(t, p)[instanceGen]; ok {
+		t.Error("a value outside the Gt/Lt bracket must be dropped")
+	}
+}
+
+func TestBuildPlaceholderDropsNonIntegerNumericComparison(t *testing.T) {
+	// A non-integer candidate value cannot satisfy a numeric comparison; drop it
+	// rather than emit an unschedulable pin (issue #49, schedulability-safe default).
+	in := numericInputs("not-a-number", req(instanceGen, corev1.NodeSelectorOpGt, "5"))
+	p := surge.BuildPlaceholder(in)
+	if _, ok := requiredExprs(t, p)[instanceGen]; ok {
+		t.Error("a non-integer value against a numeric Gt requirement must be dropped")
+	}
+}
+
+func TestBuildPlaceholderDropsMalformedNumericRequirement(t *testing.T) {
+	// Gt/Lt require exactly one integer bound; anything else is malformed and the
+	// key is dropped (matches Kubernetes NodeSelector semantics).
+	in := numericInputs("6", req(instanceGen, corev1.NodeSelectorOpGt, "5", "7"))
+	p := surge.BuildPlaceholder(in)
+	if _, ok := requiredExprs(t, p)[instanceGen]; ok {
+		t.Error("a Gt requirement with multiple bounds is malformed and must drop the key")
+	}
+}
+
 func TestBuildPlaceholderPreferred(t *testing.T) {
 	in := baseInputs()
 	in.Match.Preferred = []string{"node.kubernetes.io/instance-type"}
