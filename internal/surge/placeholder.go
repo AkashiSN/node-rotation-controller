@@ -73,6 +73,7 @@ func BuildPlaceholder(in PlaceholderInputs) *corev1.Pod {
 			PriorityClassName:            in.PriorityClassName,
 			PreemptionPolicy:             &preempt,
 			AutomountServiceAccountToken: &noAutomount,
+			Tolerations:                  poolTolerations(in.Pool),
 			Containers: []corev1.Container{{
 				Name:      placeholderContainerName,
 				Image:     in.Image,
@@ -81,6 +82,34 @@ func BuildPlaceholder(in PlaceholderInputs) *corev1.Pod {
 			Affinity: &corev1.Affinity{NodeAffinity: nodeAffinity(in)},
 		},
 	}
+}
+
+// poolTolerations builds the placeholder's tolerations from the candidate
+// NodePool's template taints so it can schedule onto the same tainted capacity
+// the displaced workload uses (spec §3.3, issue #34). Without them, a placeholder
+// in a NodePool that uses permanent taints stays unschedulable while the real
+// Pods (which carry matching tolerations) could land — every rotation attempt
+// would then wait out readyTimeout and roll back.
+//
+// Only spec.template.spec.taints are copied: startupTaints are removed once a
+// node is Ready and are ignored for provisioning. Each taint maps to an
+// exact-match Equal toleration, so the placeholder tolerates exactly that taint
+// and no more — it never gains access to capacity the workload could not use.
+func poolTolerations(pool *karpv1.NodePool) []corev1.Toleration {
+	taints := pool.Spec.Template.Spec.Taints
+	if len(taints) == 0 {
+		return nil
+	}
+	tols := make([]corev1.Toleration, 0, len(taints))
+	for _, t := range taints {
+		tols = append(tols, corev1.Toleration{
+			Key:      t.Key,
+			Operator: corev1.TolerationOpEqual,
+			Value:    t.Value,
+			Effect:   t.Effect,
+		})
+	}
+	return tols
 }
 
 // nodeAffinity assembles the placeholder's node affinity (spec §3.3): one

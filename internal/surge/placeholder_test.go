@@ -108,6 +108,41 @@ func TestBuildPlaceholderPodShape(t *testing.T) {
 	wantEqual(t, c.Resources.Requests, rl("cpu", "1", "memory", "2Gi"))
 }
 
+func TestBuildPlaceholderToleratesNodePoolTaints(t *testing.T) {
+	// The placeholder must tolerate the candidate NodePool's template taints so it
+	// can schedule onto the same tainted capacity the displaced workload uses
+	// (issue #34). Each taint maps to an exact-match Equal toleration.
+	in := baseInputs()
+	pool := nodepool()
+	pool.Spec.Template.Spec.Taints = []corev1.Taint{
+		{Key: "workload", Value: "api", Effect: corev1.TaintEffectNoSchedule},
+		{Key: "dedicated", Effect: corev1.TaintEffectNoExecute}, // empty value
+	}
+	in.Pool = pool
+	p := surge.BuildPlaceholder(in)
+
+	want := map[string]corev1.Toleration{
+		"workload":  {Key: "workload", Operator: corev1.TolerationOpEqual, Value: "api", Effect: corev1.TaintEffectNoSchedule},
+		"dedicated": {Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "", Effect: corev1.TaintEffectNoExecute},
+	}
+	if len(p.Spec.Tolerations) != len(want) {
+		t.Fatalf("toleration count: got %d (%+v), want %d", len(p.Spec.Tolerations), p.Spec.Tolerations, len(want))
+	}
+	for _, tol := range p.Spec.Tolerations {
+		w, ok := want[tol.Key]
+		if !ok || tol != w {
+			t.Errorf("toleration %q: got %+v, want %+v", tol.Key, tol, w)
+		}
+	}
+}
+
+func TestBuildPlaceholderNoTolerationsWhenUntainted(t *testing.T) {
+	p := surge.BuildPlaceholder(baseInputs()) // baseInputs' NodePool has no taints
+	if len(p.Spec.Tolerations) != 0 {
+		t.Errorf("untainted NodePool: want no tolerations, got %+v", p.Spec.Tolerations)
+	}
+}
+
 func TestBuildPlaceholderUnconditionalNodePoolSelector(t *testing.T) {
 	in := baseInputs()
 	in.Match = policy.MatchNodeRequirements{} // even with no configured keys
