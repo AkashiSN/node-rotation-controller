@@ -69,8 +69,8 @@ func TestLoadFull(t *testing.T) {
 	if w.Timezone != "Asia/Tokyo" || w.Start != "02:00" || w.End != "06:00" {
 		t.Errorf("window not parsed: %+v", w)
 	}
-	if p.Surge.MaxUnavailable != 1 {
-		t.Errorf("maxUnavailable = %d, want 1", p.Surge.MaxUnavailable)
+	if p.SurgeMaxUnavailable() != 1 {
+		t.Errorf("maxUnavailable = %d, want 1", p.SurgeMaxUnavailable())
 	}
 	if p.Surge.ReadyTimeout.Duration != 15*time.Minute {
 		t.Errorf("readyTimeout = %v, want 15m", p.Surge.ReadyTimeout.Duration)
@@ -97,8 +97,8 @@ func TestLoadMinimalAppliesDefaults(t *testing.T) {
 	if p.K() != 2 {
 		t.Errorf("minRotationChances default = %d, want 2", p.K())
 	}
-	if p.Surge.MaxUnavailable != 1 {
-		t.Errorf("maxUnavailable default = %d, want 1", p.Surge.MaxUnavailable)
+	if p.SurgeMaxUnavailable() != 1 {
+		t.Errorf("maxUnavailable default = %d, want 1", p.SurgeMaxUnavailable())
 	}
 	if p.Surge.ReadyTimeout.Duration != 15*time.Minute {
 		t.Errorf("readyTimeout default = %v, want 15m", p.Surge.ReadyTimeout.Duration)
@@ -209,6 +209,13 @@ nodepoolSelectors:
 			yaml: minimalYAML + `
 surge:
   maxUnavailable: 2
+`,
+		},
+		{
+			name: "maxUnavailable explicit zero",
+			yaml: minimalYAML + `
+surge:
+  maxUnavailable: 0
 `,
 		},
 		{

@@ -789,7 +789,9 @@ data:
         end:   "06:00"
 
     surge:
-      maxUnavailable: 1        # v1 fixed at 1 (serial); > 1 reserved for a later version
+      maxUnavailable: 1        # v1 fixed at 1 (serial); > 1 reserved for a later version. The only valid explicit
+                               #   value is 1: unset defaults to 1, but an explicit 0 is REJECTED (not coerced) so a
+                               #   misconfiguration is loud and the controller matches the Helm schema's const 1
       readyTimeout: 15m        # surge node must reach Ready within this, else state=failed; must be > 0 (validation rejects ≤ 0)
       cooldownAfter: 10m       # settle pause between consecutive rotations in a window (not part of t_rot; affects
                                #   throughput, §3.2); also reused as the pool-level inter-attempt pause after a
