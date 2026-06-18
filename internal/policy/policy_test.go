@@ -309,6 +309,48 @@ warmup:
 minRotationChances: 0
 `,
 		},
+		{
+			name: "negative readyTimeout",
+			yaml: minimalYAML + `
+surge:
+  readyTimeout: -1m
+`,
+		},
+		{
+			name: "negative cooldownAfter",
+			yaml: minimalYAML + `
+surge:
+  cooldownAfter: -1m
+`,
+		},
+		{
+			name: "negative retryBackoff",
+			yaml: minimalYAML + `
+surge:
+  retryBackoff: -1m
+`,
+		},
+		{
+			name: "explicit zero readyTimeout",
+			yaml: minimalYAML + `
+surge:
+  readyTimeout: 0m
+`,
+		},
+		{
+			name: "explicit zero cooldownAfter",
+			yaml: minimalYAML + `
+surge:
+  cooldownAfter: 0s
+`,
+		},
+		{
+			name: "explicit zero retryBackoff",
+			yaml: minimalYAML + `
+surge:
+  retryBackoff: 0h
+`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
