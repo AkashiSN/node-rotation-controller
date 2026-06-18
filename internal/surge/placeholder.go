@@ -218,13 +218,15 @@ func poolAllows(pool *karpv1.NodePool, key, value string) bool {
 }
 
 // requirementPermits evaluates one NodeSelector operator against value, matching
-// Kubernetes' own NodeSelector semantics. Gt/Lt compare integers — a NodePool
-// that constrains a numeric Karpenter requirement (e.g.
-// karpenter.k8s.aws/instance-generation) with these operators still has its
-// candidate-node value replicated rather than silently dropped (issue #49). When
-// a numeric comparison cannot be evaluated (malformed bound or non-integer node
-// value) the key is dropped — the schedulability-preserving default (spec §3.3),
-// shared with any unrecognized operator.
+// Kubernetes' and Karpenter's NodeSelector semantics. The numeric operators
+// compare integers — a NodePool that constrains a numeric Karpenter requirement
+// (e.g. karpenter.k8s.aws/instance-generation) with these operators still has its
+// candidate-node value replicated rather than silently dropped: Kubernetes' Gt/Lt
+// (issue #49) and Karpenter's own Gte/Lte (issue #55), the latter present in the
+// bundled sigs.k8s.io/karpenter API. When a numeric comparison cannot be
+// evaluated (malformed bound or non-integer node value) the key is dropped — the
+// schedulability-preserving default (spec §3.3), shared with any unrecognized
+// operator.
 func requirementPermits(op corev1.NodeSelectorOperator, values []string, value string) bool {
 	switch op {
 	case corev1.NodeSelectorOpIn:
@@ -235,17 +237,18 @@ func requirementPermits(op corev1.NodeSelectorOperator, values []string, value s
 		return true // the key is present (value is non-empty by construction)
 	case corev1.NodeSelectorOpDoesNotExist:
 		return false // the NodePool forbids the key
-	case corev1.NodeSelectorOpGt, corev1.NodeSelectorOpLt:
+	case corev1.NodeSelectorOpGt, corev1.NodeSelectorOpLt,
+		karpv1.NodeSelectorOpGte, karpv1.NodeSelectorOpLte:
 		return numericPermits(op, values, value)
 	default:
 		return false
 	}
 }
 
-// numericPermits evaluates a Gt or Lt requirement. Per Kubernetes NodeSelector
-// semantics the requirement carries exactly one integer bound, and the candidate
-// node value must parse as an integer; any deviation drops the key (returns
-// false), the schedulability-preserving default.
+// numericPermits evaluates a Gt, Lt, Gte, or Lte requirement. Per the Kubernetes
+// and Karpenter NodeSelector validation the requirement carries exactly one
+// integer bound, and the candidate node value must parse as an integer; any
+// deviation drops the key (returns false), the schedulability-preserving default.
 func numericPermits(op corev1.NodeSelectorOperator, values []string, value string) bool {
 	if len(values) != 1 {
 		return false
@@ -258,8 +261,16 @@ func numericPermits(op corev1.NodeSelectorOperator, values []string, value strin
 	if err != nil {
 		return false
 	}
-	if op == corev1.NodeSelectorOpGt {
+	switch op {
+	case corev1.NodeSelectorOpGt:
 		return got > bound
+	case karpv1.NodeSelectorOpGte:
+		return got >= bound
+	case corev1.NodeSelectorOpLt:
+		return got < bound
+	case karpv1.NodeSelectorOpLte:
+		return got <= bound
+	default:
+		return false
 	}
-	return got < bound
 }

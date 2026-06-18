@@ -348,6 +348,46 @@ func TestBuildPlaceholderKeepsValueAllowedByNumericLt(t *testing.T) {
 	}
 }
 
+func TestBuildPlaceholderKeepsValueAllowedByNumericGte(t *testing.T) {
+	// NodePool allows generations >= 5; the candidate's 5 satisfies the inclusive
+	// bound (where Gt would have dropped it), so the key must be replicated (#55).
+	in := numericInputs("5", req(instanceGen, karpv1.NodeSelectorOpGte, "5"))
+	p := surge.BuildPlaceholder(in)
+	e, ok := requiredExprs(t, p)[instanceGen]
+	if !ok || e.Operator != corev1.NodeSelectorOpIn || len(e.Values) != 1 || e.Values[0] != "5" {
+		t.Errorf("numeric Gte-allowed value must be kept as In [5]: got %+v (present=%v)", e, ok)
+	}
+}
+
+func TestBuildPlaceholderDropsValueExcludedByNumericGte(t *testing.T) {
+	// 4 is not >= 5, so the NodePool no longer allows it; drop to stay schedulable.
+	in := numericInputs("4", req(instanceGen, karpv1.NodeSelectorOpGte, "5"))
+	p := surge.BuildPlaceholder(in)
+	if _, ok := requiredExprs(t, p)[instanceGen]; ok {
+		t.Error("a value below a numeric Gte requirement must be dropped")
+	}
+}
+
+func TestBuildPlaceholderKeepsValueAllowedByNumericLte(t *testing.T) {
+	// NodePool allows generations <= 8; the candidate's 8 satisfies the inclusive
+	// bound (where Lt would have dropped it), so the key must be replicated (#55).
+	in := numericInputs("8", req(instanceGen, karpv1.NodeSelectorOpLte, "8"))
+	p := surge.BuildPlaceholder(in)
+	e, ok := requiredExprs(t, p)[instanceGen]
+	if !ok || e.Values[0] != "8" {
+		t.Errorf("numeric Lte-allowed value must be kept: got %+v (present=%v)", e, ok)
+	}
+}
+
+func TestBuildPlaceholderDropsValueExcludedByNumericLte(t *testing.T) {
+	// 9 is not <= 8, so the NodePool no longer allows it; drop to stay schedulable.
+	in := numericInputs("9", req(instanceGen, karpv1.NodeSelectorOpLte, "8"))
+	p := surge.BuildPlaceholder(in)
+	if _, ok := requiredExprs(t, p)[instanceGen]; ok {
+		t.Error("a value above a numeric Lte requirement must be dropped")
+	}
+}
+
 func TestBuildPlaceholderNumericRequirementBracketsValue(t *testing.T) {
 	// Both Gt and Lt on the same key AND together; 6 satisfies 5 < x < 8.
 	in := numericInputs("6",
