@@ -41,6 +41,17 @@ This controller closes that gap by:
 - **Not** a pod descheduler (use [descheduler](https://github.com/kubernetes-sigs/descheduler))
 - **Not** a replacement for application-side warm-up (`readinessProbe`, `readinessGate`, `slow_start`) — surge places nodes, applications must place themselves
 
+## Compatibility
+
+The compatibility contract is the **stable `karpenter.sh/v1` CRD surface — not a specific Karpenter controller minor.** This matters for **EKS Auto Mode**, which does not expose the managed Karpenter version to users: the controller runs against any cluster serving a compatible `karpenter.sh/v1` `NodePool`/`NodeClaim` API.
+
+- **Runtime target:** EKS Auto Mode and any Karpenter v1+ cluster exposing a `karpenter.sh/v1`-compatible `NodePool`/`NodeClaim` API.
+- **Build/test baseline:** the repository compiles and tests against the `sigs.k8s.io/karpenter` version pinned in [`go.mod`](go.mod). That pins the typed Go API it is built against — it is **not** a requirement that the cluster run that exact Karpenter minor.
+- **No internals, no cloud APIs:** the controller interacts only through Kubernetes API objects (`NodeClaim`/`NodePool` CRDs, core `Node`/`Pod`); it never calls Karpenter controller internals or a cloud-provider API. Unknown Auto Mode internals are fine as long as the public `karpenter.sh/v1` surface is compatible.
+- A startup preflight fails fast if `karpenter.sh/v1` (`nodeclaims`/`nodepools`) is not served or not readable.
+
+See the [compatibility policy](docs/specification.md#21-scope-and-compatibility) for the full list of required CRD fields, labels, and annotations.
+
 ## Project layout
 
 ```

@@ -41,6 +41,17 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 - Pod 再配置（[descheduler](https://github.com/kubernetes-sigs/descheduler) を使う）
 - アプリケーション側 warm-up（`readinessProbe` / `readinessGate` / `slow_start` の領分）
 
+## 互換性
+
+互換性の契約は **安定版 `karpenter.sh/v1` CRD サーフェスであり、特定の Karpenter コントローラのマイナーバージョンではない。** これは **EKS Auto Mode** において重要である: Auto Mode は管理対象の Karpenter バージョンをユーザに公開しないが、本コントローラは互換性のある `karpenter.sh/v1` `NodePool`/`NodeClaim` API を提供する任意のクラスタで動作する。
+
+- **ランタイム対象:** EKS Auto Mode、および `karpenter.sh/v1` 互換の `NodePool`/`NodeClaim` API を提供する任意の Karpenter v1+ クラスタ。
+- **ビルド/テスト基準:** 本リポジトリは [`go.mod`](go.mod) に固定された `sigs.k8s.io/karpenter` のバージョンに対してコンパイル・テストする。これは typed な Go API の固定であって、クラスタがそのマイナーを動かすことを要求するものでは **ない**。
+- **内部・クラウド API 不使用:** 本コントローラは Kubernetes API オブジェクト（`NodeClaim`/`NodePool` CRD、core の `Node`/`Pod`）のみを介して動作する。Karpenter コントローラの内部やクラウドプロバイダ API は一切呼ばない。公開 `karpenter.sh/v1` サーフェスが互換である限り、未知の Auto Mode 内部は問題にならない。
+- 起動時プリフライトが、`karpenter.sh/v1`（`nodeclaims`/`nodepools`）が提供されない・読み取れない場合に fail fast する。
+
+必須の CRD フィールド・ラベル・アノテーションの一覧は[互換性ポリシー](docs/ja/specification.md#21-スコープと互換性)を参照。
+
 ## プロジェクト構成
 
 ```
