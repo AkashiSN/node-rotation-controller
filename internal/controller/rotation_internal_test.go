@@ -873,6 +873,41 @@ func TestReadyTimeoutDoesNotReapAbsorbHost(t *testing.T) {
 	}
 }
 
+func TestReadyTimeoutDoesNotReapSameNamedPodInOtherNamespace(t *testing.T) {
+	// readyTimeout elapsed → the attempt fails and the induced surge claim has
+	// registered a node. A real workload Pod in ANOTHER namespace happens to share
+	// the placeholder's name. Pod names are unique only within a namespace, so the
+	// rollback guard must not mistake it for the placeholder and reap an occupied
+	// host (issue #37).
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncAnn(
+		annotations.State, annotations.StatePending,
+		annotations.StartedAt, rfc(testNow.Add(-20*time.Minute)),
+		annotations.SurgeClaim, "nc-new",
+	))
+	surgeClaim := testClaim("nc-new", 0, ncCreated(testNow.Add(-10*time.Minute)), ncNode(surgeNode))
+	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
+	surgeHost := testK8sNode(surgeNode, true, nil, false)
+	// a real workload Pod whose name collides with the placeholder but lives in a
+	// different namespace than the controller's.
+	collidingPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: surge.PlaceholderName("nc-old"), Namespace: "default"},
+		Spec:       corev1.PodSpec{NodeName: surgeNode},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	ph := placeholderPod(surgeNode, corev1.PodRunning)
+	r := newReconciler(t, testNow, nil, pool, cand, surgeClaim, oldNode, surgeHost, collidingPod, ph)
+
+	step(t, r, pool)
+
+	if c := getClaimOrNil(t, r, "nc-old"); c == nil || c.Annotations[annotations.State] != annotations.StateFailed {
+		t.Fatalf("the attempt must still fail: %+v", c)
+	}
+	if getClaimOrNil(t, r, "nc-new") == nil {
+		t.Error("a host carrying a same-named Pod in another namespace must NOT be reaped (issue #37)")
+	}
+}
+
 // --- failed: torn-write crash recovery -------------------------------------
 
 func TestFailedTornWriteRepairReleasesAnchorAndPreservesPause(t *testing.T) {

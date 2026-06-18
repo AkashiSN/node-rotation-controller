@@ -942,7 +942,7 @@ func (r *RotationReconciler) reapSurgeClaim(ctx context.Context, cand *karpv1.No
 		if err != nil {
 			return err
 		}
-		if hostsRealPods(pods, sc.Status.NodeName, surge.PlaceholderName(cand.Name)) {
+		if hostsRealPods(pods, sc.Status.NodeName, r.Namespace, surge.PlaceholderName(cand.Name)) {
 			return nil // absorb host — never reap
 		}
 	}
@@ -953,10 +953,17 @@ func (r *RotationReconciler) reapSurgeClaim(ctx context.Context, cand *karpv1.No
 // the placeholder — DaemonSet/mirror/completed Pods do not count (spec §3.3). It
 // shares the surge package's infra/completed filter; node-pinned Pods are counted
 // here (an absorb host's real workload) even though surge sizing excludes them.
-func hostsRealPods(pods []corev1.Pod, nodeName, placeholderName string) bool {
+//
+// The placeholder is excluded by its full identity — namespace AND name — because
+// Pod names are unique only within a namespace and this list is cluster-wide. A
+// workload Pod in another namespace that happens to share the placeholder's name
+// must still count as real, or the rollback could reap a NodeClaim that hosts it
+// (issue #37).
+func hostsRealPods(pods []corev1.Pod, nodeName, placeholderNamespace, placeholderName string) bool {
 	for i := range pods {
 		p := &pods[i]
-		if p.Spec.NodeName != nodeName || p.Name == placeholderName {
+		if p.Spec.NodeName != nodeName ||
+			(p.Namespace == placeholderNamespace && p.Name == placeholderName) {
 			continue
 		}
 		if surge.IsInfraOrCompleted(p) {
