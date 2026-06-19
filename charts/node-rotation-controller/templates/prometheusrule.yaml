@@ -1,0 +1,103 @@
+{{- if .Values.prometheusRule.enabled -}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "node-rotation-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "node-rotation-controller.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: node-rotation-controller
+      rules:
+        # A rotation finished as failure or expired in the last hour. `expired`
+        # means the old NodeClaim was force-expired before a graceful rotation
+        # completed — the controller lost the lead-time race (spec §4.2, §3.5).
+        - alert: NodeRotationCompletedFailureOrExpired
+          expr: increase(noderotation_completed_total{outcome=~"failure|expired"}[1h]) > 0
+          for: {{ .Values.prometheusRule.completedFailure.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.completedFailure.severity }}
+          annotations:
+            summary: node-rotation-controller saw a failed or expired rotation
+            description: >-
+              {{`{{ $value }}`}} rotation(s) on NodePool {{`{{ $labels.nodepool }}`}}
+              finished as {{`{{ $labels.outcome }}`}} in the last hour. See the
+              production runbook (docs/runbook.md).
+        # Candidates have been backing up across two consecutive windows: the
+        # controller is falling behind (spec §4.2, R2). `windowRange` should be
+        # set to two window periods (2·P) for your schedule.
+        - alert: NodeRotationCandidatesNotDraining
+          expr: min_over_time(noderotation_candidates[{{ .Values.prometheusRule.candidatesNotDraining.windowRange }}]) > 0
+          for: {{ .Values.prometheusRule.candidatesNotDraining.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.candidatesNotDraining.severity }}
+          annotations:
+            summary: node-rotation-controller candidates are not draining
+            description: >-
+              NodePool {{`{{ $labels.nodepool }}`}} has had eligible candidates
+              for two consecutive windows without clearing them — rotation
+              throughput may be too low (spec §4.2, R2). See docs/runbook.md.
+        # The window is active with non-zero candidates but nothing is
+        # completing: rotation is wedged inside the window (spec §4.2).
+        - alert: NodeRotationStalledInWindow
+          expr: |-
+            noderotation_window_active == 1
+            and on() (sum(noderotation_candidates) > 0)
+            and on() (sum(increase(noderotation_completed_total[{{ .Values.prometheusRule.stalledInWindow.completionRange }}])) == 0)
+          for: {{ .Values.prometheusRule.stalledInWindow.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.stalledInWindow.severity }}
+          annotations:
+            summary: node-rotation-controller window active with no completions
+            description: >-
+              The maintenance window is active with non-zero candidates but zero
+              completions for {{ .Values.prometheusRule.stalledInWindow.for }} —
+              rotation appears wedged (spec §4.2). See docs/runbook.md.
+        # The in-flight drain has exceeded tGP + buffer: a blocking PDB or a
+        # stuck finalizer is holding it (spec §5.2). The serial gate is held on
+        # purpose, so no other node in the pool rotates until this clears.
+        - alert: NodeRotationDrainStuck
+          expr: noderotation_drain_stuck == 1
+          for: {{ .Values.prometheusRule.drainStuck.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.drainStuck.severity }}
+          annotations:
+            summary: node-rotation-controller drain is stuck
+            description: >-
+              The in-flight drain on NodePool {{`{{ $labels.nodepool }}`}} has
+              exceeded tGP + buffer — resolve the blocking PDB or stuck finalizer
+              (spec §5.2). See docs/runbook.md.
+        # NodeClaims whose own stamped expireAfter can no longer guarantee K
+        # rotation chances (spec §3.2 layer 3). They are rotated best-effort but
+        # may reach Forceful Expiration.
+        - alert: NodeRotationShortLeadNodes
+          expr: noderotation_short_lead_nodes > 0
+          for: {{ .Values.prometheusRule.shortLeadNodes.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.shortLeadNodes.severity }}
+          annotations:
+            summary: node-rotation-controller has short-lead NodeClaims
+            description: >-
+              {{`{{ $value }}`}} NodeClaim(s) on NodePool {{`{{ $labels.nodepool }}`}}
+              can no longer be guaranteed K rotation chances before expireAfter
+              (spec §3.2 layer 3). See docs/runbook.md.
+        # The same rotation keeps failing (retry-count >= 3): a systematic cause
+        # such as sustained placeholder preemption or a same-AZ capacity shortage
+        # (spec §5.3, R3).
+        - alert: NodeRotationRetryCountHigh
+          expr: noderotation_retry_count >= 3
+          for: {{ .Values.prometheusRule.retryCountHigh.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.retryCountHigh.severity }}
+          annotations:
+            summary: node-rotation-controller retries are escalating
+            description: >-
+              A rotation on NodePool {{`{{ $labels.nodepool }}`}} has retried
+              {{`{{ $value }}`}} times — a systematic cause such as sustained
+              placeholder preemption or a same-AZ capacity shortage (spec §5.3,
+              R3). See docs/runbook.md.
+{{- end }}

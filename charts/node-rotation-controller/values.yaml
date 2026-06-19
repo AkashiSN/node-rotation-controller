@@ -89,6 +89,52 @@ metrics:
     # -- Extra labels for the ServiceMonitor (e.g. a Prometheus release selector).
     labels: {}
 
+# Optional Prometheus Operator PrometheusRule shipping the spec §4.2 alerts.
+# Requires the monitoring.coreos.com/v1 CRD; left OFF by default so existing
+# installs and clusters without the operator still render. The `for`,
+# `severity`, and range knobs let you tune each alert to your schedule
+# (especially the window-period-dependent ones) without editing the template.
+# See the production runbook (docs/runbook.md) for how to read the metrics.
+prometheusRule:
+  # -- Create a PrometheusRule with the six §4.2 alerts.
+  enabled: false
+  # -- Extra labels for the PrometheusRule (e.g. a Prometheus release selector).
+  labels: {}
+  # noderotation_completed_total{outcome=~"failure|expired"} increased in the
+  # last hour — a rotation failed or a node was force-expired (spec §3.5).
+  completedFailure:
+    for: 0m
+    severity: warning
+  # Eligible candidates have not cleared across two consecutive windows. Set
+  # `windowRange` to roughly two window periods (2·P) for your schedule so the
+  # min_over_time spans both (spec §4.2, R2).
+  candidatesNotDraining:
+    windowRange: 8d
+    for: 0m
+    severity: warning
+  # The maintenance window is active with candidates but zero completions — the
+  # in-window rotation appears wedged. `completionRange` should cover roughly a
+  # full window's duration (spec §4.2).
+  stalledInWindow:
+    completionRange: 4h
+    for: 30m
+    severity: warning
+  # The in-flight drain has exceeded tGP + buffer — a blocking PDB or stuck
+  # finalizer (spec §5.2). The serial gate is held until it clears.
+  drainStuck:
+    for: 0m
+    severity: warning
+  # NodeClaims whose own stamped expireAfter can no longer guarantee K rotation
+  # chances (spec §3.2 layer 3).
+  shortLeadNodes:
+    for: 0m
+    severity: warning
+  # The same rotation keeps failing (retry-count >= 3) — a systematic cause such
+  # as sustained placeholder preemption or a same-AZ capacity shortage (R3).
+  retryCountHigh:
+    for: 0m
+    severity: warning
+
 podDisruptionBudget:
   # -- Create a PodDisruptionBudget for the controller. With replicaCount=2 and
   # minAvailable=1 a node drain cannot take out both replicas at once, so a
