@@ -94,3 +94,7 @@ jobs:
             --set config.policy.surge.readyTimeout=0s
           assert_rejected "prePull.enabled=true (v2 feature, const false in v1)" \
             --set config.policy.prePull.enabled=true
+          assert_rejected "placeholder.priorityClass.value=0 (must be negative, max -1)" \
+            --set placeholder.priorityClass.value=0
+          assert_rejected "warmup.enabled=true (v3 feature, const false in v1)" \
+            --set config.policy.warmup.enabled=true
