@@ -485,6 +485,8 @@ Suggested alerts:
 - `noderotation_short_lead_nodes > 0` (NodeClaims whose stamped `expireAfter` can no longer guarantee `K` chances; §3.2 layer 3)
 - `noderotation_retry_count >= 3` (the same rotation keeps failing — systematic cause such as sustained placeholder preemption or same-AZ capacity shortage; §5.3)
 
+> The Helm chart ships these six alerts as an **optional** `PrometheusRule`, gated behind `prometheusRule.enabled` (default `false`). The schedule-dependent ranges (two-window and full-window) are chart values, since `P`/`D` come from the operator's `maintenanceWindows`. See the [production runbook](runbook.md) for how to read each metric and tune the alerts.
+
 ## 4.3 RBAC and Cloud Permissions
 
 ### Kubernetes RBAC

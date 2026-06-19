@@ -58,7 +58,9 @@ See the [compatibility policy](docs/specification.md#21-scope-and-compatibility)
 .
 ├── docs/
 │   ├── specification.md       Full design specification (English)
-│   └── ja/specification.md    Japanese translation
+│   ├── runbook.md             Production runbook (English)
+│   ├── ja/specification.md    Japanese translation
+│   └── ja/runbook.md          Production runbook (Japanese)
 ├── charts/                    Helm chart (node-rotation-controller)
 ├── cmd/                       Controller entry point (manager bootstrap + startup preflight)
 └── internal/                  Reconciler and supporting packages: rotation state machine

@@ -58,7 +58,9 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 .
 ├── docs/
 │   ├── specification.md       仕様書（英語）
-│   └── ja/specification.md    日本語訳
+│   ├── runbook.md             運用ランブック（英語）
+│   ├── ja/specification.md    日本語訳
+│   └── ja/runbook.md          運用ランブック（日本語）
 ├── charts/                    Helm chart（node-rotation-controller）
 ├── cmd/                       Controller エントリポイント（manager bootstrap + 起動時プリフライト）
 └── internal/                  Reconciler と関連パッケージ: 置換ステートマシン
