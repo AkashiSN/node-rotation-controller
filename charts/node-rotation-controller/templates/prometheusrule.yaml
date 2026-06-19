@@ -29,9 +29,14 @@ spec:
               production runbook (docs/runbook.md).
         # Candidates have been backing up across two consecutive windows: the
         # controller is falling behind (spec §4.2, R2). `windowRange` should be
-        # set to two window periods (2·P) for your schedule.
+        # set to two window periods (2·P) for your schedule. The `offset` guard
+        # requires the series to have already been non-zero a full `windowRange`
+        # ago, so a freshly created (e.g. just-restarted) non-zero candidates
+        # series cannot alert before two windows of history actually exist.
         - alert: NodeRotationCandidatesNotDraining
-          expr: min_over_time(noderotation_candidates[{{ .Values.prometheusRule.candidatesNotDraining.windowRange }}]) > 0
+          expr: |-
+            min_over_time(noderotation_candidates[{{ .Values.prometheusRule.candidatesNotDraining.windowRange }}]) > 0
+            and noderotation_candidates offset {{ .Values.prometheusRule.candidatesNotDraining.windowRange }} > 0
           for: {{ .Values.prometheusRule.candidatesNotDraining.for }}
           labels:
             severity: {{ .Values.prometheusRule.candidatesNotDraining.severity }}
@@ -47,7 +52,7 @@ spec:
           expr: |-
             noderotation_window_active == 1
             and on() (sum(noderotation_candidates) > 0)
-            and on() (sum(increase(noderotation_completed_total[{{ .Values.prometheusRule.stalledInWindow.completionRange }}])) == 0)
+            and on() ((sum(increase(noderotation_completed_total[{{ .Values.prometheusRule.stalledInWindow.completionRange }}])) or vector(0)) == 0)
           for: {{ .Values.prometheusRule.stalledInWindow.for }}
           labels:
             severity: {{ .Values.prometheusRule.stalledInWindow.severity }}

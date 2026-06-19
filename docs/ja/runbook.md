@@ -257,7 +257,7 @@ helm upgrade --install rot charts/node-rotation-controller \
 | アラート | 式 | 意味 |
 |-------|------------|-------|
 | `NodeRotationCompletedFailureOrExpired` | `increase(noderotation_completed_total{outcome=~"failure\|expired"}[1h]) > 0` | 直近 1 時間でローテーションが失敗、またはノードが force-expire された。 |
-| `NodeRotationCandidatesNotDraining` | `min_over_time(noderotation_candidates[<2·P>]) > 0` | 2 ウィンドウ連続で候補がはけていない（[R2](specification.md#71-リスク)）。 |
+| `NodeRotationCandidatesNotDraining` | `min_over_time(noderotation_candidates[<2·P>]) > 0 and noderotation_candidates offset <2·P> > 0` | 2 ウィンドウ連続で候補がはけていない（[R2](specification.md#71-リスク)）。`offset` ガードにより、生成直後の非ゼロ系列が 2 ウィンドウ分の履歴が揃う前に発火するのを防ぐ。 |
 | `NodeRotationStalledInWindow` | window active **かつ** candidates `> 0` **かつ** 完了ゼロ | メンテナンスウィンドウ内でローテーションが詰まっている。 |
 | `NodeRotationDrainStuck` | `noderotation_drain_stuck == 1` | drain が `tGP + buffer` を超えてブロック — [§5](#5-drain-が詰まったときの対処)。 |
 | `NodeRotationShortLeadNodes` | `noderotation_short_lead_nodes > 0` | 刻印済み `expireAfter` で `K` 回を保証できなくなった NodeClaim。 |
