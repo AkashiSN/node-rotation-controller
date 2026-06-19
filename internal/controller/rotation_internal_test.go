@@ -600,6 +600,118 @@ func TestDrainingReissuesDelete(t *testing.T) {
 	}
 }
 
+// TestDrainingReassertsMirrorWhenAbsent covers the crash-recovery branch in
+// advanceDraining where the candidate already reached state=draining but the
+// pool-side active-rotation-state mirror is missing (a crash between the mirror
+// write and the claim's state write, spec §5.2). The handler must re-assert the
+// mirror so the serial gate and completion outcome are well-defined.
+func TestDrainingReassertsMirrorWhenAbsent(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
+		ncAnn(annotations.State, annotations.StateDraining))
+	// Anchor present but the active-rotation-state mirror is ABSENT.
+	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, true))
+
+	step(t, r, pool)
+
+	if got := getPool(t, r).Annotations[annotations.ActiveRotationState]; got != annotations.StateDraining {
+		t.Errorf("advanceDraining must re-assert the absent mirror; active-rotation-state = %q, want draining", got)
+	}
+	// The candidate is already being deleted, so no re-delete is needed; the anchor
+	// stays held.
+	if getPool(t, r).Annotations[annotations.ActiveRotation] != "nc-old" {
+		t.Error("the anchor must stay held while draining")
+	}
+}
+
+// TestStuckDrainHoldsGateAndSetsGauge: a drain that has run past tGP + buffer
+// (the §5.2 drain bound) is STUCK, but the controller deliberately keeps the
+// serial gate held — the state stays draining, the anchor is not cleared — and
+// surfaces the condition as the recomputed drain_stuck gauge (true), not by
+// forcing a rollback. The gauge is a 0/1 recompute every pass, so a separate
+// not-stuck pass must clear it (TestObserveIdlePoolGauges covers the idle clear).
+func TestStuckDrainHoldsGateAndSetsGauge(t *testing.T) {
+	rec := &fakeRecorder{}
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
+		ncAnn(annotations.State, annotations.StateDraining))
+	// Deleting for 2h, well past the 45m bound (tGP 30m + buffer 15m).
+	dt := metav1.NewTime(testNow.Add(-2 * time.Hour))
+	cand.DeletionTimestamp = &dt
+	pool := withExpireAfter(withTGP(testNodePool(map[string]string{
+		annotations.ActiveRotation:      "nc-old",
+		annotations.ActiveRotationState: annotations.StateDraining,
+	})))
+	r := newReconciler(t, testNow, rec, pool, cand, testK8sNode(candNode, true, nil, true))
+
+	step(t, r, pool)
+
+	p := getPool(t, r)
+	if p.Annotations[annotations.ActiveRotation] != "nc-old" {
+		t.Error("a stuck drain must NOT clear the anchor — the serial gate stays held")
+	}
+	if p.Annotations[annotations.ActiveRotationState] != annotations.StateDraining {
+		t.Error("a stuck drain must stay in the draining state (no forced rollback)")
+	}
+	if !rec.obs[testPoolName].DrainStuck {
+		t.Error("the drain_stuck gauge must be set while the drain is past the bound")
+	}
+	if rec.success != 0 || rec.failure != 0 {
+		t.Errorf("a stuck (but not finished) drain must not emit success/failure: %+v", rec)
+	}
+}
+
+// TestDrainWithinBoundClearsStuckGauge is the recompute-clears negative control
+// for the drain_stuck gauge: a rotation still draining but within the bound must
+// report drain_stuck=false (the 0/1 gauge resets every pass), while the gate
+// stays held.
+func TestDrainWithinBoundClearsStuckGauge(t *testing.T) {
+	rec := &fakeRecorder{}
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
+		ncAnn(annotations.State, annotations.StateDraining))
+	dt := metav1.NewTime(testNow.Add(-5 * time.Minute)) // within the 45m bound
+	cand.DeletionTimestamp = &dt
+	pool := withExpireAfter(withTGP(testNodePool(map[string]string{
+		annotations.ActiveRotation:      "nc-old",
+		annotations.ActiveRotationState: annotations.StateDraining,
+	})))
+	r := newReconciler(t, testNow, rec, pool, cand, testK8sNode(candNode, true, nil, true))
+
+	step(t, r, pool)
+
+	if rec.obs[testPoolName].DrainStuck {
+		t.Error("a drain within the bound must recompute drain_stuck=false")
+	}
+	if getPool(t, r).Annotations[annotations.ActiveRotation] != "nc-old" {
+		t.Error("the anchor must stay held while draining within the bound")
+	}
+}
+
+// TestSurgeNotReadyOnNodePoolLabelMismatch covers the surgeReady NodePool-label
+// guard: the placeholder is Running on a Ready host distinct from the candidate,
+// but the host carries a karpenter.sh/nodepool label for a DIFFERENT pool, so it
+// is not a valid surge target and surge_ready must not hold (spec §5.2). The
+// rotation stays pending and the old NodeClaim is not deleted.
+func TestSurgeNotReadyOnNodePoolLabelMismatch(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
+		ncAnn(annotations.State, annotations.StatePending, annotations.StartedAt, rfc(testNow.Add(-2*time.Minute))))
+	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old"}, true)
+	// Ready host, but in a different NodePool than the candidate's.
+	otherPoolHost := testK8sNode(surgeNode, true, nil, false)
+	otherPoolHost.Labels[karpv1.NodePoolLabelKey] = "other-pool"
+	ph := placeholderPod(surgeNode, corev1.PodRunning)
+	r := newReconciler(t, testNow, nil, pool, cand, oldNode, otherPoolHost, ph)
+
+	step(t, r, pool)
+
+	if getPool(t, r).Annotations[annotations.ActiveRotationState] == annotations.StateDraining {
+		t.Error("a surge host in a different NodePool must not trigger the draining transition")
+	}
+	if c := getClaimOrNil(t, r, "nc-old"); c == nil || c.DeletionTimestamp != nil {
+		t.Error("the old NodeClaim must not be deleted when the surge host's NodePool label mismatches")
+	}
+}
+
 // --- completion ------------------------------------------------------------
 
 func TestCompletionSuccess(t *testing.T) {

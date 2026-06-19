@@ -77,6 +77,23 @@ func TestDeriveWeeklyOnlyFatal(t *testing.T) {
 	has(t, r, "ANonPositive", Fatal)
 }
 
+// TestDeriveACentralRaceZeroFatal pins the off-by-one boundary of the central
+// race: A == 0 exactly is a Fatal ANonPositive, not a pass. The auto branch's
+// guard is `A <= 0`, so the boundary value must trip it (between the A < 0 case
+// in TestDeriveWeeklyOnlyFatal and the A > 0 healthy worked example). Here E is
+// tuned so A = E − (K·P + t_rot) = 0 exactly: K·P = 2·96h = 192h, t_rot = 90m,
+// so E = 193.5h gives A = 0.
+func TestDeriveACentralRaceZeroFatal(t *testing.T) {
+	in := baseAuto()
+	in.E = 193*time.Hour + 30*time.Minute // A = 193.5h − (192h + 1.5h) = 0
+	r := Derive(in)
+	if r.A != 0 {
+		t.Fatalf("A = %v, want exactly 0 (boundary)", r.A)
+	}
+	has(t, r, "ANonPositive", Fatal)
+	absent(t, r, "AVeryAggressive") // the A <= 0 case must not also warn-aggressive
+}
+
 func TestDeriveKFloor(t *testing.T) {
 	in := baseAuto()
 	in.K = 0
@@ -94,6 +111,24 @@ func TestDeriveAggressiveWarn(t *testing.T) {
 	r := Derive(in)
 	has(t, r, "AVeryAggressive", Warn)
 	absent(t, r, "ANonPositive")
+}
+
+// TestDeriveOverrideAggressiveWarn covers the override branch of the
+// AVeryAggressive warning (only the auto branch is exercised by
+// TestDeriveAggressiveWarn). An explicit override A with 0 < A < P warns that
+// nodes rotate very young — and must still guarantee >= 1 chance so no fatal
+// fires. Override = 50h with P = 96h ⇒ 0 < A < P; G = floor((334.5−50)/96) = 2.
+func TestDeriveOverrideAggressiveWarn(t *testing.T) {
+	in := baseAuto()
+	in.Override = new(50 * time.Hour) // 0 < 50h < P(96h)
+	r := Derive(in)
+	if r.A != 50*time.Hour {
+		t.Fatalf("A = %v, want override 50h", r.A)
+	}
+	has(t, r, "AVeryAggressive", Warn)
+	absent(t, r, "OverrideNonPositive")
+	absent(t, r, "OverrideGBelowOne")
+	absent(t, r, "OverrideGBelowK") // G = 2 == K
 }
 
 func TestDeriveOverrideGBelowOneFatal(t *testing.T) {

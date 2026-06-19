@@ -100,6 +100,97 @@ func TestInWindowUnion(t *testing.T) {
 	}
 }
 
+// TestInWindowMultiTimezoneUnion proves the union spans entries in DIFFERENT
+// timezones (TestInWindowUnion only covers single-tz unions): one instant can
+// satisfy a UTC entry, another a JST entry, and an instant matching neither is
+// out. The instant 2024-01-03 18:00 UTC is Wed 18:00 UTC and simultaneously Thu
+// 03:00 JST, so it matches the JST entry but not the UTC one.
+func TestInWindowMultiTimezoneUnion(t *testing.T) {
+	jst := mustLoad(t, "Asia/Tokyo")
+	utc := mustLoad(t, "UTC")
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "UTC", Days: []string{"Wed"}, Start: "09:00", End: "12:00"},
+		{Timezone: "Asia/Tokyo", Days: []string{"Thu"}, Start: "02:00", End: "06:00"},
+	})
+
+	if !s.InWindow(time.Date(2024, 1, 3, 10, 0, 0, 0, utc)) { // Wed 10:00 UTC → UTC entry
+		t.Error("Wed 10:00 UTC should match the UTC entry")
+	}
+	if !s.InWindow(time.Date(2024, 1, 4, 3, 0, 0, 0, jst)) { // Thu 03:00 JST → JST entry
+		t.Error("Thu 03:00 JST should match the JST entry")
+	}
+	// Wed 18:00 UTC == Thu 03:00 JST: the JST entry matches even though the UTC
+	// entry (Wed 09:00–12:00) does not at that wall-clock hour.
+	if !s.InWindow(time.Date(2024, 1, 3, 18, 0, 0, 0, utc)) {
+		t.Error("Wed 18:00 UTC (== Thu 03:00 JST) should match the JST entry via the union")
+	}
+	// Tue 10:00 UTC (== Tue 19:00 JST) matches neither entry's day.
+	if s.InWindow(time.Date(2024, 1, 2, 10, 0, 0, 0, utc)) {
+		t.Error("Tue 10:00 UTC should match neither entry")
+	}
+}
+
+// TestStartOffsetDSTPinnedToAnchorWeek documents the §3.1 DST wall-clock
+// approximation for startOffset: every occurrence is projected onto the
+// anchor-Monday (2024-01-01, a winter EST week) timeline, so a summer-DST (EDT)
+// occurrence and a winter (EST) occurrence of the same wall-clock start land on
+// the SAME canonical offset — the projection uses the anchor week's UTC offset
+// (EST, UTC−5) for both. NY Wed 02:00 → 50h (UTC Wed 02:00) + 5h = 55h.
+func TestStartOffsetDSTPinnedToAnchorWeek(t *testing.T) {
+	ny := mustLoad(t, "America/New_York")
+	e := Entry{Loc: ny, Days: []time.Weekday{time.Wednesday}, StartMin: 2 * 60, EndMin: 6 * 60}
+
+	if got, want := e.startOffset(time.Wednesday), 55*time.Hour; got != want {
+		t.Errorf("startOffset(Wed 02:00 America/New_York) = %v, want %v (anchored to the EST week)", got, want)
+	}
+	// A UTC entry at the same wall-clock start is 5h earlier on the timeline,
+	// confirming the EST (not EDT) offset is what gets baked in.
+	utc := Entry{Loc: time.UTC, Days: []time.Weekday{time.Wednesday}, StartMin: 2 * 60, EndMin: 6 * 60}
+	if got, want := utc.startOffset(time.Wednesday), 50*time.Hour; got != want {
+		t.Errorf("startOffset(Wed 02:00 UTC) = %v, want %v", got, want)
+	}
+}
+
+// TestInWindowAcrossDSTTransitions verifies InWindow stays a correct wall-clock
+// membership test across spring-forward and fall-back instants (the §3.1 ±1h
+// approximation) without crashing. Because membership is evaluated on the local
+// wall clock, the repeated fall-back hour reads as in-window on BOTH passes and
+// the skipped spring-forward hour simply never occurs.
+func TestInWindowAcrossDSTTransitions(t *testing.T) {
+	ny := mustLoad(t, "America/New_York")
+
+	// Spring-forward 2024-03-10: clocks jump 02:00 → 03:00 EDT. Window Sun
+	// 03:00–05:00 NY. 03:30 EDT exists and is in-window.
+	springWin := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "America/New_York", Days: []string{"Sun"}, Start: "03:00", End: "05:00"},
+	})
+	if !springWin.InWindow(time.Date(2024, 3, 10, 3, 30, 0, 0, ny)) {
+		t.Error("spring-forward 03:30 EDT should be in the Sun 03:00–05:00 window")
+	}
+	// 02:30 NY does not exist on spring-forward; Go normalizes it (to 01:30 EST),
+	// which falls outside the window — no crash, sane membership.
+	if springWin.InWindow(time.Date(2024, 3, 10, 2, 30, 0, 0, ny)) {
+		t.Error("the skipped spring-forward 02:30 must not read as in-window")
+	}
+
+	// Fall-back 2024-11-03: clocks fall 02:00 → 01:00 EST, so 01:30 wall time
+	// occurs twice. Window Sun 01:00–02:00 NY. Both 01:30 instances are in-window.
+	fallWin := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "America/New_York", Days: []string{"Sun"}, Start: "01:00", End: "02:00"},
+	})
+	firstEDT := time.Date(2024, 11, 3, 5, 30, 0, 0, time.UTC)  // 01:30 EDT (first pass)
+	secondEST := time.Date(2024, 11, 3, 6, 30, 0, 0, time.UTC) // 01:30 EST (second pass)
+	if !fallWin.InWindow(firstEDT) {
+		t.Error("fall-back 01:30 EDT (first pass) should be in window")
+	}
+	if !fallWin.InWindow(secondEST) {
+		t.Error("fall-back 01:30 EST (second/repeated pass) should also be in window (wall-clock approx)")
+	}
+	if fallWin.InWindow(time.Date(2024, 11, 3, 8, 0, 0, 0, time.UTC)) { // 03:00 EST
+		t.Error("fall-back 03:00 EST is outside the Sun 01:00–02:00 window")
+	}
+}
+
 func TestWorstCasePeriod(t *testing.T) {
 	tests := []struct {
 		name string
@@ -151,6 +242,20 @@ func TestWorstCasePeriod(t *testing.T) {
 				{Timezone: "UTC", Days: []string{"Mon"}, Start: "02:00", End: "06:00"},
 			},
 			want: 168 * time.Hour, // 7d
+			ok:   true,
+		},
+		{
+			// A single occurrence that wraps the week boundary on the canonical UTC
+			// timeline (Asia/Tokyo Mon 06:00–10:00 = Sun 21:00 UTC + 4h, crossing
+			// the Monday-midnight wrap). The circular join reassembles it into ONE
+			// occurrence anchored at its true (late-week) start, so there is exactly
+			// one rotation opportunity per weekly cycle ⇒ P = the full 7d, not a
+			// spurious split (ShortestWindow covers the duration of this same wrap).
+			name: "single occurrence wraps the week boundary",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "Asia/Tokyo", Days: []string{"Mon"}, Start: "06:00", End: "10:00"},
+			},
+			want: 168 * time.Hour, // 7d — one occurrence per week
 			ok:   true,
 		},
 	}
