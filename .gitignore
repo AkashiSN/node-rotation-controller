@@ -26,3 +26,10 @@ Thumbs.db
 # Helm
 charts/*/charts/
 charts/*/Chart.lock
+
+# KWOK e2e harness (test/e2e/kwok) local artifacts
+# Generated kubeconfig and any scratch cluster state the harness writes locally.
+test/e2e/kwok/kubeconfig
+test/e2e/kwok/*.kubeconfig
+test/e2e/kwok/artifacts/
+artifacts/

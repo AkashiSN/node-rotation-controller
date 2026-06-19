@@ -1,0 +1,107 @@
+name: E2E (KWOK)
+
+# Standalone KWOK-based Karpenter e2e for the surge mechanism (issue #92),
+# separate from ci.yaml. It runs the real Karpenter v1 KWOK reference
+# cloudprovider on kind and drives this controller through the surge lifecycle.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The e2e job is deliberately NOT path-filtered: it runs on every PR so a
+  # branch-protection required check named "e2e" can never hang `pending` on a
+  # PR that happens to touch no matching path (the reviewer's "(a) required check
+  # not stuck pending" concern). The job is bounded by an explicit timeout.
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      E2E_KWOK_CLUSTER: nrc-kwok-e2e
+      E2E_KWOK_IMAGE: ghcr.io/akashisn/node-rotation-controller:e2e
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: azure/setup-helm@v4
+
+      # kind, ko, kustomize are installed into ./bin by the Makefile at pinned
+      # versions; cache the module/build cache to keep the KWOK provider build
+      # (ko) and tool installs fast across runs.
+      - name: Cache Go build/module + e2e tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            bin
+          key: e2e-kwok-${{ runner.os }}-${{ hashFiles('go.sum', 'Makefile') }}
+          restore-keys: |
+            e2e-kwok-${{ runner.os }}-
+
+      - name: Build controller image
+        run: docker build -t "$E2E_KWOK_IMAGE" .
+
+      - name: Install e2e tooling (kind, ko, kustomize)
+        run: make kind ko kustomize
+
+      # Build the KWOK provider image up front so its (slow) ko build is a
+      # distinct, cacheable step in the logs.
+      - name: Build Karpenter KWOK provider image
+        run: ./bin/ko version >/dev/null && PATH="$PWD/bin:$PATH" test/e2e/kwok/build-kwok-image.sh
+
+      - name: Bootstrap cluster (kind + Karpenter KWOK + controller chart)
+        run: |
+          PATH="$PWD/bin:$PATH" \
+          CLUSTER_NAME="$E2E_KWOK_CLUSTER" \
+          CONTROLLER_IMAGE="$E2E_KWOK_IMAGE" \
+            test/e2e/kwok/bootstrap.sh
+
+      - name: Run e2e (go test -tags e2e)
+        run: |
+          PATH="$PWD/bin:$PATH" \
+            go test -tags e2e -count=1 -v -timeout 30m ./test/e2e/kwok/...
+
+      # Failure artifacts from the FIRST commit (issue #92): cluster dumps,
+      # controller + Karpenter logs, and NodeClaim/NodePool/Pod YAML.
+      - name: Collect failure artifacts
+        if: failure()
+        run: |
+          PATH="$PWD/bin:$PATH"
+          out=artifacts; mkdir -p "$out"
+          kubectl cluster-info dump --all-namespaces --output-directory "$out/cluster-dump" || true
+          for ns in node-rotation-system kube-system default; do
+            kubectl get all -n "$ns" -o wide > "$out/get-all-$ns.txt" 2>&1 || true
+            kubectl get events -n "$ns" --sort-by=.lastTimestamp > "$out/events-$ns.txt" 2>&1 || true
+            kubectl describe pods -n "$ns" > "$out/describe-pods-$ns.txt" 2>&1 || true
+          done
+          kubectl logs -n node-rotation-system -l app.kubernetes.io/name=node-rotation-controller --tail=-1 > "$out/controller.log" 2>&1 || true
+          kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter --tail=-1 > "$out/karpenter.log" 2>&1 || true
+          kubectl logs -n kube-system -l app=kwok-controller --tail=-1 > "$out/kwok.log" 2>&1 || true
+          kubectl get nodeclaims -o yaml > "$out/nodeclaims.yaml" 2>&1 || true
+          kubectl get nodepools -o yaml > "$out/nodepools.yaml" 2>&1 || true
+          kubectl get nodes -o yaml > "$out/nodes.yaml" 2>&1 || true
+          kubectl get pods -A -o yaml > "$out/pods.yaml" 2>&1 || true
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-kwok-artifacts-${{ github.run_id }}
+          path: artifacts
+          retention-days: 7
+
+      - name: Tear down kind cluster
+        if: always()
+        run: ./bin/kind delete cluster --name "$E2E_KWOK_CLUSTER" || true

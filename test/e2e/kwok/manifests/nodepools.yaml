@@ -1,0 +1,93 @@
+# Two NodePools fronting the KWOK reference cloudprovider (issue #92).
+#
+#   nodepool-a  → in scope (label noderotation-e2e/pool=a); the controller rotates it.
+#   nodepool-b  → a SECOND pool used to prove multi-NodePool confinement: it has
+#                 spare capacity but must never absorb pool-a's placeholder.
+#
+# Both retain expireAfter as the §3.5 backstop (never removed by the controller),
+# set very long here so the backstop never fires mid-test — the controller drives
+# rotation via its ageThreshold override, not expiry. consolidationPolicy is
+# WhenEmpty with a long consolidateAfter so KWOK does not spontaneously
+# consolidate/disrupt nodes while the do-not-disrupt and confinement assertions
+# run (the "voluntary disruption cannot be induced" form of the do-not-disrupt
+# criterion — see e2e_test.go and README.md).
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: nodepool-a
+  labels:
+    noderotation-e2e/pool: a
+    # Only pool-a is in the controller's scope (controller-values.yaml selector).
+    # pool-b is deliberately out of scope so it can hold spare capacity that the
+    # confinement assertions prove is never absorbed by pool-a's placeholder.
+    noderotation-e2e/in-scope: "true"
+spec:
+  template:
+    metadata:
+      labels:
+        noderotation-e2e/pool: a
+    spec:
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["test-zone-a"]
+      nodeClassRef:
+        name: default
+        kind: KWOKNodeClass
+        group: karpenter.kwok.sh
+      expireAfter: 8760h # 365d: the §3.5 backstop, set far out so it never races the test
+  limits:
+    cpu: "1000"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 8760h # effectively disabled for the duration of the test
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: nodepool-b
+  labels:
+    noderotation-e2e/pool: b
+spec:
+  template:
+    metadata:
+      labels:
+        noderotation-e2e/pool: b
+    spec:
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["test-zone-a"]
+      nodeClassRef:
+        name: default
+        kind: KWOKNodeClass
+        group: karpenter.kwok.sh
+      expireAfter: 8760h
+  limits:
+    cpu: "1000"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 8760h
+---
+apiVersion: karpenter.kwok.sh/v1alpha1
+kind: KWOKNodeClass
+metadata:
+  name: default
