@@ -7,3 +7,6 @@
 *.bak
 *.swp
 *~
+# helm-unittest fixtures (issue #75) — assert rendered RBAC/PriorityClass and
+# schema rejections in CI; not part of the released chart package.
+tests/
