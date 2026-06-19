@@ -68,27 +68,39 @@ func (r *reconcileRecorder) count(name string) int {
 	return r.seen[name]
 }
 
-// waitEnqueued blocks until the named pool has been reconciled at least once
-// (the watch event fired and dispatched), or fails after timeout.
-func (r *reconcileRecorder) waitEnqueued(t *testing.T, name string) {
+// waitEnqueuedAfter blocks until the named pool's reconcile count climbs past
+// base — i.e. a reconcile was enqueued *after* the baseline was taken — then
+// returns the new count (so it can chain as the next baseline). Callers must
+// capture base from a quiescent point (waitQuiescent) immediately before the
+// stimulus: an in-scope pool self-requeues every longRequeue/shortRequeue (60s /
+// 30s), both well beyond this 20s deadline, so once the count has settled the
+// only thing that can bump it within the window is the watch under test — never
+// a stray self-requeue. Checking count > 0 instead (the old waitEnqueued) was a
+// false positive: after the first NodePool-create reconcile the count is already
+// nonzero, so every later positive case returned immediately without proving its
+// watch actually fired.
+func (r *reconcileRecorder) waitEnqueuedAfter(t *testing.T, name string, base int) int {
 	t.Helper()
 	deadline := time.After(20 * time.Second)
 	for {
-		if r.count(name) > 0 {
-			return
+		if got := r.count(name); got > base {
+			return got
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("reconcile for %q was not enqueued within 20s", name)
+			t.Fatalf("reconcile for %q was not enqueued after the stimulus within 20s (count stuck at %d)", name, base)
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 }
 
 // waitQuiescent waits until the named pool's reconcile count holds steady for a
-// short settle window, then returns it — so a subsequent negative assertion
-// baselines against a count no longer being bumped by an earlier in-flight
-// reconcile.
+// short settle window, then returns it as a clean baseline — so a following
+// assertion (waitEnqueuedAfter for a positive, assertNoNewBeyond for a negative)
+// measures only the next stimulus, not an earlier in-flight reconcile still
+// draining. The settle window confirms the last reconcile finished ≥500ms ago,
+// so its self-requeue (≥30s out for an in-scope pool) cannot fire inside the
+// 20s/2s assertion window that follows.
 func (r *reconcileRecorder) waitQuiescent(t *testing.T, name string) int {
 	t.Helper()
 	const settle = 500 * time.Millisecond
@@ -105,25 +117,6 @@ func (r *reconcileRecorder) waitQuiescent(t *testing.T, name string) int {
 				stableSince = time.Now()
 			} else if time.Since(stableSince) >= settle {
 				return last
-			}
-		}
-	}
-}
-
-// assertNotEnqueued asserts the named pool is not reconciled for a short window.
-// It first records the baseline so a prior, unrelated reconcile (e.g. the
-// in-scope pool's own self-requeue) is not mistaken for a new enqueue.
-func (r *reconcileRecorder) assertNotEnqueued(t *testing.T, name string, window time.Duration) {
-	t.Helper()
-	base := r.count(name)
-	deadline := time.After(window)
-	for {
-		select {
-		case <-deadline:
-			return
-		case <-time.After(50 * time.Millisecond):
-			if got := r.count(name); got > base {
-				t.Fatalf("reconcile for %q was unexpectedly enqueued (count %d -> %d)", name, base, got)
 			}
 		}
 	}
@@ -214,12 +207,20 @@ func TestSetupWithManagerWatches(t *testing.T) {
 	mustCreate(t, ctx, api, namespace(controllerNS))
 
 	// ── Positive: in-scope NodePool create enqueues itself ──────────────────
+	// Nothing has touched watchPoolName yet, so baseline 0: the For(&NodePool{})
+	// watch must drive its first reconcile.
 	mustCreate(t, ctx, api, inScopeNodePool(watchPoolName))
-	rec.waitEnqueued(t, watchPoolName)
+	rec.waitEnqueuedAfter(t, watchPoolName, 0)
 
 	// An out-of-scope pool exists so labeled-but-off-scope objects below have a
 	// real target whose key must never be reconciled into an in-scope step.
 	mustCreate(t, ctx, api, offScopeNodePool(offPoolName))
+
+	// Each positive case below settles watchPoolName to a quiescent baseline
+	// *immediately before* its stimulus, then requires the count to climb past
+	// that baseline — so it proves the specific watch under test fired, not just
+	// that some earlier reconcile (the NodePool create, or a self-requeue) had
+	// already bumped the count.
 
 	// ── Positive: labeled NodeClaim mapped to its NodePool ──────────────────
 	t.Run("labeled NodeClaim enqueues its NodePool", func(t *testing.T) {
@@ -230,8 +231,9 @@ func TestSetupWithManagerWatches(t *testing.T) {
 			},
 			Spec: nodeClaimSpec(),
 		}
+		base := rec.waitQuiescent(t, watchPoolName)
 		mustCreate(t, ctx, api, nc)
-		rec.waitEnqueued(t, watchPoolName)
+		rec.waitEnqueuedAfter(t, watchPoolName, base)
 	})
 
 	// ── Positive: placeholder Pod Pending -> Running ────────────────────────
@@ -240,25 +242,32 @@ func TestSetupWithManagerWatches(t *testing.T) {
 			annotations.SurgeFor:    "nc-old",
 			karpv1.NodePoolLabelKey: watchPoolName,
 		})
-		mustCreate(t, ctx, api, ph)
 		// Create lands Pending (no predicate match); the transition to Running is
-		// what placeholderRunning() enqueues on.
+		// what placeholderRunning() enqueues on. Baseline after the no-op create so
+		// only the Running transition can satisfy the wait.
+		mustCreate(t, ctx, api, ph)
+		base := rec.waitQuiescent(t, watchPoolName)
 		setPodRunning(t, ctx, api, ph)
-		rec.waitEnqueued(t, watchPoolName)
+		rec.waitEnqueuedAfter(t, watchPoolName, base)
 	})
 
 	// ── Positive: Node Ready=False -> Ready=True ────────────────────────────
 	t.Run("Node becoming Ready enqueues its NodePool", func(t *testing.T) {
 		n := labeledNode("node-watch", watchPoolName, corev1.ConditionFalse)
 		mustCreate(t, ctx, api, n)
+		base := rec.waitQuiescent(t, watchPoolName)
 		setNodeReady(t, ctx, api, n, corev1.ConditionTrue)
-		rec.waitEnqueued(t, watchPoolName)
+		rec.waitEnqueuedAfter(t, watchPoolName, base)
 	})
 
 	// ── Negative cases ──────────────────────────────────────────────────────
 	// Each labels (or namespaces) an object so the watch's predicate/map-func
 	// drops it. The target key checked is offPoolName, whose reconcile must stay
 	// flat: if a negative object leaked through, it would enqueue offPoolName.
+	// offPoolName is out of scope, so it never self-requeues — once settled, any
+	// later bump is necessarily a leaked watch event, not the periodic requeue.
+	// Each case settles offPoolName to a baseline *before* applying its stimulus,
+	// then asserts the count never climbs past that baseline within the window.
 	const quiet = 2 * time.Second
 
 	t.Run("unlabeled NodeClaim enqueues nothing", func(t *testing.T) {
@@ -266,8 +275,9 @@ func TestSetupWithManagerWatches(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "nc-manual"},
 			Spec:       nodeClaimSpec(),
 		}
+		base := rec.waitQuiescent(t, offPoolName)
 		mustCreate(t, ctx, api, nc)
-		rec.assertNotEnqueued(t, offPoolName, quiet)
+		assertNoNewBeyond(t, rec, offPoolName, base, quiet)
 	})
 
 	t.Run("placeholder in another namespace enqueues nothing", func(t *testing.T) {
@@ -277,8 +287,9 @@ func TestSetupWithManagerWatches(t *testing.T) {
 			karpv1.NodePoolLabelKey: offPoolName,
 		})
 		mustCreate(t, ctx, api, ph)
+		base := rec.waitQuiescent(t, offPoolName)
 		setPodRunning(t, ctx, api, ph)
-		rec.assertNotEnqueued(t, offPoolName, quiet)
+		assertNoNewBeyond(t, rec, offPoolName, base, quiet)
 	})
 
 	t.Run("Pod without surge markers enqueues nothing", func(t *testing.T) {
@@ -286,22 +297,23 @@ func TestSetupWithManagerWatches(t *testing.T) {
 		// placeholderToNodePool must drop it even on reaching Running.
 		p := placeholderPod("plain-pod", controllerNS, nil)
 		mustCreate(t, ctx, api, p)
+		base := rec.waitQuiescent(t, offPoolName)
 		setPodRunning(t, ctx, api, p)
-		rec.assertNotEnqueued(t, offPoolName, quiet)
+		assertNoNewBeyond(t, rec, offPoolName, base, quiet)
 	})
 
 	t.Run("already-Ready Node update with no transition enqueues nothing", func(t *testing.T) {
 		// Create not-Ready, then flip to Ready via the status subresource — that
-		// genuine False->True transition is the one nodeBecameReady enqueues on, so
-		// wait for it and baseline. A subsequent Ready->Ready update (a label edit)
-		// carries no readiness transition and must NOT re-enqueue.
+		// genuine False->True transition is the one nodeBecameReady enqueues on.
+		// Settle offPoolName *before* the transition so the wait proves the
+		// transition itself enqueued (count past the pre-transition baseline), not
+		// offPoolName's earlier create reconcile. A subsequent Ready->Ready update
+		// (a label edit) carries no readiness transition and must NOT re-enqueue.
 		n := labeledNode("node-already-ready", offPoolName, corev1.ConditionFalse)
 		mustCreate(t, ctx, api, n)
+		preTransition := rec.waitQuiescent(t, offPoolName)
 		setNodeReady(t, ctx, api, n, corev1.ConditionTrue)
-		rec.waitEnqueued(t, offPoolName)
-		// Let the readiness-transition reconcile drain so its in-flight dispatch is
-		// not mistaken for the label update's; then baseline.
-		base := rec.waitQuiescent(t, offPoolName)
+		base := rec.waitEnqueuedAfter(t, offPoolName, preTransition)
 		patchNodeLabel(t, ctx, api, n, "touched", "yes")
 		assertNoNewBeyond(t, rec, offPoolName, base, quiet)
 	})
