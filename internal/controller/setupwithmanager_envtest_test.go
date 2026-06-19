@@ -267,8 +267,7 @@ func TestSetupWithManagerWatches(t *testing.T) {
 	// offPoolName is out of scope, so it never self-requeues — once settled, any
 	// later bump is necessarily a leaked watch event, not the periodic requeue.
 	// Each case settles offPoolName to a baseline *before* applying its stimulus,
-	// then asserts the count never climbs past that baseline within the window.
-	const quiet = 2 * time.Second
+	// then asserts the count never climbs past that baseline within negativeWindow.
 
 	t.Run("unlabeled NodeClaim enqueues nothing", func(t *testing.T) {
 		nc := &karpv1.NodeClaim{
@@ -277,7 +276,7 @@ func TestSetupWithManagerWatches(t *testing.T) {
 		}
 		base := rec.waitQuiescent(t, offPoolName)
 		mustCreate(t, ctx, api, nc)
-		assertNoNewBeyond(t, rec, offPoolName, base, quiet)
+		rec.assertNoNewBeyond(t, base)
 	})
 
 	t.Run("placeholder in another namespace enqueues nothing", func(t *testing.T) {
@@ -289,7 +288,7 @@ func TestSetupWithManagerWatches(t *testing.T) {
 		mustCreate(t, ctx, api, ph)
 		base := rec.waitQuiescent(t, offPoolName)
 		setPodRunning(t, ctx, api, ph)
-		assertNoNewBeyond(t, rec, offPoolName, base, quiet)
+		rec.assertNoNewBeyond(t, base)
 	})
 
 	t.Run("Pod without surge markers enqueues nothing", func(t *testing.T) {
@@ -299,7 +298,7 @@ func TestSetupWithManagerWatches(t *testing.T) {
 		mustCreate(t, ctx, api, p)
 		base := rec.waitQuiescent(t, offPoolName)
 		setPodRunning(t, ctx, api, p)
-		assertNoNewBeyond(t, rec, offPoolName, base, quiet)
+		rec.assertNoNewBeyond(t, base)
 	})
 
 	t.Run("already-Ready Node update with no transition enqueues nothing", func(t *testing.T) {
@@ -315,7 +314,7 @@ func TestSetupWithManagerWatches(t *testing.T) {
 		setNodeReady(t, ctx, api, n, corev1.ConditionTrue)
 		base := rec.waitEnqueuedAfter(t, offPoolName, preTransition)
 		patchNodeLabel(t, ctx, api, n, "touched", "yes")
-		assertNoNewBeyond(t, rec, offPoolName, base, quiet)
+		rec.assertNoNewBeyond(t, base)
 	})
 }
 
@@ -470,18 +469,26 @@ func patchNodeLabel(t *testing.T, ctx context.Context, c client.Client, n *corev
 	}
 }
 
-// assertNoNewBeyond asserts the named pool's reconcile count does not climb past
-// base for the given window — used where a baseline enqueue already happened.
-func assertNoNewBeyond(t *testing.T, rec *reconcileRecorder, name string, base int, window time.Duration) {
+// negativeWindow is how long the negative cases watch offPoolName for a leaked
+// reconcile. offPoolName is out of scope and never self-requeues, so this only
+// needs to outlast informer delivery of a (wrongly) enqueued event, not any
+// periodic requeue.
+const negativeWindow = 2 * time.Second
+
+// assertNoNewBeyond asserts offPoolName's reconcile count does not climb past
+// base within negativeWindow — used by the negative cases, which target the
+// out-of-scope pool (it never self-requeues, so any climb is a leaked watch
+// event) after baselining a prior, intended enqueue.
+func (r *reconcileRecorder) assertNoNewBeyond(t *testing.T, base int) {
 	t.Helper()
-	deadline := time.After(window)
+	deadline := time.After(negativeWindow)
 	for {
 		select {
 		case <-deadline:
 			return
 		case <-time.After(50 * time.Millisecond):
-			if got := rec.count(name); got > base {
-				t.Fatalf("reconcile for %q was unexpectedly enqueued (count %d -> %d)", name, base, got)
+			if got := r.count(offPoolName); got > base {
+				t.Fatalf("reconcile for %q was unexpectedly enqueued (count %d -> %d)", offPoolName, base, got)
 			}
 		}
 	}
