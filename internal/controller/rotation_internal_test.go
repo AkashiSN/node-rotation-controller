@@ -908,6 +908,92 @@ func TestReadyTimeoutDoesNotReapSameNamedPodInOtherNamespace(t *testing.T) {
 	}
 }
 
+// TestReadyTimeoutInducedClaimFallbackReaps covers the never-bound fallback —
+// the DOMINANT readyTimeout cause (spec §3.3 Rollback, §5.2). The induced
+// instance never registers / never reaches Ready, so no bind is ever observable:
+// the placeholder carries no spec.nodeName and the pending handler never persisted
+// surge-claim. failPending must then fall back to inducedClaim(), which resolves
+// the surge claim as the pool's NodeClaim created after started-at with NO
+// registered Node, reap it under the §5.2 guards, and fail the rotation cleanly.
+//
+// The fixture also seeds the two negative cases the guards must reject:
+//   - an absorb host created BEFORE started-at (the after-start guard); and
+//   - a claim created after started-at but already carrying real Pods on its node
+//     (the hosting-nothing-but-the-placeholder guard).
+//
+// Both must survive; only the never-registered claim is reaped.
+func TestReadyTimeoutInducedClaimFallbackReaps(t *testing.T) {
+	rec := &fakeRecorder{}
+	startedAt := testNow.Add(-20 * time.Minute) // readyTimeout (15m) elapsed
+	// Candidate WITHOUT surge-claim: the never-bound path never persisted it.
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncAnn(
+		annotations.State, annotations.StatePending,
+		annotations.StartedAt, rfc(startedAt),
+	))
+	// The induced surge claim: created after started-at, never registered a Node →
+	// the only claim inducedClaim's fallback may resolve, reapable trivially.
+	induced := testClaim("nc-induced", 0, ncCreated(startedAt.Add(5*time.Minute)))
+	induced.Status.NodeName = ""
+	// Negative case A — a pre-existing capacity-absorb host created BEFORE
+	// started-at. The after-start guard must spare it (healthy production capacity,
+	// not surge debris), and inducedClaim must never resolve it.
+	absorbNode := "node-absorb"
+	absorb := testClaim("nc-absorb", time.Hour, ncCreated(startedAt.Add(-30*time.Minute)), ncNode(absorbNode))
+	// Negative case B — a claim born after started-at (an unrelated concurrent
+	// scale-up) that already registered a Node carrying a real Pod. inducedClaim
+	// skips it (has a Node), and even if named the reap guard would spare it.
+	scaleupNode := "node-scaleup"
+	scaleup := testClaim("nc-scaleup", 0, ncCreated(startedAt.Add(2*time.Minute)), ncNode(scaleupNode))
+	realPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "tenant-app", Namespace: "default"},
+		Spec:       corev1.PodSpec{NodeName: scaleupNode},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
+	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
+	// Placeholder never bound (no spec.nodeName) — the no-bind precondition.
+	ph := placeholderPod("", corev1.PodPending)
+	r := newReconciler(t, testNow, rec, pool, cand, induced, absorb, scaleup,
+		oldNode, testK8sNode(absorbNode, true, nil, false), testK8sNode(scaleupNode, true, nil, false), realPod, ph)
+
+	// Direct unit check: the fallback resolves the never-registered claim, not the
+	// candidate, the absorb host, or the already-occupied scale-up claim.
+	if got, err := r.inducedClaim(context.Background(), pool, cand); err != nil || got != "nc-induced" {
+		t.Fatalf("inducedClaim fallback: got %q (err %v), want nc-induced", got, err)
+	}
+
+	step(t, r, pool)
+
+	c := getClaimOrNil(t, r, "nc-old")
+	if c == nil || c.Annotations[annotations.State] != annotations.StateFailed {
+		t.Fatalf("claim must be failed: %+v", c)
+	}
+	if c.Annotations[annotations.RetryCount] != "1" {
+		t.Errorf("retry-count: got %q, want 1", c.Annotations[annotations.RetryCount])
+	}
+	if c.Annotations[annotations.StartedAt] != "" || c.Annotations[annotations.SurgeClaim] != "" {
+		t.Errorf("started-at and surge-claim must be cleared: %+v", c.Annotations)
+	}
+	if getPool(t, r).Annotations[annotations.LastFailureAt] == "" {
+		t.Error("last-failure-at must be stamped on the NodePool")
+	}
+	if getClaimOrNil(t, r, "nc-induced") != nil {
+		t.Error("the never-registered induced claim must be reaped via the fallback")
+	}
+	if getClaimOrNil(t, r, "nc-absorb") == nil {
+		t.Error("a pre-existing absorb host (created before started-at) must NOT be reaped (spec §3.3)")
+	}
+	if getClaimOrNil(t, r, "nc-scaleup") == nil {
+		t.Error("a claim carrying real Pods must NOT be reaped (spec §3.3)")
+	}
+	if placeholderExists(t, r) {
+		t.Error("placeholder must be deleted on failure")
+	}
+	if rec.failure != 1 {
+		t.Errorf("failure metric: got %d", rec.failure)
+	}
+}
+
 // --- failed: torn-write crash recovery -------------------------------------
 
 func TestFailedTornWriteRepairReleasesAnchorAndPreservesPause(t *testing.T) {
