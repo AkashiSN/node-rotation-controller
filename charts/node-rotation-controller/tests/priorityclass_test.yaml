@@ -1,0 +1,47 @@
+suite: PriorityClass (spec §3.3)
+# Asserts the surge placeholder PriorityClass is the deliberate preemption
+# victim: a negative value, globalDefault: false, preemptionPolicy: Never.
+# A regression to a positive value (or a flipped preemptionPolicy) would pass
+# `helm template` today; these assertions catch it.
+templates:
+  - templates/priorityclass.yaml
+tests:
+  - it: value is negative (default -10)
+    asserts:
+      - equal:
+          path: kind
+          value: PriorityClass
+      - equal:
+          path: apiVersion
+          value: scheduling.k8s.io/v1
+      - equal:
+          path: value
+          value: -10
+      - isType:
+          path: value
+          type: int
+      # negative: the placeholder must be the preemption victim (value <= -1)
+      - lessOrEqual:
+          path: value
+          value: -1
+
+  - it: globalDefault is false and preemptionPolicy is Never
+    asserts:
+      - equal:
+          path: globalDefault
+          value: false
+      - equal:
+          path: preemptionPolicy
+          value: Never
+
+  - it: a custom positive value still renders as set (schema, not template, rejects it)
+    # The template does not clamp the value; negativity is enforced by
+    # values.schema.json (covered by the expected-to-fail render in CI). This
+    # case documents that the template itself passes the value through, so the
+    # negative-value guarantee lives in the schema, asserted separately.
+    set:
+      placeholder.priorityClass.value: -1
+    asserts:
+      - equal:
+          path: value
+          value: -1

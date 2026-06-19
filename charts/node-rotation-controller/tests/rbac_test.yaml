@@ -1,0 +1,140 @@
+suite: RBAC verbs (spec §4.3)
+# Asserts the rendered RBAC verb set line-by-line against spec §4.3, including
+# absence checks (no create on nodeclaims, no delete on nodepools, no
+# priorityclasses verb, pods write has no update, both events apiGroups present).
+# A regression that widens (or narrows) these verbs would pass `helm template`
+# today; these assertions catch it.
+templates:
+  - templates/clusterrole.yaml
+  - templates/role.yaml
+tests:
+  # ----- ClusterRole -----
+  - it: ClusterRole nodeclaims = get/list/watch/update/patch/delete and NO create
+    template: templates/clusterrole.yaml
+    asserts:
+      - equal:
+          path: rules[0].apiGroups[0]
+          value: karpenter.sh
+      - equal:
+          path: rules[0].resources[0]
+          value: nodeclaims
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "list", "watch", "update", "patch", "delete"]
+      # explicit absence: v1 never creates a NodeClaim (spec §3.3)
+      - notContains:
+          path: rules[0].verbs
+          content: create
+
+  - it: ClusterRole nodepools = get/list/watch/update/patch and NO delete
+    template: templates/clusterrole.yaml
+    asserts:
+      - equal:
+          path: rules[1].resources[0]
+          value: nodepools
+      - equal:
+          path: rules[1].verbs
+          value: ["get", "list", "watch", "update", "patch"]
+      - notContains:
+          path: rules[1].verbs
+          content: delete
+      - notContains:
+          path: rules[1].verbs
+          content: create
+
+  - it: ClusterRole nodes write = update + patch
+    template: templates/clusterrole.yaml
+    asserts:
+      - equal:
+          path: rules[2].resources[0]
+          value: nodes
+      - equal:
+          path: rules[2].verbs
+          value: ["get", "list", "watch", "update", "patch"]
+      - contains:
+          path: rules[2].verbs
+          content: update
+      - contains:
+          path: rules[2].verbs
+          content: patch
+
+  - it: ClusterRole pods are read-only here (cluster-wide headroom read)
+    template: templates/clusterrole.yaml
+    asserts:
+      - equal:
+          path: rules[3].resources[0]
+          value: pods
+      - equal:
+          path: rules[3].verbs
+          value: ["get", "list", "watch"]
+      # cluster-wide pods grant must not include any write verb
+      - notContains:
+          path: rules[3].verbs
+          content: create
+      - notContains:
+          path: rules[3].verbs
+          content: delete
+      - notContains:
+          path: rules[3].verbs
+          content: update
+
+  - it: ClusterRole grants the events.k8s.io apiGroup
+    template: templates/clusterrole.yaml
+    asserts:
+      - equal:
+          path: rules[4].apiGroups[0]
+          value: events.k8s.io
+      - equal:
+          path: rules[4].resources[0]
+          value: events
+      - equal:
+          path: rules[4].verbs
+          value: ["create", "patch"]
+
+  - it: ClusterRole never grants any priorityclasses verb (installed statically)
+    template: templates/clusterrole.yaml
+    asserts:
+      # no rule mentions the scheduling.k8s.io apiGroup or priorityclasses
+      - notMatchRegexRaw:
+          pattern: scheduling\.k8s\.io
+      - notMatchRegexRaw:
+          pattern: priorityclasses
+
+  # ----- Role (namespaced) -----
+  - it: Role pods write = create + delete and NO update
+    template: templates/role.yaml
+    asserts:
+      - equal:
+          path: rules[0].resources[0]
+          value: pods
+      - equal:
+          path: rules[0].verbs
+          value: ["create", "delete"]
+      # placeholder Pods are never updated in place (spec §3.3)
+      - notContains:
+          path: rules[0].verbs
+          content: update
+      - notContains:
+          path: rules[0].verbs
+          content: patch
+
+  - it: Role grants the core ("") events apiGroup (leader-election)
+    template: templates/role.yaml
+    asserts:
+      - equal:
+          path: rules[1].apiGroups[0]
+          value: ""
+      - equal:
+          path: rules[1].resources[0]
+          value: events
+      - equal:
+          path: rules[1].verbs
+          value: ["create", "patch"]
+
+  - it: Role never grants any priorityclasses verb
+    template: templates/role.yaml
+    asserts:
+      - notMatchRegexRaw:
+          pattern: scheduling\.k8s\.io
+      - notMatchRegexRaw:
+          pattern: priorityclasses

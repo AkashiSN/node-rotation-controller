@@ -61,3 +61,36 @@ jobs:
         run: helm template rot charts/node-rotation-controller --namespace node-rotation-system
       - name: helm template (ServiceMonitor enabled)
         run: helm template rot charts/node-rotation-controller --namespace node-rotation-system --set metrics.serviceMonitor.enabled=true
+
+      # Rendered-manifest content assertions (issue #75): prove the RBAC verb set
+      # (§4.3) and the placeholder PriorityClass (§3.3) match the spec, not just
+      # that the chart renders. Tests live in charts/node-rotation-controller/tests/.
+      - name: Install helm-unittest plugin
+        run: helm plugin install --verify=false https://github.com/helm-unittest/helm-unittest --version v1.1.1
+      - name: helm unittest (RBAC + PriorityClass assertions)
+        run: helm unittest charts/node-rotation-controller
+
+      # values.schema.json negative cases (issue #75, §5.4): each invalid value
+      # MUST be rejected by `helm template` (the schema is validated at render
+      # time). Expected-to-fail renders — the step fails if any bad value renders.
+      - name: values.schema.json rejects invalid values
+        run: |
+          set -euo pipefail
+          chart=charts/node-rotation-controller
+          assert_rejected() {
+            local desc="$1"; shift
+            if helm template rot "$chart" "$@" >/dev/null 2>&1; then
+              echo "FAIL: schema accepted invalid value: $desc ($*)" >&2
+              exit 1
+            fi
+            echo "ok: rejected $desc"
+          }
+          # sanity: the defaults MUST render (guards against a broken assertion harness)
+          helm template rot "$chart" >/dev/null
+          echo "ok: defaults render"
+          assert_rejected "surge.maxUnavailable=2 (v1 is serial, const 1)" \
+            --set config.policy.surge.maxUnavailable=2
+          assert_rejected "surge.readyTimeout=0s (must be a positive duration)" \
+            --set config.policy.surge.readyTimeout=0s
+          assert_rejected "prePull.enabled=true (v2 feature, const false in v1)" \
+            --set config.policy.prePull.enabled=true
