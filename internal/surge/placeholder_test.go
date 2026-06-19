@@ -235,6 +235,50 @@ func TestBuildPlaceholderNodePoolNotInExclusion(t *testing.T) {
 	}
 }
 
+func TestBuildPlaceholderNodePoolExistsKeepsValue(t *testing.T) {
+	// An Exists requirement on the key is satisfied by any present value, so the
+	// candidate's value is kept (poolAllows → requirementPermits Exists branch).
+	in := baseInputs()
+	in.Pool = nodepool(req(corev1.LabelArchStable, corev1.NodeSelectorOpExists))
+	e, ok := requiredExprs(t, surge.BuildPlaceholder(in))[corev1.LabelArchStable]
+	if !ok || e.Operator != corev1.NodeSelectorOpIn || len(e.Values) != 1 || e.Values[0] != "arm64" {
+		t.Errorf("an Exists NodePool requirement must keep the candidate value: got %+v (present=%v)", e, ok)
+	}
+}
+
+func TestBuildPlaceholderNodePoolDoesNotExistDropsValue(t *testing.T) {
+	// A DoesNotExist requirement forbids the key entirely, so the candidate value
+	// can never satisfy it and the key is dropped (requirementPermits DoesNotExist
+	// branch → false).
+	in := baseInputs()
+	in.Pool = nodepool(req(corev1.LabelArchStable, corev1.NodeSelectorOpDoesNotExist))
+	if _, ok := requiredExprs(t, surge.BuildPlaceholder(in))[corev1.LabelArchStable]; ok {
+		t.Error("a DoesNotExist NodePool requirement forbids the key and must drop the value")
+	}
+}
+
+func TestBuildPlaceholderUnknownOperatorDropsValue(t *testing.T) {
+	// An unrecognized operator hits requirementPermits' default branch, which drops
+	// the key — the schedulability-preserving default (spec §3.3). Defensive: real
+	// NodePools never carry an unknown operator, but a future API addition must fail
+	// safe rather than silently pin an unschedulable value.
+	in := baseInputs()
+	in.Pool = nodepool(req(corev1.LabelArchStable, corev1.NodeSelectorOperator("Frobnicate"), "arm64"))
+	if _, ok := requiredExprs(t, surge.BuildPlaceholder(in))[corev1.LabelArchStable]; ok {
+		t.Error("an unrecognized NodePool operator must drop the key (schedulability-safe default)")
+	}
+}
+
+func TestBuildPlaceholderDropsEmptyBoundNumericRequirement(t *testing.T) {
+	// Gt/Lt require exactly one integer bound; an empty Values (len == 0) is
+	// malformed and the key is dropped (numericPermits len(values) != 1 branch). The
+	// existing malformed test covers two bounds; this covers the zero-bound boundary.
+	in := numericInputs("6", req(instanceGen, corev1.NodeSelectorOpGt))
+	if _, ok := requiredExprs(t, surge.BuildPlaceholder(in))[instanceGen]; ok {
+		t.Error("a numeric Gt requirement with no bound is malformed and must drop the key")
+	}
+}
+
 // customKey is a parity key a workload's nodeAffinity depends on that Karpenter
 // constrains on the NodeClaim but does not surface as a node label (issue #60).
 const customKey = "example.com/rack"
@@ -443,5 +487,52 @@ func TestBuildPlaceholderPreferred(t *testing.T) {
 	e := pref[0].Preference.MatchExpressions[0]
 	if e.Key != "node.kubernetes.io/instance-type" || e.Values[0] != "m6g.large" {
 		t.Errorf("preferred expr: got %+v", e)
+	}
+}
+
+// preferredExprs returns the preferred NodeSelectorRequirements keyed by label
+// key (each soft term carries exactly one expression, per nodeAffinity).
+func preferredExprs(t *testing.T, p *corev1.Pod) map[string]corev1.NodeSelectorRequirement {
+	t.Helper()
+	out := map[string]corev1.NodeSelectorRequirement{}
+	na := p.Spec.Affinity.NodeAffinity
+	if na == nil {
+		return out
+	}
+	for _, term := range na.PreferredDuringSchedulingIgnoredDuringExecution {
+		for _, e := range term.Preference.MatchExpressions {
+			out[e.Key] = e
+		}
+	}
+	return out
+}
+
+func TestBuildPlaceholderPreferredSkipsKeyAbsentFromBothSources(t *testing.T) {
+	// A preferred key present on neither the candidate node's labels nor the
+	// NodeClaim's requirements carries no value to replicate, so it is skipped — the
+	// preferred path shares replicatedRequirements' skip-when-empty default.
+	in := baseInputs()
+	in.Match.Preferred = []string{"node.kubernetes.io/instance-type"} // not on node, not on claim
+	if _, ok := preferredExprs(t, surge.BuildPlaceholder(in))["node.kubernetes.io/instance-type"]; ok {
+		t.Error("a preferred key absent from both sources must be skipped")
+	}
+}
+
+func TestBuildPlaceholderPreferredIntersectsWithNodePoolAllowed(t *testing.T) {
+	// A preferred value the NodePool no longer allows is dropped, exactly like the
+	// required path (replicatedRequirements intersects with poolAllows for both).
+	in := baseInputs()
+	in.Match.Preferred = []string{corev1.LabelTopologyZone} // candidate node label = us-east-1a
+	in.Pool = nodepool(req(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, "us-east-1b", "us-east-1c"))
+	if _, ok := preferredExprs(t, surge.BuildPlaceholder(in))[corev1.LabelTopologyZone]; ok {
+		t.Error("a preferred value disallowed by the NodePool must be dropped, not pinned")
+	}
+
+	// Negative control: when the NodePool still allows the value, the preferred
+	// requirement survives the intersection.
+	in.Pool = nodepool(req(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, "us-east-1a", "us-east-1b"))
+	e, ok := preferredExprs(t, surge.BuildPlaceholder(in))[corev1.LabelTopologyZone]
+	if !ok || e.Operator != corev1.NodeSelectorOpIn || len(e.Values) != 1 || e.Values[0] != "us-east-1a" {
+		t.Errorf("a NodePool-allowed preferred value must survive the intersection: got %+v (present=%v)", e, ok)
 	}
 }
