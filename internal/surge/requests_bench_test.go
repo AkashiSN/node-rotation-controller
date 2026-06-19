@@ -38,11 +38,8 @@ func clusterSnapshot(podCount int) []corev1.Pod {
 
 	// The candidate node's realistic workload mix. These are the only Pods that
 	// pass the reschedulable filter (minus the excluded ones).
-	onCandidate := podsPerNode
-	if onCandidate > podCount {
-		onCandidate = podCount
-	}
-	for i := 0; i < onCandidate; i++ {
+	onCandidate := min(podsPerNode, podCount)
+	for i := range onCandidate {
 		opts := []podOpt{
 			onNode(candidateNode),
 			reqs(rl("cpu", standardRequest, "memory", "128Mi")),
@@ -101,9 +98,8 @@ func BenchmarkReschedulableRequests(b *testing.B) {
 func BenchmarkIsInfraOrCompleted(b *testing.B) {
 	pods := clusterSnapshot(1_000)
 	b.ReportAllocs()
-	b.ResetTimer()
 	var hits int
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for j := range pods {
 			if surge.IsInfraOrCompleted(&pods[j]) {
 				hits++
