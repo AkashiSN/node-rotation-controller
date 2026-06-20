@@ -103,6 +103,56 @@ func consistently(t *testing.T, window time.Duration, what string, fn func() err
 	}
 }
 
+// startNudger forces the controller to reconcile the given NodePools promptly by
+// touching a benign annotation on each every few seconds, returning a stop func
+// the caller defers.
+//
+// KWOK runs a STATIC cluster: once its virtual nodes register it emits almost no
+// further watch events. The controller's watches are deliberately predicate-
+// filtered to real transitions (placeholder→Running, node→Ready, NodeClaim /
+// NodePool changes) with the periodic requeue as the backstop (SetupWithManager).
+// On a live cluster constant pod/node churn keeps reconciles flowing; under KWOK
+// the cluster goes silent during a candidate's age-out, so the controller leans
+// on its slow periodic requeue and can miss the candidate crossing ageThreshold
+// within a subtest's window — the rotation never starts and the wait times out.
+//
+// The nudge writes ONLY the noderotation-e2e/nudge annotation (a value the
+// controller never reads), via a merge patch that cannot conflict with the
+// controller's own annotation writes. It changes no rotation logic; it only wakes
+// the reconcile so selection/advancement happen promptly — the cluster churn a
+// real environment would supply. It is therefore a faithful test of the
+// controller's behavior, not a workaround that masks one.
+func startNudger(ctx context.Context, cl client.Client, pools ...string) func() {
+	done := make(chan struct{})
+	go func() {
+		// Space the nudges out (not a tight loop): each nudge wakes a single
+		// reconcile; the controller's read-modify-write of the candidate's
+		// started-at re-reads through the informer cache, so back-to-back
+		// reconciles can race a not-yet-propagated write and mis-fire the
+		// readyTimeout rollback. A spacing on the order of the controller's own
+		// shortRequeue lets the cache settle between reconciles while still being
+		// far faster than KWOK's quiet-period requeue backstop.
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		n := 0
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				n++
+				for _, p := range pools {
+					patch := []byte(fmt.Sprintf(
+						`{"metadata":{"annotations":{"noderotation-e2e/nudge":"%d"}}}`, n))
+					np := &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: p}}
+					_ = cl.Patch(ctx, np, client.RawPatch(types.MergePatchType, patch))
+				}
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
 // ── NodeClaim / Node helpers ────────────────────────────────────────────────
 
 func listClaims(ctx context.Context, cl client.Client, pool string) ([]karpv1.NodeClaim, error) {

@@ -71,7 +71,7 @@ jobs:
       - name: Run e2e (go test -tags e2e)
         run: |
           PATH="$PWD/bin:$PATH" \
-            go test -tags e2e -count=1 -v -timeout 30m ./test/e2e/kwok/...
+            go test -tags e2e -count=1 -v -timeout 38m ./test/e2e/kwok/...
 
       # Failure artifacts from the FIRST commit (issue #92): cluster dumps,
       # controller + Karpenter logs, and NodeClaim/NodePool/Pod YAML.

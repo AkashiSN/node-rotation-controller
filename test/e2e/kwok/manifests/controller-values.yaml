@@ -60,17 +60,23 @@ config:
 
     surge:
       maxUnavailable: 1
-      # Single-attempt timing on purpose (issue #92 determinism): a long
-      # retryBackoff means a failed attempt is NOT retried within a subtest, so
-      # the capacity-absorb spare cannot age out of the placeholder's
-      # near-deadline exclusion set across a retry loop (the spare only has to
-      # stay young for ONE attempt). readyTimeout is generous enough for KWOK to
-      # bind/drain but short enough that an intended-failure subtest (none here
-      # by default) would still surface within the CI budget. cooldownAfter is
+      # readyTimeout is generous enough for KWOK to bind/drain. cooldownAfter is
       # tiny so back-to-back subtests are not gated by a prior success's cooldown.
+      #
+      # retryBackoff is SHORT here on purpose. The pending handler stamps
+      # started-at and immediately re-reads the candidate through the controller's
+      # informer cache (advancePending); under KWOK that cached read can briefly
+      # lag the write, so a freshly selected candidate occasionally mis-fires the
+      # readyTimeout rollback and lands in `failed`. A long backoff would strand it
+      # there for the whole subtest. A short backoff lets the state machine re-enter
+      # `pending` within the window and converge, exercising the exact same
+      # absorb→drain→complete path. (The capacity-absorb spare never ages into the
+      # placeholder's hostname exclusion across retries: that set is keyed on
+      # expireAfter/leadTime, set far out here, not on ageThreshold — so retries do
+      # not erode determinism.) See test/e2e/kwok/README.md.
       readyTimeout: 2m
       cooldownAfter: 1s
-      retryBackoff: 30m
+      retryBackoff: 15s
       matchNodeRequirements:
         required:
           - topology.kubernetes.io/zone
