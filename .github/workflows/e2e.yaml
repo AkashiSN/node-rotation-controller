@@ -1,0 +1,156 @@
+name: E2E (KWOK)
+
+# Standalone KWOK-based Karpenter e2e for the surge mechanism (issue #92),
+# separate from ci.yaml. It runs the real Karpenter v1 KWOK reference
+# cloudprovider on kind and drives this controller through the surge lifecycle.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A SINGLE job named "e2e" so a branch-protection required check named "e2e"
+  # always reports a real conclusion and can never hang `pending` (the reviewer's
+  # "(a) required check not stuck pending" concern). We do NOT path-filter at the
+  # workflow/job level — a skipped *workflow/job* leaves a required check pending.
+  # Instead the heavy steps (the ~30-minute bootstrap + go test) are gated on an
+  # in-job change-detection step: a PR that touches no e2e-relevant path runs only
+  # the quick detect step and reports `e2e: success` in seconds, while a PR that
+  # touches the controller, chart, harness, deps, image, or this workflow runs the
+  # full suite. The job is bounded by an explicit timeout.
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      E2E_KWOK_CLUSTER: nrc-kwok-e2e
+      E2E_KWOK_IMAGE: ghcr.io/akashisn/node-rotation-controller:e2e
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so the change-detection diff can reach the PR base commit.
+          fetch-depth: 0
+
+      # Decide whether the expensive e2e run is warranted. On non-PR events (push
+      # to main) always run. On a PR, run only when an e2e-relevant path changed:
+      # the controller (internal/, cmd/), the deployed chart, the harness
+      # (test/e2e/), the build inputs (go.mod/go.sum, Makefile, Dockerfile), or
+      # this workflow itself. Anything else (docs, unrelated tests) reports green
+      # without paying for a cluster spin-up.
+      - name: Detect e2e-relevant changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "event=${{ github.event_name }} → running e2e"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE_SHA" HEAD || true)"
+          echo "changed files:"; echo "$changed"
+          # Keep only e2e-relevant code/config paths, then drop pure-markdown docs
+          # (a README under test/e2e/ should not spin up a cluster). No `grep -q`
+          # and no pipe-into-grep-q, so `set -o pipefail` cannot SIGPIPE-false-skip;
+          # `|| true` keeps an empty match from failing under `set -e`.
+          relevant="$(grep -E '^(internal/|cmd/|charts/|test/e2e/|go\.mod$|go\.sum$|Makefile$|Dockerfile$|\.github/workflows/e2e\.yaml$)' <<<"$changed" | grep -vE '\.md$' || true)"
+          if [ -n "$relevant" ]; then
+            echo "→ e2e-relevant (non-doc) paths changed: running the full suite"
+            echo "$relevant"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "→ no e2e-relevant (non-doc) paths changed: reporting green without the heavy run"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@v6
+        if: steps.changes.outputs.run == 'true'
+        with:
+          go-version-file: go.mod
+
+      - uses: azure/setup-helm@v4
+        if: steps.changes.outputs.run == 'true'
+
+      # kind, ko, kustomize are installed into ./bin by the Makefile at pinned
+      # versions; cache the module/build cache to keep the KWOK provider build
+      # (ko) and tool installs fast across runs.
+      - name: Cache Go build/module + e2e tools
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            bin
+          key: e2e-kwok-${{ runner.os }}-${{ hashFiles('go.sum', 'Makefile') }}
+          restore-keys: |
+            e2e-kwok-${{ runner.os }}-
+
+      - name: Build controller image
+        if: steps.changes.outputs.run == 'true'
+        run: docker build -t "$E2E_KWOK_IMAGE" .
+
+      - name: Install e2e tooling (kind, ko, kustomize)
+        if: steps.changes.outputs.run == 'true'
+        run: make kind ko kustomize
+
+      # Build the KWOK provider image up front so its (slow) ko build is a
+      # distinct, cacheable step in the logs.
+      - name: Build Karpenter KWOK provider image
+        if: steps.changes.outputs.run == 'true'
+        run: ./bin/ko version >/dev/null && PATH="$PWD/bin:$PATH" test/e2e/kwok/build-kwok-image.sh
+
+      - name: Bootstrap cluster (kind + Karpenter KWOK + controller chart)
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          PATH="$PWD/bin:$PATH" \
+          CLUSTER_NAME="$E2E_KWOK_CLUSTER" \
+          CONTROLLER_IMAGE="$E2E_KWOK_IMAGE" \
+            test/e2e/kwok/bootstrap.sh
+
+      - name: Run e2e (go test -tags e2e)
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          PATH="$PWD/bin:$PATH" \
+            go test -tags e2e -count=1 -v -timeout 38m ./test/e2e/kwok/...
+
+      # Failure artifacts from the FIRST commit (issue #92): cluster dumps,
+      # controller + Karpenter logs, and NodeClaim/NodePool/Pod YAML.
+      - name: Collect failure artifacts
+        if: failure() && steps.changes.outputs.run == 'true'
+        run: |
+          PATH="$PWD/bin:$PATH"
+          out=artifacts; mkdir -p "$out"
+          kubectl cluster-info dump --all-namespaces --output-directory "$out/cluster-dump" || true
+          for ns in node-rotation-system kube-system default; do
+            kubectl get all -n "$ns" -o wide > "$out/get-all-$ns.txt" 2>&1 || true
+            kubectl get events -n "$ns" --sort-by=.lastTimestamp > "$out/events-$ns.txt" 2>&1 || true
+            kubectl describe pods -n "$ns" > "$out/describe-pods-$ns.txt" 2>&1 || true
+          done
+          kubectl logs -n node-rotation-system -l app.kubernetes.io/name=node-rotation-controller --tail=-1 > "$out/controller.log" 2>&1 || true
+          kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter --tail=-1 > "$out/karpenter.log" 2>&1 || true
+          kubectl logs -n kube-system -l app=kwok-controller --tail=-1 > "$out/kwok.log" 2>&1 || true
+          kubectl get nodeclaims -o yaml > "$out/nodeclaims.yaml" 2>&1 || true
+          kubectl get nodepools -o yaml > "$out/nodepools.yaml" 2>&1 || true
+          kubectl get nodes -o yaml > "$out/nodes.yaml" 2>&1 || true
+          kubectl get pods -A -o yaml > "$out/pods.yaml" 2>&1 || true
+
+      - name: Upload failure artifacts
+        if: failure() && steps.changes.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-kwok-artifacts-${{ github.run_id }}
+          path: artifacts
+          retention-days: 7
+
+      - name: Tear down kind cluster
+        if: always() && steps.changes.outputs.run == 'true'
+        run: ./bin/kind delete cluster --name "$E2E_KWOK_CLUSTER" || true

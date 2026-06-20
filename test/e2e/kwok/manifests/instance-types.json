@@ -1,0 +1,42 @@
+[
+  {
+    "name": "e2e-small",
+    "architecture": "amd64",
+    "operatingSystems": ["linux"],
+    "resources": {
+      "cpu": "2",
+      "memory": "4Gi",
+      "ephemeral-storage": "20Gi"
+    },
+    "offerings": [
+      {
+        "Price": 0.5,
+        "Available": true,
+        "Requirements": [
+          { "key": "karpenter.sh/capacity-type", "operator": "In", "values": ["on-demand"] },
+          { "key": "topology.kubernetes.io/zone", "operator": "In", "values": ["test-zone-a"] }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "e2e-large",
+    "architecture": "amd64",
+    "operatingSystems": ["linux"],
+    "resources": {
+      "cpu": "8",
+      "memory": "16Gi",
+      "ephemeral-storage": "40Gi"
+    },
+    "offerings": [
+      {
+        "Price": 1.0,
+        "Available": true,
+        "Requirements": [
+          { "key": "karpenter.sh/capacity-type", "operator": "In", "values": ["on-demand"] },
+          { "key": "topology.kubernetes.io/zone", "operator": "In", "values": ["test-zone-a"] }
+        ]
+      }
+    ]
+  }
+]
