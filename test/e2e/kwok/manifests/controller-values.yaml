@@ -76,7 +76,12 @@ config:
       # not erode determinism.) See test/e2e/kwok/README.md.
       readyTimeout: 2m
       cooldownAfter: 1s
-      retryBackoff: 15s
+      # Short on purpose (see the note above): EscalatedBackoff caps at 8x the
+      # base, so a smaller base means a lower ceiling and more retry attempts
+      # inside a subtest window — important on loaded CI runners where the
+      # started-at cache lag fires more often, so a surge-completing subtest gets
+      # enough attempts to converge.
+      retryBackoff: 5s
       matchNodeRequirements:
         required:
           - topology.kubernetes.io/zone

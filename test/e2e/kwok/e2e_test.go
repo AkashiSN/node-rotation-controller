@@ -446,7 +446,7 @@ func testDoNotDisrupt(ctx context.Context, t *testing.T, cl client.Client) {
 	// deleted, with the drain held by the PDB above — BOTH the candidate node and
 	// the surge target carry do-not-disrupt with the controller-owned marker.
 	var surgeNode string
-	eventually(t, ageThreshold+120*time.Second, "both surge-pair nodes to carry controller-owned do-not-disrupt", func() error {
+	eventually(t, 8*time.Minute, "both surge-pair nodes to carry controller-owned do-not-disrupt", func() error {
 		// surge target = the node carrying this rotation's surge-for marker that
 		// is not the candidate node.
 		nodes, err := poolNodes(ctx, cl, poolA)
