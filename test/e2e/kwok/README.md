@@ -102,9 +102,9 @@ follow-up.
    new-provision **assertion of the new NodeClaim/Node's pool labels** is covered
    indirectly (the absorb surge-target's pool label is asserted), but a *brand-new
    surge NodeClaim reaching `complete`* is out of scope here. NOTE: because this
-   is **core** Karpenter behavior (not KWOK-specific), it likely warrants a
-   follow-up Issue against the controller's placeholder hostname-exclusion design;
-   it is *not* fixed under #92.
+   is **core** Karpenter behavior (not KWOK-specific), it is tracked as a
+   controller/spec **design decision** in **#96** (placeholder hostname-exclusion
+   design); it is *not* fixed under #92.
 
 2. **do-not-disrupt honored against voluntary disruption.** We assert the
    annotation is *set and owned* on both surge-pair nodes, but do **not** claim
