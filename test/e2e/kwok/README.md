@@ -159,14 +159,17 @@ live, churning cluster would drive it.
    a benign `noderotation-e2e/nudge` NodePool annotation every 20s — a value the
    controller never reads — to wake the reconcile. It changes no rotation logic.
 
-2. **Short `retryBackoff` (15s).** The pending handler stamps `started-at` and
+2. **Short `retryBackoff` (5s).** The pending handler stamps `started-at` and
    immediately re-reads the candidate through the controller's informer cache;
    under KWOK that cached read can briefly lag the write, so a freshly selected
    candidate **occasionally** mis-fires the `readyTimeout` rollback and lands in
    `failed`. With the production-style long backoff it would be stranded there
    for the whole subtest; a short backoff lets the state machine re-enter
    `pending` within the window and converge through the *same*
-   absorb→drain→complete path. (This is intermittent and harmless to the assertions
+   absorb→drain→complete path. (The value is deliberately small: `EscalatedBackoff`
+   caps at 8× the base, so a smaller base lowers the ceiling and roughly doubles
+   the attempts that fit in a subtest window — needed on loaded CI runners where
+   the cache lag fires more often.) (This is intermittent and harmless to the assertions
    — the spare never ages into the placeholder's hostname exclusion across retries,
    which is keyed on `expireAfter`/`leadTime`, not `ageThreshold`.) The underlying
    read-after-write cache lag is a minor controller observation noted for the
