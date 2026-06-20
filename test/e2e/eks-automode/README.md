@@ -1,0 +1,128 @@
+# Ephemeral EKS Auto Mode PoC infrastructure (issue #93)
+
+Terraform that stands up a **real, ephemeral EKS Auto Mode cluster** so the
+node-rotation-controller PoC scenarios can be validated against real cloud
+capacity and storage — the half of the spec
+[§7.2](../../../docs/specification.md#72-validated-assumptions) PoC that the
+local [KWOK harness](../kwok/README.md) (#92) deliberately cannot cover.
+
+It is the **real-cloud companion** to the KWOK harness:
+
+| Harness | Cost | Covers |
+|---------|------|--------|
+| [`test/e2e/kwok/`](../kwok/) (#92) | free, CI-reproducible | Karpenter v1 contract on virtual nodes |
+| `test/e2e/eks-automode/` (this) (#93) | **real AWS spend** | same-AZ surge + zonal-EBS rebind, real capacity-shortage rollback, NodePool `limits` exhaustion, `expireAfter` real-soak race |
+
+> **This is test-only infrastructure.** It lives entirely under `test/e2e/` and
+> does not touch the controller (`internal/`, `cmd/`). EKS Auto Mode provides
+> Karpenter v1 natively, so the controller still routes every node operation
+> through the Karpenter `NodeClaim` CRD — the project's core architectural
+> invariant (see [`CLAUDE.md`](../../../CLAUDE.md)) is preserved.
+
+## Cost warning — ephemeral by design
+
+**This provisions billable AWS resources: an EKS control plane, a NAT gateway, an
+EBS volume per surged node, and EC2 instances launched on demand by Auto Mode.**
+
+Treat the stack as disposable: **create it, run the scenarios, then destroy it.**
+Do not leave it running. `terraform destroy` removes everything this module
+created; EC2/EBS launched by Auto Mode are owned by the cluster and torn down
+with it. The default tags mark the stack `Ephemeral = "true"` so it is easy to
+find and sweep. Restrict `public_access_cidrs` to your egress IP for anything
+that outlives a single run.
+
+## Prerequisites
+
+On `PATH`, with **AWS credentials configured** (`aws sts get-caller-identity`
+must succeed) for a principal allowed to create VPC / EKS / IAM resources:
+
+- [`terraform`](https://developer.hashicorp.com/terraform/install) `>= 1.6`
+- [`awscli`](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) v2
+- [`kubectl`](https://kubernetes.io/docs/tasks/tools/)
+- [`helm`](https://helm.sh/docs/intro/install/) (to install the controller chart from [`charts/`](../../../charts/))
+
+## Lifecycle: apply -> validate -> destroy
+
+### 1. Configure
+
+```bash
+cd test/e2e/eks-automode
+cp terraform.tfvars.example terraform.tfvars
+$EDITOR terraform.tfvars   # set region, name, etc. (terraform.tfvars is gitignored)
+```
+
+Nothing is hard-coded: region, cluster name, Kubernetes version, VPC CIDR, AZ
+count, and the enabled Auto Mode NodePools are all variables (see
+[`variables.tf`](variables.tf)). The committed
+[`terraform.tfvars.example`](terraform.tfvars.example) carries only placeholders.
+
+### 2. Apply
+
+```bash
+terraform init
+terraform apply        # ~15 min for the control plane to come up
+```
+
+Then write a kubeconfig and point your tools at the cluster:
+
+```bash
+eval "$(terraform output -raw kubeconfig_command)"   # or: make e2e-eks-kubeconfig
+export KUBECONFIG=$PWD/kubeconfig
+kubectl get nodepools.karpenter.sh        # built-in Auto Mode NodePools
+```
+
+`terraform output` also exposes `cluster_name`, `cluster_endpoint`,
+`availability_zones`, and `auto_mode_node_pools` for the scenario drivers.
+
+### 3. Validate (run the PoC scenarios)
+
+Install the controller from this repo's chart and run the scenarios (#77, #81),
+then record the outcomes back into spec §7.2:
+
+```bash
+helm install node-rotation-controller ../../../charts/node-rotation-controller \
+  --namespace node-rotation-system --create-namespace
+# ... apply scenario workloads / NodePools and observe rotations ...
+```
+
+The PoC subset this cluster exists to validate (issue #93 acceptance criteria):
+
+| § / Issue | Scenario |
+|-----------|----------|
+| §7.2, §3.3 | Same-AZ surge node lets the CSI driver re-attach a zonal EBS volume (zonal-PV rebind) |
+| §3.2, Refs #81 | Same-AZ capacity shortage reaches `readyTimeout` and rolls back cleanly; NodePool `limits` exhaustion fails a rotation as expected |
+| Refs #81 | Rollback cleanup: placeholder deleted, candidate unfrozen/uncordoned, `noderotation_completed_total{outcome="failure"\|"expired"}` increments |
+| R6 | `expireAfter` stays a backstop the controller's lead time wins against over a soak exceeding the age threshold |
+
+Record results in spec
+[§7.2 Validated Assumptions](../../../docs/specification.md#72-validated-assumptions);
+file any divergence as a follow-up `fix(...)` issue before any
+production-readiness claim (see the roadmap, spec §6.2).
+
+### 4. Destroy
+
+```bash
+terraform destroy        # or: make e2e-eks-down
+```
+
+Confirm nothing lingers (Auto Mode EC2/EBS, load balancers) before walking away.
+
+## From the repo root (Make targets)
+
+```bash
+make e2e-eks-up          # terraform init + apply
+make e2e-eks-kubeconfig  # write ./kubeconfig for the cluster
+make e2e-eks-down        # terraform destroy
+```
+
+These wrap the same Terraform; `terraform.tfvars` must exist first. Like
+`make e2e-kwok`, the targets are standalone and never run by `make test`.
+
+## Layout
+
+- `versions.tf` — pinned Terraform / provider constraints.
+- `variables.tf` — every input (no hard-coded account/region/name values).
+- `main.tf` — VPC + EKS cluster with `cluster_compute_config.enabled = true` (Auto Mode).
+- `outputs.tf` — cluster coordinates + `kubeconfig_command` for the scenario drivers.
+- `terraform.tfvars.example` — placeholder values to copy to `terraform.tfvars`.
+- `.gitignore` — excludes state, `.terraform/`, real `*.tfvars`, and the kubeconfig.

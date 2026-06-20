@@ -1,0 +1,24 @@
+# Terraform state — may contain sensitive data; never commit.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+
+# Variable files with real (possibly account-specific) values. The committed
+# example template is explicitly kept.
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+
+# Generated kubeconfig written by `aws eks update-kubeconfig` / the Make target.
+kubeconfig
+kubeconfig.*
+
+# Override files, plan artifacts.
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfplan
