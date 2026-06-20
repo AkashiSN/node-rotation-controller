@@ -88,6 +88,17 @@ func testCapacityAbsorb(ctx context.Context, t *testing.T, cl client.Client) {
 	// 1. Provision the candidate and let it age below the threshold.
 	applyDeployment(ctx, t, cl, deployment("cand", poolA, 300, ""))
 	candClaim := waitClaimProvisioned(ctx, t, cl, poolA)
+
+	// A blocking PDB on the candidate workload holds the drain once the rotation
+	// deletes the old NodeClaim, freezing the in-flight pool state so the
+	// capacity-absorb proof below (no new NodeClaim induced) is read off a stable
+	// snapshot instead of racing KWOK's fast drain. Loosened in step 3b so the
+	// rotation can finish; resetCluster also removes it on teardown.
+	pdb := blockingPDB("absorb-hold", map[string]string{"app": "cand"})
+	if err := cl.Create(ctx, pdb); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create absorb-hold PDB: %v", err)
+	}
+
 	t.Logf("candidate NodeClaim %s provisioned; aging it ~%s (just under ageThreshold)", candClaim, ageThreshold-30*time.Second)
 	time.Sleep(ageThreshold - 30*time.Second)
 
@@ -130,9 +141,7 @@ func testCapacityAbsorb(ctx context.Context, t *testing.T, cl client.Client) {
 	// 3. Capture the SURGE TARGET in-flight and assert the placeholder ABSORBED
 	//    onto the pre-existing spare node — the §3.3 capacity-absorb path: the
 	//    surge target is a node that already existed before the rotation started,
-	//    NOT a freshly provisioned surge node. (A new NodeClaim for the displaced
-	//    workload after the drain is legitimate and is not a surge node — so the
-	//    test asserts on the surge TARGET's identity, not on total claim count.)
+	//    NOT a freshly provisioned surge node.
 	eventually(t, ageThreshold+90*time.Second, "the placeholder to bind to the pre-existing spare (absorb)", func() error {
 		ph, err := getPlaceholder(ctx, cl, candClaim)
 		if err != nil {
@@ -148,19 +157,54 @@ func testCapacityAbsorb(ctx context.Context, t *testing.T, cl client.Client) {
 	})
 	t.Logf("placeholder absorbed onto pre-existing spare node %s (no new surge NodeClaim)", spareNode)
 
-	// 3b. §3.3 second path made explicit (reviewer): the surge reserved EXISTING
-	//     capacity, so NO new NodeClaim was provisioned for the placeholder. Checked
-	//     in-flight — the placeholder is bound but the candidate is not yet drained,
-	//     so a legitimate post-drain claim for the displaced workload cannot yet
-	//     confound the count. The pool's claim set must still be exactly `before`.
-	absorbClaims, err := listClaims(ctx, cl, poolA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(absorbClaims) > len(before) {
-		t.Fatalf("a new NodeClaim appeared during the surge (%d→%d %v): the placeholder provisioned new capacity instead of absorbing existing capacity",
-			len(before), len(absorbClaims), keys(claimNames(absorbClaims)))
-	}
+	// 3a. The rotation has reached the drain (the old NodeClaim is being deleted),
+	//     but the PDB above holds it — so the in-flight claim set is now stable.
+	eventually(t, ageThreshold+120*time.Second, "the candidate to enter draining (drain held by PDB)", func() error {
+		c, err := getClaim(ctx, cl, candClaim)
+		if err != nil {
+			return fmt.Errorf("candidate %s: %v", candClaim, err)
+		}
+		if c == nil {
+			return fmt.Errorf("candidate %s gone before the drain could be observed held", candClaim)
+		}
+		if c.DeletionTimestamp == nil {
+			return fmt.Errorf("candidate not draining yet (state=%q)", claimAnno(c, annotations.State))
+		}
+		return nil
+	})
+
+	// 3b. §3.3 second-path proof (reviewer): the surge reserved EXISTING capacity,
+	//     so it induced NO new NodeClaim. With the drain HELD, the pool's claim set
+	//     stays EXACTLY the two pre-existing claims for a sustained window. This is a
+	//     by-NAME set-equality check, not a count: a fast drain that deleted the
+	//     candidate and provisioned a replacement would keep the count equal while
+	//     the set changed, so a count check could false-pass. (A new NodeClaim for
+	//     the displaced workload AFTER the drain finishes is legitimate and is not a
+	//     surge node — hence the held window, before the drain completes.)
+	consistently(t, 20*time.Second, "the surge induces no new NodeClaim (claim set stays exactly the pre-existing two)", func() error {
+		cur, err := listClaims(ctx, cl, poolA)
+		if err != nil {
+			return err
+		}
+		curNames := claimNames(cur)
+		for name := range curNames {
+			if !beforeNames[name] {
+				return fmt.Errorf("new NodeClaim %q appeared during the surge (set now %v, was %v): the placeholder provisioned new capacity instead of absorbing existing capacity",
+					name, keys(curNames), keys(beforeNames))
+			}
+		}
+		for name := range beforeNames {
+			if !curNames[name] {
+				return fmt.Errorf("pre-existing NodeClaim %q vanished mid-surge (set now %v, was %v): the drain was not held as expected",
+					name, keys(curNames), keys(beforeNames))
+			}
+		}
+		return nil
+	})
+	t.Logf("in-flight claim set held exactly at %v — capacity-absorb induced no new NodeClaim", keys(beforeNames))
+
+	// 3c. Loosen the PDB so the held drain proceeds and the rotation can complete.
+	loosenPDB(ctx, t, cl, pdb)
 
 	// 4. The rotation reaches complete via the drain path: last-rotation stamped,
 	//    anchor cleared, candidate NodeClaim drained away.
