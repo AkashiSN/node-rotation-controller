@@ -57,7 +57,10 @@ jobs:
           fi
           changed="$(git diff --name-only "$BASE_SHA" HEAD || true)"
           echo "changed files:"; echo "$changed"
-          if printf '%s\n' "$changed" | grep -qE '^(internal/|cmd/|charts/|test/e2e/|go\.mod$|go\.sum$|Makefile$|Dockerfile$|\.github/workflows/e2e\.yaml$)'; then
+          # Here-string (not a pipe): `grep -q` closes its input on first match, so
+          # `printf | grep -q` under `set -o pipefail` could SIGPIPE printf and
+          # evaluate the pipeline nonzero even on a match, false-skipping e2e.
+          if grep -qE '^(internal/|cmd/|charts/|test/e2e/|go\.mod$|go\.sum$|Makefile$|Dockerfile$|\.github/workflows/e2e\.yaml$)' <<<"$changed"; then
             echo "→ e2e-relevant paths changed: running the full suite"
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
