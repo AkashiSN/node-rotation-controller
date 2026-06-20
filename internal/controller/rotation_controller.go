@@ -525,12 +525,19 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 		return r.abortPendingExpiry(ctx, pool, cand)
 	}
 
-	// Assert pending + write-once started-at (a single claim update).
+	// Assert pending + write-once started-at (a single claim update). Capture the
+	// authoritative started-at from inside the mutator — either the value already
+	// present or the one we stamp this pass — so the readyTimeout check below never
+	// depends on a stale cache re-read. A cached Get that briefly lags this write
+	// would observe started-at empty, making now − parseTime("") trivially exceed
+	// readyTimeout and roll back a freshly selected candidate instantly (#95 item 3).
+	var stampedStartedAt string
 	if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
 		m[annotations.State] = annotations.StatePending
 		if m[annotations.StartedAt] == "" {
 			m[annotations.StartedAt] = rfc3339(r.now())
 		}
+		stampedStartedAt = m[annotations.StartedAt]
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -543,8 +550,10 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	}
 
 	// readyTimeout — checked FIRST (before the recreate branch) so a crash on this
-	// failure path cannot resurrect the placeholder (spec §5.2).
-	startedAt, _ := parseTime(cand.Annotations[annotations.StartedAt])
+	// failure path cannot resurrect the placeholder (spec §5.2). Use the started-at
+	// captured at patch time (not the re-read above, which may lag the write and
+	// read empty — #95 item 3); the re-read still serves the other fields below.
+	startedAt, _ := parseTime(stampedStartedAt)
 	if r.now().Sub(startedAt) > res.readyTimeout {
 		return r.failPending(ctx, pool, cand)
 	}
