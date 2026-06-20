@@ -78,7 +78,7 @@ components + chart), then `go test -tags e2e ./test/e2e/kwok/...`.
 | Placeholder required `karpenter.sh/nodepool` selector; surge `Node` pool label | ✅ proven | `testConfinement` |
 | Voluntary drain honors a blocking PDB; loosening lets it finish | ✅ proven | `testPDB` |
 | `karpenter.sh/do-not-disrupt` present + controller-owned on **both** surge-pair nodes | ✅ proven (annotation-set form) | `testDoNotDisrupt` |
-| Placeholder is the preemption victim: negative priority + `PreemptionPolicy: Never` | ⏸️ deferred (`t.Skip`) — see §3 below | `testPreemption` |
+| Bare-placeholder preemption: a competing workload preempts the negative-priority placeholder (it is the victim), the real workload is **not** evicted in its place, and it does **not** re-pend | ✅ proven | `testPreemption` |
 
 `testDoNotDisrupt` parks the surge in flight with a blocking PDB on the candidate
 workload, so both surge-pair nodes stay frozen for a deterministic window rather
@@ -113,18 +113,17 @@ follow-up.
    under KWOK to honor. The stronger "no disruption while the annotation is set"
    claim is deferred to EKS (#93), per the issue's explicit branch.
 
-3. **Placeholder preemption (`testPreemption`, `t.Skip`-deferred).** The subtest
-   needs a full absorb rotation to reach a *bound* placeholder before it can
-   assert the victim guarantees, and that lead-up intermittently hits the
-   started-at read-after-write cache lag (above); run **last**, after four prior
-   rotations have exercised the same pool, it does not always re-converge within
-   the window. The load-bearing structural guarantees — the placeholder's negative
-   `PriorityClass` and `PreemptionPolicy: Never`, so it can only ever be a victim,
-   never a preemptor — are already covered by the chart and by
-   `internal/surge/placeholder` unit tests; the live preemption dynamics (and the
-   mid-surge preemption → `readyTimeout` rollback, issue #92 P1) move to the
-   follow-up and EKS (#93). The subtest body is kept (not deleted) so the scenario
-   and its KWOK limitation stay documented in one place.
+3. **Mid-surge (pending-phase) preemption → `readyTimeout` rollback (issue #92
+   P1).** `testPreemption` proves the bare-placeholder victim path by parking the
+   rotation in its **drain** phase (old NodeClaim deleted, drain held by a PDB),
+   where `advanceDraining` does not recreate the placeholder — so a competing
+   priority-0 workload pinned to the surge host evicts the placeholder
+   permanently, and we assert it is the victim, the real workload is not evicted
+   in its place, and it does not re-pend. The remaining, deferred piece is
+   preemption during the **pending** phase, where the controller *intentionally*
+   recreates the placeholder and the attempt is bounded by `readyTimeout` →
+   rollback; that recreate-vs-complete race is timing-fragile under KWOK and is
+   the issue #92 P1 item, left to the follow-up / EKS (#93).
 
 4. **Real same-AZ capacity shortage, NodePool `limits` exhaustion, zonal-PV/EBS
    rebind, and the `expireAfter` real-soak race** — these require real cloud and

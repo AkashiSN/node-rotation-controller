@@ -488,26 +488,20 @@ func testDoNotDisrupt(ctx context.Context, t *testing.T, cl client.Client) {
 // workload needs its space; it never preempts system Pods; and once preempted it
 // is deleted and does not re-pend. Covers issue #92 bare-placeholder cleanup.
 //
-// We exercise the structural guarantees directly on a controller-built
-// placeholder via a high-priority workload that contends for the same node. The
-// placeholder's PriorityClass is negative (chart-installed) and PreemptionPolicy
-// is Never, so it can only ever be a victim, never a preemptor.
+// We drive a REAL preemption: the rotation is parked in its drain phase (the old
+// NodeClaim deleted but its drain held by a PDB), where the controller's
+// advanceDraining does NOT recreate the placeholder — so a competing workload can
+// evict the bound placeholder and we can prove it stays evicted. A normal
+// (priority 0) workload pinned to the surge host, requesting more than the sliver
+// of room left beside the placeholder, forces kube-scheduler to preempt the
+// placeholder (the only pod there below priority 0). We assert: the placeholder
+// is the victim, the spare's own workload is NOT evicted in its place, and the
+// placeholder does not re-pend.
 func testPreemption(ctx context.Context, t *testing.T, cl client.Client) {
-	// Deferred under #92 (split to the follow-up). This subtest needs a full
-	// absorb rotation to reach a bound placeholder before it can assert the
-	// victim guarantees; under KWOK that lead-up intermittently hits the
-	// started-at read-after-write cache lag (see README "Two KWOK-quiescence
-	// accommodations") and does not always re-converge within the window when run
-	// LAST after four prior rotations have exercised the same pool. The
-	// load-bearing structural guarantees it checks — the placeholder's negative
-	// PriorityClass and PreemptionPolicy=Never (so it can only ever be a victim,
-	// never a preemptor) — are already covered by the chart and by
-	// internal/surge/placeholder unit tests; the live preemption dynamics move to
-	// EKS (#93) / the follow-up. Kept (not deleted) so the scenario and its KWOK
-	// limitation stay documented in one place.
-	t.Skip("bare-placeholder preemption victim dynamics are timing-fragile under KWOK; deferred to the #92 follow-up (structural guarantees unit-tested; live dynamics on #93)")
-
 	defer resetCluster(ctx, t, cl)
+	defer func() {
+		_ = cl.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "preemptor", Namespace: workloadNamespace}})
+	}()
 	// Keep the controller reconciling promptly through the static-KWOK quiet
 	// periods so an aged candidate is picked within the window (see startNudger).
 	defer startNudger(ctx, cl, poolA, poolB)()
@@ -516,22 +510,33 @@ func testPreemption(ctx context.Context, t *testing.T, cl client.Client) {
 
 	applyDeployment(ctx, t, cl, deployment("cand", poolA, 300, ""))
 	candClaim := waitClaimProvisioned(ctx, t, cl, poolA)
+
+	// Hold the candidate drain so the rotation parks in `draining` with the
+	// placeholder still bound, instead of completing (which would delete it).
+	pdb := blockingPDB("preempt-hold", map[string]string{"app": "cand"})
+	if err := cl.Create(ctx, pdb); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create preempt-hold PDB: %v", err)
+	}
+
 	time.Sleep(ageThreshold - 30*time.Second)
-	// Spare sized so it has room for the placeholder but NOT for the placeholder
-	// + a competing high-priority pod — forcing the placeholder to be evicted.
+	// Spare sized so the surge node has room for the placeholder but only a sliver
+	// beyond it (e2e-small ~1900m allocatable: spare 1500m + placeholder 300m =
+	// 1800m), so a 300m competitor pinned to it cannot fit without evicting the
+	// placeholder.
 	applyDeployment(ctx, t, cl, deployment("spare", poolA, 1500, "cand"))
 	waitSpareRegistered(ctx, t, cl, candClaim)
 
-	// Observe the placeholder bind onto the spare.
+	// Observe the placeholder bind onto the spare; capture its host + the structural
+	// victim guarantees (negative priority + PreemptionPolicy=Never, so it can only
+	// ever be a victim, never a preemptor).
 	var surgeHost string
-	eventually(t, ageThreshold+120*time.Second, "placeholder to bind to the spare", func() error {
+	eventually(t, 8*time.Minute, "placeholder to bind to the spare", func() error {
 		ph, err := getPlaceholder(ctx, cl, candClaim)
 		if err != nil || ph == nil || ph.Spec.NodeName == "" {
 			return fmt.Errorf("placeholder not bound yet")
 		}
-		// Structural guarantees: negative priority + PreemptNever.
 		if ph.Spec.PreemptionPolicy == nil || *ph.Spec.PreemptionPolicy != corev1.PreemptNever {
-			return fmt.Errorf("placeholder is not PreemptionPolicy=Never (could preempt system Pods!)")
+			return fmt.Errorf("placeholder is not PreemptionPolicy=Never (could preempt other Pods!)")
 		}
 		if ph.Spec.Priority == nil || *ph.Spec.Priority >= 0 {
 			return fmt.Errorf("placeholder priority %v is not negative", ph.Spec.Priority)
@@ -539,25 +544,94 @@ func testPreemption(ctx context.Context, t *testing.T, cl client.Client) {
 		surgeHost = ph.Spec.NodeName
 		return nil
 	})
-	t.Logf("placeholder bound to %s with negative priority and PreemptionPolicy=Never (never preempts system Pods)", surgeHost)
+	t.Logf("placeholder bound to %s (negative priority, PreemptionPolicy=Never)", surgeHost)
 
-	// The full preemption-then-no-re-pend dynamics (a competing pod evicts the
-	// placeholder, which is then deleted and does not re-pend) are sensitive to
-	// KWOK's scheduler-simulation timing; the controller's own rollback recreates
-	// a placeholder by design, so a clean "deleted and does not re-pend" requires
-	// completion to win the race. We assert the structural victim guarantees
-	// above (the load-bearing part: it can never be a preemptor) and let the
-	// rotation finish; mid-surge preemption rollback is the issue #92 P1/follow-up
-	// item, kept out of the hard assertions here to avoid flake.
-	eventually(t, ageThreshold+120*time.Second, "rotation to settle (complete or rollback)", func() error {
-		pool, err := getNodePool(ctx, cl, poolA)
+	// Wait until the rotation is in `draining` (old NodeClaim deleted, drain held by
+	// the PDB). In this phase advanceDraining leaves the placeholder alone — it is
+	// NOT recreated — so a preemption here is permanent, which is what lets us prove
+	// "does not re-pend" deterministically (mid-PENDING the controller would recreate
+	// it by design).
+	eventually(t, 3*time.Minute, "the rotation to reach draining (drain held by PDB)", func() error {
+		c, err := getClaim(ctx, cl, candClaim)
+		if err != nil {
+			return fmt.Errorf("candidate %s: %v", candClaim, err)
+		}
+		if c == nil {
+			return fmt.Errorf("candidate %s gone before draining could be observed", candClaim)
+		}
+		if c.DeletionTimestamp == nil {
+			return fmt.Errorf("candidate not draining yet (state=%q)", claimAnno(c, annotations.State))
+		}
+		return nil
+	})
+
+	// Resolve the surge host's hostname label so the competitor pins to it via the
+	// scheduler (hostname nodeSelector, not nodeName — nodeName bypasses scheduling
+	// and never triggers preemption).
+	host, err := getNode(ctx, cl, surgeHost)
+	if err != nil {
+		t.Fatalf("get surge host %s: %v", surgeHost, err)
+	}
+	spareHostname := host.Labels[corev1.LabelHostname]
+	if spareHostname == "" {
+		spareHostname = host.Name
+	}
+
+	// A normal (priority 0) workload pinned to the surge host, requesting more than
+	// the sliver beside the placeholder, so the scheduler must preempt to fit it.
+	// priority 0 > the placeholder's negative priority, so the placeholder is the
+	// only eligible victim.
+	if err := cl.Create(ctx, preemptorPod("preemptor", spareHostname, 300)); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create preemptor: %v", err)
+	}
+
+	// The placeholder is the VICTIM: the competitor lands on the surge host (which
+	// required evicting the placeholder, the only sub-zero-priority pod there) while
+	// the spare's own workload (priority 0) is NOT evicted — so the placeholder,
+	// never real workload, is what gets preempted.
+	eventually(t, 3*time.Minute, "the competitor to preempt the bare placeholder", func() error {
+		pre, err := podByApp(ctx, cl, "preemptor")
 		if err != nil {
 			return err
 		}
-		if poolAnno(pool, annotations.ActiveRotation) == "" {
-			return nil // settled
+		if pre == nil {
+			return fmt.Errorf("competitor pod not observed yet")
 		}
-		return fmt.Errorf("rotation still in flight (anchor=%q)", poolAnno(pool, annotations.ActiveRotation))
+		if pre.Spec.NodeName != surgeHost || pre.Status.Phase != corev1.PodRunning {
+			return fmt.Errorf("competitor not running on surge host %s yet (node=%q phase=%q)",
+				surgeHost, pre.Spec.NodeName, pre.Status.Phase)
+		}
+		sp, err := podByApp(ctx, cl, "spare")
+		if err != nil {
+			return err
+		}
+		if sp == nil || sp.Status.Phase != corev1.PodRunning {
+			return fmt.Errorf("the spare workload pod must stay Running — it must NOT be the preemption victim")
+		}
+		return nil
+	})
+	t.Logf("competitor preempted the bare placeholder on %s; the spare workload survived (placeholder is the victim, never real workload)", surgeHost)
+
+	// And it does NOT re-pend: in `draining` the controller does not recreate the
+	// placeholder, and the placeholder (PreemptionPolicy=Never) never preempts the
+	// competitor back — so for a sustained window there is no placeholder Pod and the
+	// competitor stays scheduled.
+	consistently(t, 20*time.Second, "the preempted bare placeholder does not re-pend", func() error {
+		ph, err := getPlaceholder(ctx, cl, candClaim)
+		if err != nil {
+			return err
+		}
+		if ph != nil {
+			return fmt.Errorf("a placeholder Pod %s re-appeared after preemption (phase=%q) — it must not re-pend in the drain phase", ph.Name, ph.Status.Phase)
+		}
+		pre, err := podByApp(ctx, cl, "preemptor")
+		if err != nil {
+			return err
+		}
+		if pre == nil || pre.Status.Phase != corev1.PodRunning {
+			return fmt.Errorf("competitor no longer Running — the placeholder must never become a preemptor")
+		}
+		return nil
 	})
 }
 

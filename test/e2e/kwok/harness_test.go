@@ -230,6 +230,20 @@ func cpuQ(milli int) resource.Quantity {
 	return *resource.NewMilliQuantity(int64(milli), resource.DecimalSI)
 }
 
+// podByApp returns the first Pod in the workload namespace carrying app=<app>,
+// or nil when none exist.
+func podByApp(ctx context.Context, cl client.Client, app string) (*corev1.Pod, error) {
+	var pods corev1.PodList
+	if err := cl.List(ctx, &pods, client.InNamespace(workloadNamespace),
+		client.MatchingLabels{"app": app}); err != nil {
+		return nil, err
+	}
+	if len(pods.Items) == 0 {
+		return nil, nil
+	}
+	return &pods.Items[0], nil
+}
+
 // ── Annotation read helpers (use the real controller constants) ─────────────
 
 func poolAnno(p *karpv1.NodePool, key string) string {
