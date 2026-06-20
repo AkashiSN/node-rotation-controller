@@ -158,10 +158,14 @@ func TestBuildPlaceholderUnconditionalNodePoolSelector(t *testing.T) {
 }
 
 func TestBuildPlaceholderHostnameExclusion(t *testing.T) {
+	// The hostname NotIn must be a SOFT preferred term, not a required one:
+	// Karpenter's provisioner rejects a provisionable Pod whose required nodeAffinity
+	// references kubernetes.io/hostname (RestrictedLabels), so a required term would
+	// block the new-provision surge path (issue #96).
 	p := surge.BuildPlaceholder(baseInputs())
-	e, ok := requiredExprs(t, p)[corev1.LabelHostname]
+	e, ok := preferredExprs(t, p)[corev1.LabelHostname]
 	if !ok {
-		t.Fatal("hostname exclusion missing")
+		t.Fatal("hostname exclusion missing from preferred terms")
 	}
 	if e.Operator != corev1.NodeSelectorOpNotIn {
 		t.Errorf("hostname operator: want NotIn, got %v", e.Operator)
@@ -171,12 +175,51 @@ func TestBuildPlaceholderHostnameExclusion(t *testing.T) {
 	}
 }
 
+// TestBuildPlaceholderHostnameExclusionIsHighWeightPreferred pins the weight and
+// the term ordering: the hostname exclusion must sort ahead of the weight-1
+// replicated preferences and carry the max preferred weight so it dominates.
+func TestBuildPlaceholderHostnameExclusionIsHighWeightPreferred(t *testing.T) {
+	in := baseInputs()
+	in.Match.Preferred = []string{"node.kubernetes.io/instance-type"}
+	in.Node.Labels["node.kubernetes.io/instance-type"] = "m6g.large"
+	p := surge.BuildPlaceholder(in)
+
+	pref := p.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution
+	if len(pref) != 2 {
+		t.Fatalf("want two preferred terms (hostname + replicated), got %d: %+v", len(pref), pref)
+	}
+	host := pref[0]
+	if len(host.Preference.MatchExpressions) != 1 || host.Preference.MatchExpressions[0].Key != corev1.LabelHostname {
+		t.Fatalf("hostname exclusion must sort first among preferred terms, got %+v", pref)
+	}
+	if host.Weight != 100 {
+		t.Errorf("hostname exclusion weight: want 100 (max, dominates replicated), got %d", host.Weight)
+	}
+	if pref[1].Weight != 1 {
+		t.Errorf("replicated preference weight: want 1, got %d", pref[1].Weight)
+	}
+}
+
+// TestBuildPlaceholderRequiredHasNoHostname is the core regression for issue #96:
+// the REQUIRED nodeAffinity must never reference kubernetes.io/hostname, because
+// Karpenter's provisioner (RestrictedLabels) rejects such a Pod and never
+// provisions a new surge node for it.
+func TestBuildPlaceholderRequiredHasNoHostname(t *testing.T) {
+	p := surge.BuildPlaceholder(baseInputs())
+	if _, ok := requiredExprs(t, p)[corev1.LabelHostname]; ok {
+		t.Error("required nodeAffinity must not contain kubernetes.io/hostname (Karpenter RestrictedLabels rejects it — issue #96)")
+	}
+}
+
 func TestBuildPlaceholderNoHostnameExprWhenNoExclusions(t *testing.T) {
 	in := baseInputs()
 	in.ExcludedHostnames = nil
 	p := surge.BuildPlaceholder(in)
 	if _, ok := requiredExprs(t, p)[corev1.LabelHostname]; ok {
-		t.Error("no hostname expression should be emitted when there are no exclusions")
+		t.Error("no hostname expression should be emitted in required terms when there are no exclusions")
+	}
+	if _, ok := preferredExprs(t, p)[corev1.LabelHostname]; ok {
+		t.Error("no hostname expression should be emitted in preferred terms when there are no exclusions")
 	}
 }
 
@@ -476,6 +519,7 @@ func TestBuildPlaceholderDropsMalformedNumericRequirement(t *testing.T) {
 
 func TestBuildPlaceholderPreferred(t *testing.T) {
 	in := baseInputs()
+	in.ExcludedHostnames = nil // isolate the replicated preferred term from the hostname one
 	in.Match.Preferred = []string{"node.kubernetes.io/instance-type"}
 	in.Node.Labels["node.kubernetes.io/instance-type"] = "m6g.large"
 	p := surge.BuildPlaceholder(in)
