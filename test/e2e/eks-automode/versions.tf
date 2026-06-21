@@ -1,4 +1,4 @@
-# Provider and Terraform version constraints.
+# Provider and Terraform versions (exact pins).
 #
 # Versions are pinned to exact releases for reproducibility, matching the repo's
 # convention of pinning e2e tooling. The `.terraform-version` file (tenv) selects

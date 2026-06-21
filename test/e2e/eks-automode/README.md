@@ -36,7 +36,7 @@ that outlives a single run.
 On `PATH`, with **AWS credentials configured** (`aws sts get-caller-identity`
 must succeed) for a principal allowed to create VPC / EKS / IAM resources:
 
-- [`terraform`](https://developer.hashicorp.com/terraform/install) `>= 1.6`
+- [`terraform`](https://developer.hashicorp.com/terraform/install) `1.15.6` (pinned; `.terraform-version` selects it via tenv)
 - [`awscli`](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) v2
 - [`kubectl`](https://kubernetes.io/docs/tasks/tools/)
 - [`helm`](https://helm.sh/docs/intro/install/) (to install the controller chart from [`charts/`](../../../charts/))
@@ -120,7 +120,7 @@ These wrap the same Terraform; `terraform.tfvars` must exist first. Like
 
 ## Layout
 
-- `versions.tf` — pinned Terraform / provider constraints.
+- `versions.tf` — pinned Terraform / provider versions.
 - `variables.tf` — every input (no hard-coded account/region/name values).
 - `main.tf` — VPC + EKS cluster with `compute_config.enabled = true` (Auto Mode).
 - `outputs.tf` — cluster coordinates + `kubeconfig_command` for the scenario drivers.
