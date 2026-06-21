@@ -20,7 +20,7 @@ jobs:
   # always reports a real conclusion and can never hang `pending` (the reviewer's
   # "(a) required check not stuck pending" concern). We do NOT path-filter at the
   # workflow/job level — a skipped *workflow/job* leaves a required check pending.
-  # Instead the heavy steps (the ~30-minute bootstrap + go test) are gated on an
+  # Instead the heavy steps (the ~45-minute bootstrap + go test) are gated on an
   # in-job change-detection step: a PR that touches no e2e-relevant path runs only
   # the quick detect step and reports `e2e: success` in seconds, while a PR that
   # touches the controller, chart, harness, deps, image, or this workflow runs the
@@ -28,7 +28,7 @@ jobs:
   e2e:
     name: e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       E2E_KWOK_CLUSTER: nrc-kwok-e2e
       E2E_KWOK_IMAGE: ghcr.io/akashisn/node-rotation-controller:e2e
@@ -120,7 +120,7 @@ jobs:
         if: steps.changes.outputs.run == 'true'
         run: |
           PATH="$PWD/bin:$PATH" \
-            go test -tags e2e -count=1 -v -timeout 38m ./test/e2e/kwok/...
+            go test -tags e2e -count=1 -v -timeout 50m ./test/e2e/kwok/...
 
       # Failure artifacts from the FIRST commit (issue #92): cluster dumps,
       # controller + Karpenter logs, and NodeClaim/NodePool/Pod YAML.

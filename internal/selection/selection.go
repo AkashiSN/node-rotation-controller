@@ -221,7 +221,8 @@ func failedPastBackoff(c *karpv1.NodeClaim, in Inputs) bool {
 // Triggered reports whether the claim's age has crossed the rotation trigger
 // (spec §3.2) — the same age/deadline predicate PickOldestEligible applies,
 // exported so the reconcile loop can compute the near-deadline host set for the
-// placeholder's hostname exclusion (spec §3.3) without duplicating the formula.
+// placeholder's soft hostname exclusion (a preferred term, not required — spec
+// §3.3, issue #96) without duplicating the formula.
 // Unlike eligibility it considers age alone: a near-deadline node should be
 // avoided regardless of its Ready/state condition.
 func Triggered(c *karpv1.NodeClaim, in Inputs) bool { return triggered(c, in) }
