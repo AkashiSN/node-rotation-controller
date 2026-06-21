@@ -122,7 +122,7 @@ These wrap the same Terraform; `terraform.tfvars` must exist first. Like
 
 - `versions.tf` — pinned Terraform / provider constraints.
 - `variables.tf` — every input (no hard-coded account/region/name values).
-- `main.tf` — VPC + EKS cluster with `cluster_compute_config.enabled = true` (Auto Mode).
+- `main.tf` — VPC + EKS cluster with `compute_config.enabled = true` (Auto Mode).
 - `outputs.tf` — cluster coordinates + `kubeconfig_command` for the scenario drivers.
 - `terraform.tfvars.example` — placeholder values to copy to `terraform.tfvars`.
 - `.gitignore` — excludes state, `.terraform/`, real `*.tfvars`, and the kubeconfig.

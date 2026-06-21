@@ -42,7 +42,7 @@ locals {
 # ---------------------------------------------------------------------------
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 5.13"
+  version = "6.6.1"
 
   name = var.name
   cidr = var.vpc_cidr
@@ -68,7 +68,7 @@ module "vpc" {
 # ---------------------------------------------------------------------------
 # EKS cluster with Auto Mode enabled.
 #
-# `cluster_compute_config.enabled = true` turns on EKS Auto Mode: AWS manages
+# `compute_config.enabled = true` turns on EKS Auto Mode: AWS manages
 # the Karpenter control loop and ships built-in NodePools / NodeClasses. We do
 # NOT create our own Karpenter install — the architectural invariant is that the
 # controller routes all node operations through the Karpenter NodeClaim CRD,
@@ -76,20 +76,20 @@ module "vpc" {
 # ---------------------------------------------------------------------------
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.31"
+  version = "21.23.0"
 
-  cluster_name    = var.name
-  cluster_version = var.kubernetes_version
+  name               = var.name
+  kubernetes_version = var.kubernetes_version
 
-  cluster_endpoint_public_access       = true
-  cluster_endpoint_public_access_cidrs = var.public_access_cidrs
+  endpoint_public_access       = true
+  endpoint_public_access_cidrs = var.public_access_cidrs
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
   # EKS Auto Mode. No self-managed/managed node groups are defined — Auto Mode
   # provisions and manages all compute, exposing it through Karpenter v1 CRDs.
-  cluster_compute_config = {
+  compute_config = {
     enabled    = true
     node_pools = var.auto_mode_node_pools
   }
