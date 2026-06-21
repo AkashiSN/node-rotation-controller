@@ -15,6 +15,16 @@ import (
 // placeholderContainerName is the name of the single pause container.
 const placeholderContainerName = "pause"
 
+// hostnameExclusionWeight is the weight of the soft (preferred) node anti-affinity
+// term that keeps the placeholder off the candidate and near-deadline hosts (spec
+// §3.3, issue #96). It is the maximum preferred weight (kube-scheduler caps each
+// term at 100) so this exclusion dominates the weight-1 replicated preferences and
+// the scheduler treats avoiding those hosts as the strongest soft signal. It is a
+// preference, not a requirement, because Karpenter's provisioner rejects any
+// provisionable Pod whose *required* nodeAffinity references kubernetes.io/hostname
+// (it is in sigs.k8s.io/karpenter RestrictedLabels) — see nodeAffinity below.
+const hostnameExclusionWeight = 100
+
 // PlaceholderInputs are the resolved inputs for one placeholder Pod (spec §3.3).
 // They are plain values; the caller fetches the candidate Node, the NodePool,
 // and the reschedulable request sum and passes them in.
@@ -36,7 +46,14 @@ type PlaceholderInputs struct {
 	// Match selects which candidate-node requirements to replicate (spec §5.4).
 	Match policy.MatchNodeRequirements
 	// ExcludedHostnames is the kubernetes.io/hostname NotIn set: the candidate node
-	// plus every near-deadline host, computed by the caller (spec §3.3).
+	// plus every near-deadline host, computed by the caller (spec §3.3). It is
+	// applied as a SOFT (preferred) node anti-affinity, not a required term, because
+	// Karpenter's provisioner rejects a provisionable Pod carrying a *required*
+	// kubernetes.io/hostname requirement (RestrictedLabels) and would never provision
+	// a new surge node for it (issue #96). The candidate's hard guarantee still holds
+	// via the controller's cordon (applied in pending before the placeholder exists)
+	// plus surge_ready's re-check that the bound host is not the candidate; the
+	// near-deadline exclusion is therefore best-effort (spec §3.3 bounded residual).
 	ExcludedHostnames []string
 	// PriorityClassName is the dedicated negative-priority class (spec §3.3).
 	PriorityClassName string
@@ -118,9 +135,27 @@ func poolTolerations(pool *karpv1.NodePool) []corev1.Toleration {
 }
 
 // nodeAffinity assembles the placeholder's node affinity (spec §3.3): one
-// required term ANDing the unconditional NodePool selector, the replicated
-// required requirements, and the hostname exclusion; plus the soft preferred
-// requirements.
+// required term ANDing the unconditional NodePool selector and the replicated
+// required requirements; plus preferred (soft) terms — the hostname exclusion
+// first (highest weight), then the replicated preferred requirements.
+//
+// The candidate / near-deadline hostname exclusion is a SOFT preferred term, NOT
+// a required one (issue #96). Karpenter's provisioner refuses to provision a new
+// node for a provisionable Pod whose *required* nodeAffinity references
+// kubernetes.io/hostname — that key is in sigs.k8s.io/karpenter RestrictedLabels
+// (Karpenter assigns hostnames itself), so a required hostname term made the
+// new-provision surge path fail outright, leaving only the capacity-absorb path.
+// Karpenter's scheduler only RELAXES preferred node-affinity terms and never folds
+// them into the NodeClaim requirements it builds, so a *preferred* hostname term is
+// never rejected and the new-provision path proceeds; kube-scheduler still honors
+// the preference for scoring on the capacity-absorb path. Dropping the hard term
+// does not weaken the CANDIDATE guarantee: the controller cordons the candidate
+// (spec.unschedulable) before the placeholder is created and re-asserts it every
+// pass, so kube-scheduler will not bind the placeholder there, and surge_ready
+// re-checks host != candidate before advancing to drain (spec §3.3, §5.2). The
+// near-deadline exclusion downgrades to best-effort — consistent with the spec's
+// already-accepted bounded residual: a host that crossed its trigger inside one
+// placeholder lifetime simply has its absorbed pods re-drained by its own rotation.
 func nodeAffinity(in PlaceholderInputs) *corev1.NodeAffinity {
 	required := []corev1.NodeSelectorRequirement{{
 		// Same-NodePool is a structural invariant, applied unconditionally and
@@ -130,18 +165,28 @@ func nodeAffinity(in PlaceholderInputs) *corev1.NodeAffinity {
 		Values:   []string{in.Pool.Name},
 	}}
 	required = append(required, replicatedRequirements(in, in.Match.Required)...)
-	if len(in.ExcludedHostnames) > 0 {
-		required = append(required, corev1.NodeSelectorRequirement{
-			Key:      corev1.LabelHostname,
-			Operator: corev1.NodeSelectorOpNotIn,
-			Values:   in.ExcludedHostnames,
-		})
-	}
 
 	na := &corev1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 			NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: required}},
 		},
+	}
+	// Prepend the soft hostname exclusion ahead of the weight-1 replicated
+	// preferences so it dominates (spec §3.3, issue #96): kube-scheduler honors it
+	// when absorbing onto existing capacity, while Karpenter ignores it when
+	// provisioning a new node — both correct (see the doc comment above).
+	if len(in.ExcludedHostnames) > 0 {
+		na.PreferredDuringSchedulingIgnoredDuringExecution = append(
+			na.PreferredDuringSchedulingIgnoredDuringExecution,
+			corev1.PreferredSchedulingTerm{
+				Weight: hostnameExclusionWeight,
+				Preference: corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
+					Key:      corev1.LabelHostname,
+					Operator: corev1.NodeSelectorOpNotIn,
+					Values:   in.ExcludedHostnames,
+				}}},
+			},
+		)
 	}
 	for _, e := range replicatedRequirements(in, in.Match.Preferred) {
 		na.PreferredDuringSchedulingIgnoredDuringExecution = append(

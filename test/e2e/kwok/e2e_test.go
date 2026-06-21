@@ -38,6 +38,9 @@ func TestKWOKSurge(t *testing.T) {
 	// run keep the age-based selection deterministic.
 	resetCluster(ctx, t, cl)
 
+	t.Run("NewProvisionSurge", func(t *testing.T) {
+		testNewProvision(ctx, t, cl)
+	})
 	t.Run("CapacityAbsorbAndCompletion", func(t *testing.T) {
 		testCapacityAbsorb(ctx, t, cl)
 	})
@@ -56,6 +59,133 @@ func TestKWOKSurge(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// New-provision surge (§3.3 PRIMARY path) — issue #96 acceptance.
+//
+// Covers the criterion issue #96 turned from negative to positive: a surge that
+// reaches `complete` by INDUCING Karpenter to provision a BRAND-NEW NodePool-owned
+// NodeClaim for the placeholder, WITHOUT any pre-existing spare to absorb onto.
+//
+// Why this works now (and did not before): the placeholder previously carried the
+// candidate/near-deadline hostname exclusion as a HARD required nodeAffinity term.
+// Core Karpenter v1 lists kubernetes.io/hostname in RestrictedLabels, so its
+// provisioner rejected any provisionable Pod referencing that key ("using label
+// kubernetes.io/hostname is not allowed …") and never provisioned a new node — the
+// placeholder stayed Pending and the attempt rolled back at readyTimeout. The
+// exclusion is now a SOFT preferred term (§3.3, issue #96): Karpenter's scheduler
+// only relaxes preferred node-affinity and never folds it into the NodeClaim
+// requirements, so it is never rejected and the new-provision path proceeds. The
+// candidate stays off the placeholder via the controller's cordon (applied in
+// pending) plus surge_ready's host != candidate re-check, not the (now soft)
+// hostname term.
+//
+// Determinism: a single aged candidate in pool-a with NO spare. When it crosses
+// ageThreshold the rotation starts; the placeholder cannot absorb (no spare), so
+// the ONLY way it reaches Running is a freshly provisioned NodeClaim. We assert a
+// NodeClaim whose name was NOT present pre-rotation appears, the placeholder binds
+// to its node, and the rotation reaches `complete`.
+func testNewProvision(ctx context.Context, t *testing.T, cl client.Client) {
+	defer resetCluster(ctx, t, cl)
+	// Keep the controller reconciling promptly through the static-KWOK quiet
+	// periods so the aged candidate is picked within the window (see startNudger).
+	defer startNudger(ctx, cl, poolA, poolB)()
+
+	const ageThreshold = 4 * time.Minute
+
+	// 1. A single candidate in pool-a, with NO spare staged anywhere in the pool —
+	//    so the placeholder has nothing to absorb onto and a new node is the only
+	//    path to surge_ready.
+	applyDeployment(ctx, t, cl, deployment("cand", poolA, 300, ""))
+	candClaim := waitClaimProvisioned(ctx, t, cl, poolA)
+
+	before, err := listClaims(ctx, cl, poolA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeNames := claimNames(before)
+	if len(beforeNames) != 1 {
+		t.Fatalf("want exactly one pre-rotation pool-a NodeClaim (the candidate), got %v", keys(beforeNames))
+	}
+	t.Logf("single candidate NodeClaim %s present, no spare; aging it to ageThreshold", candClaim)
+
+	// 2. Age the candidate past the threshold so it becomes the sole eligible
+	//    candidate and the rotation starts.
+	time.Sleep(ageThreshold - 30*time.Second)
+
+	// 3. The surge INDUCES a brand-new NodeClaim: a claim whose name was NOT in the
+	//    pre-rotation set appears in pool-a (this is the §3.3 new-provision path the
+	//    soft-preference fix unblocks — issue #96), and the placeholder binds to its
+	//    Node. A required-hostname placeholder would have stayed Pending here.
+	var surgeClaim, surgeNode string
+	eventually(t, ageThreshold+3*time.Minute, "Karpenter to provision a NEW NodeClaim for the placeholder", func() error {
+		cur, err := listClaims(ctx, cl, poolA)
+		if err != nil {
+			return err
+		}
+		for i := range cur {
+			if !beforeNames[cur[i].Name] && cur[i].DeletionTimestamp == nil {
+				surgeClaim = cur[i].Name
+				surgeNode = cur[i].Status.NodeName
+			}
+		}
+		if surgeClaim == "" {
+			return fmt.Errorf("no new NodeClaim provisioned yet (set still %v) — placeholder not inducing capacity", keys(claimNames(cur)))
+		}
+		if surgeNode == "" {
+			return fmt.Errorf("new NodeClaim %s not registered a Node yet", surgeClaim)
+		}
+		return nil
+	})
+	t.Logf("Karpenter provisioned NEW surge NodeClaim %s (node %s) for the placeholder — new-provision path works (issue #96)", surgeClaim, surgeNode)
+
+	// 4. The placeholder bound to the freshly provisioned surge node (not the
+	//    candidate), and that node is in pool-a — confirming the new node is the
+	//    surge target, not an absorb onto pre-existing capacity.
+	eventually(t, 2*time.Minute, "the placeholder to bind to the freshly provisioned surge node", func() error {
+		ph, err := getPlaceholder(ctx, cl, candClaim)
+		if err != nil {
+			return err
+		}
+		if ph == nil || ph.Spec.NodeName == "" {
+			return fmt.Errorf("placeholder not bound yet")
+		}
+		if ph.Spec.NodeName != surgeNode {
+			return fmt.Errorf("placeholder bound to %s, not the freshly provisioned surge node %s", ph.Spec.NodeName, surgeNode)
+		}
+		return nil
+	})
+
+	// 5. The rotation reaches complete: last-rotation stamped, anchor cleared, the
+	//    candidate NodeClaim drained away, and the surge NodeClaim survives (it is
+	//    the new node that replaced the candidate).
+	eventually(t, ageThreshold+3*time.Minute, "the new-provision rotation to reach complete", func() error {
+		pool, err := getNodePool(ctx, cl, poolA)
+		if err != nil {
+			return err
+		}
+		if poolAnno(pool, annotations.LastRotationAt) == "" {
+			return fmt.Errorf("last-rotation-at not yet stamped (anchor=%q)", poolAnno(pool, annotations.ActiveRotation))
+		}
+		if poolAnno(pool, annotations.ActiveRotation) != "" {
+			return fmt.Errorf("anchor still held: %q", poolAnno(pool, annotations.ActiveRotation))
+		}
+		if _, err := getClaim(ctx, cl, candClaim); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("candidate claim %s not yet gone (err=%v)", candClaim, err)
+		}
+		return nil
+	})
+	if _, err := getClaim(ctx, cl, surgeClaim); err != nil {
+		t.Fatalf("freshly provisioned surge claim %s vanished — it is the candidate's replacement and must survive: %v", surgeClaim, err)
+	}
+
+	// 6. Completion side effects: placeholder deleted, surge target unfrozen, and
+	//    a success + drain-duration metric recorded — same completion chain the
+	//    absorb path asserts, now reached via a genuinely new node.
+	assertPlaceholderGone(ctx, t, cl, candClaim)
+	assertNoLingeringFreeze(ctx, t, cl, candClaim)
+	assertSuccessAndDrainMetrics(ctx, t, poolA)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Capacity-absorb path (§3.3 second acceptable outcome) + completion + metrics.
 //
 // Covers issue #92 criteria:
@@ -64,12 +194,12 @@ func TestKWOKSurge(t *testing.T) {
 //   - Completion chain: placeholder deleted, surge target unfrozen, anchor cleared.
 //   - Metrics: success + drain-duration scraped from /metrics (metrics_test.go).
 //
-// Why absorb (not new-provision): core Karpenter v1 RestrictedLabels rejects a
-// provisionable Pod referencing kubernetes.io/hostname, which the placeholder's
-// §3.3 candidate-exclusion always carries — so a brand-new surge node cannot be
-// induced under KWOK. Absorb works because kube-scheduler (not the provisioner)
-// evaluates the hostname NotIn when bin-packing onto an existing node. The
-// new-NodeClaim-provision completion is out of scope here (README.md, PR body).
+// This subtest specifically exercises the ABSORB outcome (the new-provision path
+// has its own subtest, testNewProvision). When a pre-existing spare exists in the
+// candidate's pool, kube-scheduler bin-packs the placeholder onto it — honoring
+// the (now soft, §3.3 / issue #96) hostname preference — rather than inducing a
+// new node. We assert the placeholder binds to the pre-existing spare and the
+// rotation completes WITHOUT a new NodeClaim appearing.
 //
 // Determinism: with ageThreshold=4m, the candidate is provisioned and aged ~3.5m
 // (still below threshold), then a FRESH spare is provisioned in the same pool.

@@ -13,14 +13,16 @@
 // test, exactly as it should.
 //
 // KWOK limitations this harness deliberately works within are documented in
-// README.md and inline at each subtest. The most consequential: core Karpenter
-// v1 lists kubernetes.io/hostname in RestrictedLabels, so the provisioner
-// rejects any *provisionable* Pod whose nodeAffinity references it — which the
-// controller's placeholder always does (the §3.3 candidate-exclusion). The
-// surge therefore reaches `complete` here only via the CAPACITY-ABSORB path
-// (bin-pack onto a pre-existing spare, where kube-scheduler — not Karpenter's
-// provisioner — evaluates the hostname NotIn). The new-NodeClaim-provision
-// path's full completion is out of scope for KWOK; see README.md.
+// README.md and inline at each subtest. One historically consequential one was
+// resolved by issue #96: core Karpenter v1 lists kubernetes.io/hostname in
+// RestrictedLabels, so the provisioner rejects any *provisionable* Pod whose
+// REQUIRED nodeAffinity references it. The §3.3 candidate-exclusion therefore now
+// rides as a SOFT preferred term, not a required one, so the placeholder is
+// hostname-free to the provisioner and the NEW-PROVISION surge path works under
+// KWOK — testNewProvision drives a surge to `complete` by inducing a brand-new
+// NodeClaim with no pre-existing spare. The CAPACITY-ABSORB path (bin-pack onto a
+// pre-existing spare, where kube-scheduler honors the soft hostname preference) is
+// covered by testCapacityAbsorb.
 package kwok
 
 import (
