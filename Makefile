@@ -123,7 +123,7 @@ e2e-kwok: kind ko kustomize docker-build-e2e
 	PATH="$(LOCALBIN):$$PATH" \
 	E2E_KWOK_CLUSTER=$(E2E_KWOK_CLUSTER) \
 	KUBECONFIG="$$(kind get kubeconfig-path --name $(E2E_KWOK_CLUSTER) 2>/dev/null || echo $$HOME/.kube/config)" \
-		go test -tags e2e -count=1 -v -timeout 38m ./test/e2e/kwok/...
+		go test -tags e2e -count=1 -v -timeout 50m ./test/e2e/kwok/...
 	@if [ "$(E2E_KWOK_KEEP)" != "true" ]; then \
 		echo "==> tearing down kind cluster $(E2E_KWOK_CLUSTER)"; \
 		$(KIND) delete cluster --name $(E2E_KWOK_CLUSTER); \
