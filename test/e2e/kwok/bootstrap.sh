@@ -13,8 +13,9 @@
 #
 # Idempotent-ish: re-running reuses an existing cluster of the same name.
 #
-# Required tools on PATH (the Makefile's e2e-kwok target installs them into
-# ./bin and prepends it): kind, kubectl, helm, ko, kustomize, go, docker.
+# Required tools on PATH (kind, kubectl, helm, ko, kustomize are pinned in
+# aqua.yaml and resolved from $PATH via aqua; plus go and docker): kind,
+# kubectl, helm, ko, kustomize, go, docker.
 set -euo pipefail
 
 # ── Pinned versions ─────────────────────────────────────────────────────────

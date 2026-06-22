@@ -8,26 +8,34 @@ CHART ?= charts/node-rotation-controller
 # minor in go.mod (v0.<minor>.x -> 1.<minor>).
 ENVTEST_K8S_VERSION ?= 1.36
 
+# The Go toolchain and all CLIs (go, setup-envtest, golangci-lint, gopls, kind,
+# ko, kustomize, helm, kubectl, terraform) are pinned in aqua.yaml and invoked by
+# bare name; aqua lazily installs the pinned version on first use. LOCALBIN is
+# only the build/output dir for the manager binary and the envtest assets.
 LOCALBIN ?= $(shell pwd)/bin
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
-ENVTEST ?= $(LOCALBIN)/setup-envtest
-ENVTEST_VERSION ?= v0.24.1
-GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.12.2
-GOPLS ?= $(LOCALBIN)/gopls
-GOPLS_VERSION ?= v0.22.0
+# Prepend aqua's bin dir to PATH so `make` finds the pinned CLIs even when the
+# interactive shell PATH does not already include it. No-op when aqua is absent.
+AQUA_ROOT := $(shell command -v aqua >/dev/null 2>&1 && aqua root-dir)
+ifneq ($(AQUA_ROOT),)
+export PATH := $(AQUA_ROOT)/bin:$(PATH)
+endif
 
-# Tooling for the standalone KWOK e2e harness (test/e2e/kwok, issue #92). Pinned
-# so the harness is reproducible locally and in CI. KIND brings the kindest/node
-# image referenced (by digest) in test/e2e/kwok/kind.yaml — keep the two in sync.
-KIND ?= $(LOCALBIN)/kind
-KIND_VERSION ?= v0.31.0
-KO ?= $(LOCALBIN)/ko
-KO_VERSION ?= v0.18.0
-KUSTOMIZE ?= $(LOCALBIN)/kustomize
-KUSTOMIZE_VERSION ?= v5.6.0
+# aqua-tools makes `make` self-bootstrapping: `aqua install --only-link` creates
+# the command symlinks for every tool in aqua.yaml (cheap, offline, idempotent),
+# so tool-using targets that depend on it resolve the bare names without the
+# developer having to run `aqua i` by hand. The binaries themselves are still
+# fetched lazily at their pinned versions on first use.
+.PHONY: aqua-tools
+aqua-tools:
+	@command -v aqua >/dev/null 2>&1 || { \
+		echo "aqua not found — install it (https://aquaproj.github.io) so the pinned CLIs in aqua.yaml resolve"; \
+		exit 1; \
+	}
+	@aqua install --only-link
+
 # Cluster + image names shared by the e2e-kwok target and the Go driver.
 E2E_KWOK_CLUSTER ?= nrc-kwok-e2e
 E2E_KWOK_IMAGE ?= ghcr.io/akashisn/node-rotation-controller:e2e
@@ -38,24 +46,24 @@ E2E_EKS_DIR ?= test/e2e/eks-automode
 all: build
 
 .PHONY: fmt
-fmt:
+fmt: aqua-tools
 	go fmt ./...
 
 .PHONY: vet
-vet:
+vet: aqua-tools
 	go vet ./...
 
 .PHONY: build
-build: fmt vet
+build: aqua-tools fmt vet
 	go build -o $(LOCALBIN)/manager ./cmd
 
 .PHONY: test
-test: envtest
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./... -coverprofile cover.out
+test: aqua-tools $(LOCALBIN)
+	KUBEBUILDER_ASSETS="$(shell setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./... -coverprofile cover.out
 
 .PHONY: lint
-lint: golangci-lint
-	$(GOLANGCI_LINT) run
+lint: aqua-tools
+	golangci-lint run
 
 # gopls-check surfaces gopls' static diagnostics down to hint severity (the
 # modernize suggestions etc. that golangci-lint does not cover). gopls check
@@ -64,10 +72,10 @@ lint: golangci-lint
 # (captured) so stderr is dropped to avoid double-printing; a non-zero gopls exit
 # (e.g. a load error) fails the target too, so a tool failure can't pass green.
 .PHONY: gopls-check
-gopls-check: gopls
-	@out="$$($(GOPLS) check -severity=hint $$(git ls-files '*.go') 2>/dev/null)"; status=$$?; \
+gopls-check: aqua-tools
+	@out="$$(gopls check -severity=hint $$(git ls-files '*.go') 2>/dev/null)"; status=$$?; \
 	if [ $$status -ne 0 ]; then \
-		echo "gopls check failed to run (exit $$status); re-run for detail: $(GOPLS) check -severity=hint \$$(git ls-files '*.go')"; \
+		echo "gopls check failed to run (exit $$status); re-run for detail: gopls check -severity=hint \$$(git ls-files '*.go')"; \
 		exit $$status; \
 	fi; \
 	if [ -n "$$out" ]; then \
@@ -81,54 +89,29 @@ docker-build:
 	docker build -t $(IMG) .
 
 .PHONY: helm-lint
-helm-lint:
+helm-lint: aqua-tools
 	helm lint $(CHART)
 	helm template rot $(CHART) --namespace node-rotation-system >/dev/null
 	helm template rot $(CHART) --namespace node-rotation-system --set metrics.serviceMonitor.enabled=true >/dev/null
-
-.PHONY: envtest
-envtest: $(LOCALBIN)
-	test -s $(ENVTEST) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION)
-
-.PHONY: golangci-lint
-golangci-lint: $(LOCALBIN)
-	test -s $(GOLANGCI_LINT) || GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-
-.PHONY: gopls
-gopls: $(LOCALBIN)
-	test -s $(GOPLS) || GOBIN=$(LOCALBIN) go install golang.org/x/tools/gopls@$(GOPLS_VERSION)
-
-.PHONY: kind
-kind: $(LOCALBIN)
-	test -s $(KIND) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/kind@$(KIND_VERSION)
-
-.PHONY: ko
-ko: $(LOCALBIN)
-	test -s $(KO) || GOBIN=$(LOCALBIN) go install github.com/google/ko@$(KO_VERSION)
-
-.PHONY: kustomize
-kustomize: $(LOCALBIN)
-	test -s $(KUSTOMIZE) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/kustomize/kustomize/v5@$(KUSTOMIZE_VERSION)
 
 # e2e-kwok is a STANDALONE target — deliberately NOT a dependency of `test`. It
 # builds the controller image, spins up a kind cluster running the real
 # Karpenter v1 KWOK reference cloudprovider + this controller, and runs the
 # build-tagged Go driver (test/e2e/kwok, issue #92). The `e2e` build tag keeps
-# these files out of `make test` / `go test ./...`. Set E2E_KWOK_KEEP=true to
-# leave the cluster up for debugging after the run.
+# these files out of `make test` / `go test ./...`. kind/ko/kustomize/helm/kubectl
+# are resolved from $PATH via aqua (pinned in aqua.yaml). Set E2E_KWOK_KEEP=true
+# to leave the cluster up for debugging after the run.
 .PHONY: e2e-kwok
-e2e-kwok: kind ko kustomize docker-build-e2e
-	PATH="$(LOCALBIN):$$PATH" \
+e2e-kwok: aqua-tools docker-build-e2e
 	CLUSTER_NAME=$(E2E_KWOK_CLUSTER) \
 	CONTROLLER_IMAGE=$(E2E_KWOK_IMAGE) \
 		test/e2e/kwok/bootstrap.sh
-	PATH="$(LOCALBIN):$$PATH" \
 	E2E_KWOK_CLUSTER=$(E2E_KWOK_CLUSTER) \
 	KUBECONFIG="$$(kind get kubeconfig-path --name $(E2E_KWOK_CLUSTER) 2>/dev/null || echo $$HOME/.kube/config)" \
 		go test -tags e2e -count=1 -v -timeout 50m ./test/e2e/kwok/...
 	@if [ "$(E2E_KWOK_KEEP)" != "true" ]; then \
 		echo "==> tearing down kind cluster $(E2E_KWOK_CLUSTER)"; \
-		$(KIND) delete cluster --name $(E2E_KWOK_CLUSTER); \
+		kind delete cluster --name $(E2E_KWOK_CLUSTER); \
 	else \
 		echo "==> E2E_KWOK_KEEP=true; leaving cluster $(E2E_KWOK_CLUSTER) up"; \
 	fi
@@ -144,13 +127,13 @@ docker-build-e2e:
 # (copy from terraform.tfvars.example) and they CREATE BILLABLE AWS RESOURCES.
 # Ephemeral by design: up -> run scenarios -> down. See the README in that dir.
 .PHONY: e2e-eks-up
-e2e-eks-up:
+e2e-eks-up: aqua-tools
 	cd $(E2E_EKS_DIR) && terraform init && terraform apply
 
 .PHONY: e2e-eks-kubeconfig
-e2e-eks-kubeconfig:
+e2e-eks-kubeconfig: aqua-tools
 	cd $(E2E_EKS_DIR) && eval "$$(terraform output -raw kubeconfig_command)"
 
 .PHONY: e2e-eks-down
-e2e-eks-down:
+e2e-eks-down: aqua-tools
 	cd $(E2E_EKS_DIR) && terraform destroy

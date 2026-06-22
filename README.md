@@ -94,7 +94,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [CODE_OF
 
 ## Development
 
-Requires Go 1.26+ and `make`. Docker is needed only for `make docker-build`.
+Requires [aqua](https://aquaproj.github.io) and `make`; Docker is needed only
+for `make docker-build`. The **Go toolchain** and all CLI tooling (golangci-lint,
+gopls, setup-envtest, kind, ko, kustomize, helm, kubectl, terraform) are
+version-pinned in [`aqua.yaml`](aqua.yaml) — install aqua, and the `make` targets
+provision and use the pinned versions automatically (aqua lazily installs each on
+first use; a `make` run links them onto `$PATH` for you). The Go version in
+`aqua.yaml` is kept in sync with the `go` directive in `go.mod`.
 
 | Command | Purpose |
 |---------|---------|

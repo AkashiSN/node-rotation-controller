@@ -14,6 +14,13 @@ set -euo pipefail
 log() { echo "==> $*" >&2; }
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# `ko` is pinned in aqua.yaml and resolved from $PATH via aqua. aqua finds its
+# config by walking up from $CWD, but the `ko build` below runs in a throwaway
+# temp module OUTSIDE the repo tree — so point aqua at the repo's aqua.yaml
+# explicitly. No-op when aqua isn't on the toolchain (the var is just unused).
+export AQUA_GLOBAL_CONFIG="${AQUA_GLOBAL_CONFIG:-${REPO_ROOT}/aqua.yaml}"
+
 KARPENTER_VERSION="$(cd "${REPO_ROOT}" && go list -m -f '{{.Version}}' sigs.k8s.io/karpenter)"
 
 # Deterministic, content-addressed-ish tag keyed on the pinned version so a
