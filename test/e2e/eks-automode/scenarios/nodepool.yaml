@@ -1,0 +1,65 @@
+# Dedicated PoC NodePool — the ONLY in-scope pool for the scenarios in
+# SCENARIOS.md (issue #93). It references the built-in Auto Mode NodeClass
+# `default` (group eks.amazonaws.com) and carries the marker label the controller
+# selects on (noderotation-poc/in-scope:"true"), so the controller rotates ONLY
+# nodes launched here — never the built-in general-purpose/system pools that host
+# the controller itself.
+#
+# The `noderotation-poc/in-scope` label is the rotation switch: present = the
+# controller rotates this pool; absent = it ignores it. SCENARIOS.md adds/removes
+# it to start/stop each scenario (with ageThreshold=5m the pool would otherwise
+# rotate forever).
+#
+# expireAfter is retained as the §3.5 backstop, set far out (336h, the Auto Mode
+# default) so it never races the test AND so the §3.2 feasibility math can
+# guarantee >= minRotationChances window occurrences before it (a daily window
+# has worst-case period P=24h; a too-small expireAfter is fatally rejected as
+# OverrideGBelowOne — see SCENARIOS.md "Gotchas"). The controller drives rotation
+# via its ageThreshold override (5m), far below this.
+#
+# consolidationPolicy WhenEmpty + a short consolidateAfter reclaims leftover empty
+# surge nodes (a rescheduled pod can briefly leave one behind) without disrupting
+# the busy test node. instance-cpu is pinned small (2-4 vCPU) to keep cost low and
+# the surge node size predictable.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: nrc-poc
+  labels:
+    noderotation-poc/in-scope: "true"
+spec:
+  template:
+    metadata:
+      labels:
+        noderotation-poc/pool: poc
+    spec:
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2", "4"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      expireAfter: 336h # §3.5 backstop — see header note (must be >> ageThreshold + K·P)
+      terminationGracePeriod: 5m
+  limits:
+    cpu: "16" # headroom for a make-before-break surge; Scenario B patches this down
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 60s

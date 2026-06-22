@@ -1,0 +1,71 @@
+# Scenario A — zonal-EBS rebind (§7.2, §3.3).
+#
+# A gp3 StorageClass on the Auto Mode EBS CSI driver (the cluster's default gp2
+# uses the legacy in-tree kubernetes.io/aws-ebs provisioner, which is unusable on
+# Auto Mode). WaitForFirstConsumer pins the volume to the AZ where the pod first
+# lands. EBS is zonal: the volume can only re-attach to a node in that same AZ.
+# When the controller rotates the node, the surge node must be same-AZ (the
+# surge.matchNodeRequirements zone parity) for the CSI driver to re-attach the
+# volume and the pod to keep its data — which the sentinel file proves.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nrc-poc-gp3
+provisioner: ebs.csi.eks.amazonaws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+parameters:
+  type: gp3
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: poc-stateful
+  namespace: default
+spec:
+  serviceName: poc-stateful
+  replicas: 1
+  selector:
+    matchLabels:
+      app: poc-stateful
+  template:
+    metadata:
+      labels:
+        app: poc-stateful
+    spec:
+      nodeSelector:
+        noderotation-poc/pool: poc
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: app
+          image: public.ecr.aws/docker/library/busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Stamp a sentinel once; it must survive the rotation by riding the
+              # same EBS volume to the same-AZ surge node.
+              if [ ! -f /data/sentinel ]; then
+                echo "sentinel-$(date +%s)-$(hostname)" > /data/sentinel
+                echo "WROTE sentinel: $(cat /data/sentinel)"
+              else
+                echo "FOUND existing sentinel: $(cat /data/sentinel)"
+              fi
+              cat /data/sentinel
+              while true; do sleep 30; done
+          resources:
+            requests:
+              cpu: "1"
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: nrc-poc-gp3
+        resources:
+          requests:
+            storage: 1Gi

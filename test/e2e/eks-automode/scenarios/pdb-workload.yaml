@@ -1,0 +1,48 @@
+# Scenario G — PDB-respected voluntary drain (spec §3.3, #77 P0).
+#
+# A 2-replica Deployment pinned to nrc-poc with a PodDisruptionBudget. The
+# scenario installs a BLOCKING budget (minAvailable: 2 == replica count) so any
+# eviction would violate it: when the controller deletes the old NodeClaim, the
+# Karpenter termination controller drains the node via the VOLUNTARY path, which
+# honors PDBs — so the drain stalls (observable as noderotation_drain_stuck=1)
+# instead of force-evicting. Relaxing the budget to minAvailable: 1 then lets the
+# drain proceed and the rotation complete. A forceful (PDB-ignoring) path would
+# not stall, so the stall is the proof the drain is voluntary/PDB-respecting.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: poc-pdb
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: poc-pdb
+  template:
+    metadata:
+      labels:
+        app: poc-pdb
+    spec:
+      nodeSelector:
+        noderotation-poc/pool: poc
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: 300m
+              memory: 128Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: poc-pdb
+  namespace: default
+spec:
+  # Blocking: with replicas=2 and minAvailable=2, no pod may be voluntarily
+  # evicted. Relax to 1 during the scenario to let the drain proceed.
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: poc-pdb

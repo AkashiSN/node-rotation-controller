@@ -11,7 +11,7 @@ It is the **real-cloud companion** to the KWOK harness:
 | Harness | Cost | Covers |
 |---------|------|--------|
 | [`test/e2e/kwok/`](../kwok/) (#92) | free, CI-reproducible | Karpenter v1 contract on virtual nodes |
-| `test/e2e/eks-automode/` (this) (#93) | **real AWS spend** | same-AZ surge + zonal-EBS rebind, real capacity-shortage rollback, NodePool `limits` exhaustion, `expireAfter` real-soak race |
+| `test/e2e/eks-automode/` (this) (#93) | **real AWS spend** | same-AZ surge + zonal-EBS rebind, `readyTimeout` rollback, NodePool `limits` gating, multi-NodePool confinement, PDB-respecting drain, `do-not-disrupt`, `expired` outcome, `expireAfter` backstop margin (genuine same-AZ capacity-shortage/ICE and a full tight-race soak remain open — #109) |
 
 > **This is test-only infrastructure.** It lives entirely under `test/e2e/` and
 > does not touch the controller (`internal/`, `cmd/`). EKS Auto Mode provides
@@ -115,25 +115,38 @@ just pushed — and run the scenarios (#77, #81), then record the outcomes back
 into spec §7.2:
 
 ```bash
+# Install with the scenario values overlay (selector, always-open window, single
+# replica, off-nrc-poc affinity) — WITHOUT -f scenarios/controller-values.yaml the
+# chart defaults (workload=api selector, Tokyo Wed/Sat window, 2 replicas/PDB) make
+# the nrc-poc scenarios neither start nor match the validated setup.
 helm install node-rotation-controller ../../../charts/node-rotation-controller \
   --namespace node-rotation-system --create-namespace \
-  --set image.repository="$REPO" --set image.tag=poc
-# ... apply scenario workloads / NodePools and observe rotations ...
+  -f scenarios/controller-values.yaml \
+  --set image.repository="$REPO" --set image.tag=poc --wait --timeout 8m
+# then apply the NodePool + scenario workloads and drive rotations — see SCENARIOS.md
 ```
 
-The PoC subset this cluster exists to validate (issue #93 acceptance criteria):
+> **Step-by-step runbook:** [`SCENARIOS.md`](SCENARIOS.md) is the reproducible
+> walkthrough — the exact NodePool, workloads, and controller config (in
+> [`scenarios/`](scenarios/)), the trigger/observe commands, the **expected
+> output** for each scenario, and the non-obvious gotchas. Follow it to re-run the
+> validation below and reproduce the spec §7.2 results.
 
-| § / Issue | Scenario |
-|-----------|----------|
-| §7.2, §3.3 | Same-AZ surge node lets the CSI driver re-attach a zonal EBS volume (zonal-PV rebind) |
-| §3.2, Refs #81 | Same-AZ capacity shortage reaches `readyTimeout` and rolls back cleanly; NodePool `limits` exhaustion fails a rotation as expected |
-| Refs #81 | Rollback cleanup: placeholder deleted, candidate unfrozen/uncordoned, `noderotation_completed_total{outcome="failure"\|"expired"}` increments |
-| R6 | `expireAfter` stays a backstop the controller's lead time wins against over a soak exceeding the age threshold |
+The PoC subset this cluster validates (issue #93 acceptance criteria), as run in
+[`SCENARIOS.md`](SCENARIOS.md) and recorded in spec §7.2 — **validated** unless the
+row says otherwise:
 
-Record results in spec
+| § / Issue | Scenario | Status |
+|-----------|----------|--------|
+| §7.2, §3.3 | Same-AZ surge node lets the CSI driver re-attach a zonal EBS volume (zonal-PV rebind) | validated |
+| §3.2, Refs #81 | Surge `readyTimeout` rollback; NodePool `limits` exhaustion gates a rotation | validated — but a **genuine** same-AZ capacity shortage (ICE) was stood in by a short `readyTimeout`; real ICE still open (#109) |
+| Refs #81 | Rollback cleanup: placeholder deleted, candidate unfrozen/uncordoned, `noderotation_completed_total{outcome="failure"\|"expired"}` increments | validated |
+| R6 | `expireAfter` stays a backstop the controller's lead time wins against | validated via a **scaled** multi-rotation soak; a full multi-hour tight-race soak remains deferred (#109) |
+
+Results are recorded in spec
 [§7.2 Validated Assumptions](../../../docs/specification.md#72-validated-assumptions);
-file any divergence as a follow-up `fix(...)` issue before any
-production-readiness claim (see the roadmap, spec §6.2).
+remaining real-cloud items are tracked in #109. File any divergence as a follow-up
+`fix(...)` issue before any production-readiness claim (see the roadmap, spec §6.2).
 
 ### 5. Destroy
 

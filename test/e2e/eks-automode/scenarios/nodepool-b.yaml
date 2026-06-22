@@ -1,0 +1,84 @@
+# Scenario F — a SECOND NodePool used to prove multi-NodePool confinement
+# (spec §3.3, #77 P0). It is deliberately OUT of the controller's scope (it lacks
+# the noderotation-poc/in-scope label), and it holds spare capacity in the SAME AZ
+# (us-west-2a) as the nrc-poc candidate. The required karpenter.sh/nodepool=nrc-poc
+# selector on the placeholder must keep the nrc-poc surge confined to nrc-poc — it
+# must NOT bin-pack onto this pool's same-AZ spare nor provision here.
+#
+# Both this pool and nrc-poc are pinned to us-west-2a for this scenario so the
+# spare is genuinely a same-AZ candidate the placeholder could (wrongly) use if
+# confinement were broken.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: nrc-poc-b
+  labels:
+    noderotation-poc/pool: b
+spec:
+  template:
+    metadata:
+      labels:
+        noderotation-poc/pool: b
+    spec:
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2", "4"]
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["us-west-2a"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      expireAfter: 336h
+      terminationGracePeriod: 5m
+  limits:
+    cpu: "16"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 60s
+---
+# A small filler that brings up exactly one nrc-poc-b node and leaves it with
+# ample spare cpu (request 0.2 on a 2-vCPU node → ~1.7 free) — more than enough
+# to host the nrc-poc placeholder (sized ~1 cpu) IF confinement were broken.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: poc-filler-b
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: poc-filler-b
+  template:
+    metadata:
+      labels:
+        app: poc-filler-b
+    spec:
+      nodeSelector:
+        noderotation-poc/pool: b
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: 200m
+              memory: 128Mi
