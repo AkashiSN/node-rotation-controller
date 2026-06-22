@@ -61,7 +61,7 @@ jobs:
           # (a README under test/e2e/ should not spin up a cluster). No `grep -q`
           # and no pipe-into-grep-q, so `set -o pipefail` cannot SIGPIPE-false-skip;
           # `|| true` keeps an empty match from failing under `set -e`.
-          relevant="$(grep -E '^(internal/|cmd/|charts/|test/e2e/|go\.mod$|go\.sum$|Makefile$|Dockerfile$|\.github/workflows/e2e\.yaml$)' <<<"$changed" | grep -vE '\.md$' || true)"
+          relevant="$(grep -E '^(internal/|cmd/|charts/|test/e2e/|go\.mod$|go\.sum$|Makefile$|Dockerfile$|aqua\.yaml$|\.github/workflows/e2e\.yaml$)' <<<"$changed" | grep -vE '\.md$' || true)"
           if [ -n "$relevant" ]; then
             echo "→ e2e-relevant (non-doc) paths changed: running the full suite"
             echo "$relevant"
