@@ -133,6 +133,9 @@ e2e-eks-up: aqua-tools
 .PHONY: e2e-eks-kubeconfig
 e2e-eks-kubeconfig: aqua-tools
 	cd $(E2E_EKS_DIR) && eval "$$(terraform output -raw kubeconfig_command)"
+	@echo
+	@echo "==> kubeconfig written. Point your shell at the PoC cluster with:"
+	@echo "    export KUBECONFIG=$(abspath $(E2E_EKS_DIR))/kubeconfig"
 
 .PHONY: e2e-eks-down
 e2e-eks-down: aqua-tools

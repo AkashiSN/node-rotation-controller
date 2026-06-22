@@ -99,3 +99,30 @@ module "eks" {
   # immediately after apply.
   enable_cluster_creator_admin_permissions = true
 }
+
+# ---------------------------------------------------------------------------
+# ECR repository for the PoC controller image.
+#
+# The chart defaults to an unpublished ghcr.io image, and `kind load` (used by
+# the KWOK harness) has no equivalent on real EC2 nodes — kubelet pulls from a
+# registry over the network. We manage a PRIVATE, same-account ECR repo here so
+# the image-delivery path is reproducible and torn down with `terraform destroy`
+# (no orphaned repo / lingering cost — the thing README.md warns against). EKS
+# Auto Mode's node IAM role can pull same-account ECR images, so no
+# `imagePullSecret` is needed at install time.
+#
+# Terraform manages only the repository (the container); the build + push of the
+# image stays a manual/Make step. Pushing container images from Terraform is an
+# anti-pattern (non-idempotent, build tooling leaks into apply).
+# ---------------------------------------------------------------------------
+resource "aws_ecr_repository" "controller" {
+  name = var.name
+
+  # Ephemeral by design: let `terraform destroy` delete the repo even when the
+  # PoC image (and its tags) are still present.
+  force_delete = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
