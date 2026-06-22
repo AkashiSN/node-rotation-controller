@@ -10,6 +10,20 @@ replicaCount: 1
 podDisruptionBudget:
   enabled: false
 
+# Keep the controller OFF the nrc-poc pool it rotates. Otherwise Auto Mode
+# consolidation can land the controller Pod on an nrc-poc node, and rotating (or
+# force-deleting) that node restarts the controller mid-scenario — resetting the
+# in-memory metric counters and disrupting observation. It belongs on the
+# general-purpose/system pools.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: noderotation-poc/pool
+              operator: NotIn
+              values: ["poc"]
+
 # Human-readable logs so the rotation lifecycle is easy to follow.
 logging:
   development: true

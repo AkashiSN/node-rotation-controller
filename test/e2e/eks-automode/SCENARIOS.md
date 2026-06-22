@@ -391,8 +391,159 @@ noderotation_short_lead_nodes{nodepool="nrc-poc"}      0         # nothing at ri
 
 `rotation_chances=13` (≫ `minRotationChances=2`) and `short_lead_nodes=0` show the
 lead time wins with a wide margin; every rotation observed in Scenarios 0/A fired
-at ~5m, hundreds of times before a single 336h `expireAfter` could fire. A genuine
-multi-hour soak is deferred.
+at ~5m, hundreds of times before a single 336h `expireAfter` could fire.
+
+> A genuine multi-hour soak with a *tight* race is not achievable with a daily
+> window (P=24h forces a large `expireAfter`, see [Gotchas](#6-gotchas--troubleshooting));
+> Scenario I below runs the scaled form — several consecutive rotations, none
+> approaching expiry.
+
+### Scenario E — `expired` outcome (force-expiry caught in pending)
+
+**Goal.** When a candidate is force-expired (its NodeClaim deleted) *while a
+rotation is pending*, the controller records it as **expired**, not success/failure
+— nothing rotated, no cooldown consumed (spec §5.2, #81 / #93).
+
+**Preconditions.** [§3](#3-shared-setup), stateless workload, one Ready node,
+fresh candidate, `readyTimeout: 15m` (the base value — long, so the pending window
+does not time out first).
+
+**Run.** Trigger, then the moment the candidate is `pending`, freeze the pool (to
+hold escalation so no surge progresses) and delete the candidate NodeClaim — the
+real-world force-expiry:
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
+# wait until: kubectl get nodeclaim <cand> -o jsonpath='{.metadata.annotations.noderotation\.io/state}' == pending
+kubectl annotate nodepool nrc-poc noderotation.io/freeze="$(date -u -d '+15 min' +%Y-%m-%dT%H:%M:%SZ)" --overwrite
+kubectl delete nodeclaim <cand> --wait=false
+```
+
+**Expected.** The candidate is caught in pending and the rotation aborts to the
+expired path: `state=expired`, the pool `active-rotation` anchor cleared, no
+placeholder/surge left behind (the freeze meant none was created).
+
+```text
+noderotation_completed_total{nodepool="nrc-poc",outcome="expired"} 1
+noderotation_in_progress{nodepool="nrc-poc"} 0
+```
+
+**Cleanup.** `kubectl annotate nodepool nrc-poc noderotation.io/freeze-` and remove
+the in-scope label.
+
+> **Pin the controller off nrc-poc first.** If the controller Pod is running on the
+> nrc-poc node you delete here, it restarts and resets the in-memory metric
+> counters before you can read them. `scenarios/controller-values.yaml` carries the
+> `affinity` that keeps it on the general-purpose/system pools — keep it.
+
+### Scenario F — multi-NodePool confinement
+
+**Goal.** The required `karpenter.sh/nodepool=nrc-poc` selector on the placeholder
+confines **both** kube-scheduler binding **and** Karpenter provisioning to nrc-poc
+— a same-AZ spare in another pool is never used (spec §3.3, #77 P0).
+
+**Preconditions.** [§3](#3-shared-setup) with the stateless workload (the nrc-poc
+candidate must be `us-west-2a`). Stand up a second, out-of-scope pool with same-AZ
+spare:
+
+```bash
+kubectl apply -f scenarios/nodepool-b.yaml          # nrc-poc-b (pool=b, NOT in-scope) + a filler
+kubectl wait --for=condition=Ready pod -l app=poc-filler-b --timeout=5m
+# nrc-poc-b now has one us-west-2a node with ~1.7 cpu free — ample for the ~1cpu placeholder
+```
+
+**Run.** Note the nrc-poc-b claims, trigger an nrc-poc rotation, let it complete,
+then halt.
+
+**Expected.** Despite the same-AZ spare, the surge stays in nrc-poc:
+
+- the surge NodeClaim carries `karpenter.sh/nodepool=nrc-poc` (not `nrc-poc-b`);
+- the placeholder binds an nrc-poc node (`noderotation-poc/pool=poc`), not pool b;
+- **nrc-poc-b's NodeClaim list is unchanged** — no node provisioned or absorbed there.
+
+**Cleanup.** `kubectl delete -f scenarios/nodepool-b.yaml`.
+
+### Scenario G — PDB-respected voluntary drain
+
+**Goal.** The old node drains through Karpenter's **voluntary** (PDB-respecting)
+termination path, not a forceful one (spec §3.3, #77 P0).
+
+**Preconditions.** [§3](#3-shared-setup). Replace the stateless workload with a
+2-replica Deployment + a **blocking** PDB:
+
+```bash
+kubectl delete -f scenarios/workload.yaml --ignore-not-found
+kubectl apply -f scenarios/pdb-workload.yaml          # 2 replicas + PDB minAvailable=2
+kubectl wait --for=condition=Ready pod -l app=poc-pdb --timeout=5m
+```
+
+**Run.** Trigger; once the candidate is `draining` (surge ready, old NodeClaim
+delete issued), watch the replicas, then relax the PDB:
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
+# observe: both replicas stay Running on the OLD node, old NodeClaim lingers — eviction is blocked by the PDB
+kubectl patch pdb poc-pdb -n default --type merge -p '{"spec":{"minAvailable":1}}'
+# now the drain proceeds one replica at a time; old NodeClaim deletes; rotation completes
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-
+```
+
+**Expected.** With `minAvailable=2` the drain **stalls** — both replicas pinned to
+the old node, old NodeClaim lingering (a forceful path would evict immediately).
+After relaxing to `minAvailable=1`, replicas migrate to the surge node one at a
+time and the rotation completes. (The stall is bounded by the pool's
+`terminationGracePeriod=5m`, after which Karpenter force-terminates — relax the PDB
+before then.)
+
+**Cleanup.** `kubectl delete -f scenarios/pdb-workload.yaml`.
+
+### Scenario H — `do-not-disrupt` applied to both nodes during the surge
+
+**Goal.** During the surge the controller protects **both** the old and new nodes
+with `karpenter.sh/do-not-disrupt` (blocking voluntary Consolidation/Drift), tagged
+with its ownership marker, and removes it on completion (spec §3.3, #77 P0).
+
+**Preconditions.** [§3](#3-shared-setup), one Ready node, fresh candidate.
+
+**Run.** Trigger and poll both nodes' annotations during the rotation (escape the
+dots in the key — `['karpenter\.sh/do-not-disrupt']`):
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
+# during pending/draining, on BOTH the candidate node and the surge host:
+kubectl get node <node> -o jsonpath="{.metadata.annotations['karpenter\.sh/do-not-disrupt']} {.metadata.annotations['noderotation\.io/do-not-disrupt-owned']}"
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-
+```
+
+**Expected.** Both nodes show `do-not-disrupt=true` + `do-not-disrupt-owned=true` +
+`surge-for=<candidate>` while the surge is in flight; after completion the
+unfreeze removes all three. (That `do-not-disrupt` does **not** block `expireAfter`
+is documented Karpenter behavior, not tested here — see spec §3.3.)
+
+The controller also emits actionable **Warning Events** on the NodePool/NodeClaim
+(`AVeryAggressive`, `ThroughputBelowArrival`, `ShortLead`) — check with
+`kubectl get events --field-selector involvedObject.name=nrc-poc`.
+
+### Scenario I — scaled R6 soak (lead time keeps winning)
+
+**Goal.** Over several consecutive rotations the controller turns every node over
+at `ageThreshold` (~5m), so none ever approaches `expireAfter` — no `expired`
+outcome, `short_lead_nodes` stays 0 (R6, #93 / #77).
+
+**Preconditions.** [§3](#3-shared-setup), stateless workload.
+
+**Run.** Leave the pool in scope and let it rotate; count completions:
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
+# watch noderotation.io/last-rotation-at change N times (~6 min/cycle), then:
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-
+```
+
+**Expected.** `noderotation_completed_total{outcome="success"}` climbs by N;
+`{outcome="expired"}` and `{outcome="failure"}` do **not** change;
+`noderotation_short_lead_nodes` stays 0 throughout — the ageThreshold rotation
+fires far inside the 336h backstop every cycle.
 
 ---
 
@@ -403,7 +554,8 @@ multi-hour soak is deferred.
 | Halt rotation (every scenario) | `kubectl label nodepool nrc-poc noderotation-poc/in-scope-` |
 | Reclaim leftover empty surge node | automatic (`consolidateAfter: 60s`); or `kubectl delete nodeclaim <empty>` |
 | Make a `failed` candidate fresh | `kubectl annotate nodeclaim <c> noderotation.io/state- noderotation.io/failed-at- noderotation.io/retry-count-` |
-| Remove a scenario's workload | `kubectl delete -f scenarios/<workload>.yaml` |
+| Clear a manual freeze (Scenario E) | `kubectl annotate nodepool nrc-poc noderotation.io/freeze-` |
+| Remove a scenario's workload | `kubectl delete -f scenarios/<workload>.yaml` (`workload`, `statefulset-ebs`, `pdb-workload`, `nodepool-b`) |
 
 ---
 
@@ -446,6 +598,17 @@ multi-hour soak is deferred.
 
 - **Metrics reset on restart.** The `completed_total` counters are in-memory; a
   controller restart zeroes them. Capture a baseline after each restart.
+
+- **Keep the controller OFF the nrc-poc pool.** Auto Mode consolidation can land
+  the controller Pod on an nrc-poc node; rotating or force-deleting that node then
+  restarts the controller mid-scenario and resets the metric counters (this
+  silently broke a first Scenario E run). `scenarios/controller-values.yaml` ships
+  an `affinity` (`noderotation-poc/pool NotIn [poc]`) that pins it to the
+  general-purpose/system pools — keep it.
+
+- **Reading a `/`-keyed annotation with jsonpath.** Escape the dots inside the
+  bracket selector: `['karpenter\.sh/do-not-disrupt']`, not
+  `['karpenter.sh/do-not-disrupt']` — the unescaped form silently returns empty.
 
 - **EBS dynamic provisioning fails (Scenario A).** The cluster's default `gp2`
   StorageClass uses the legacy in-tree `kubernetes.io/aws-ebs` provisioner, which
