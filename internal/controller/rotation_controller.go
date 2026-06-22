@@ -316,6 +316,19 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
 	r.observe(pool, res, now, claims, p, derived)
 
+	// Per-pass heartbeat at debug verbosity (issue #100): a single un-deduplicated
+	// line every reconcile so liveness is visible at raised -v / -zap-devel even
+	// when no findings change — unlike the transition-deduped warning above, which
+	// stays silent in steady state. The authoritative liveness signal remains the
+	// controller_runtime_reconcile_* / workqueue_* metrics (spec §4.2); this log is
+	// a human-readable aid, not a substitute for them.
+	log.V(1).Info("reconcile",
+		"phase", reconcilePhase(pool),
+		"candidates", selection.CountEligible(claims, r.selInputs(res, now)),
+		"claims", len(claims),
+		"inWindow", r.Schedule.InWindow(now),
+		"findings", len(derived.Findings))
+
 	// Surface non-fatal feasibility findings and per-node short-lead conditions
 	// (issue #50): deduplicated logs + Warning Events. Fatal findings keep their
 	// own §5.2 gate behavior below.
@@ -459,6 +472,20 @@ func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolv
 		NodeCount:      nodeCount,
 		Override:       res.override,
 	})
+}
+
+// reconcilePhase reports a coarse, human-readable phase for the per-pass debug
+// heartbeat (issue #100): the in-flight rotation's state when one is anchored,
+// else "idle". It reads the same anchor annotations the reconcile drives on, so
+// it never adds a client call.
+func reconcilePhase(pool *karpv1.NodePool) string {
+	if pool.Annotations[annotations.ActiveRotation] == "" {
+		return "idle"
+	}
+	if st := pool.Annotations[annotations.ActiveRotationState]; st != "" {
+		return st
+	}
+	return annotations.StatePending
 }
 
 // firstFatal returns the first Fatal finding (spec §3.2 layer 1), if any. Used to

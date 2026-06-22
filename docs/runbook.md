@@ -143,6 +143,30 @@ shows them without a metrics stack. Reasons include `KBelowTwo`,
 `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `ThroughputZero`,
 `ThroughputBelowArrival`, `OverrideGBelowK`, and `ShortLead`.
 
+**Judging reconcile liveness — use the metrics, not the warning log.** Both the
+Warning Events *and* the `INFO`-level warning **log** lines are deduplicated on
+the transition into a condition, so in steady state — stable findings, no
+transitions — a perfectly healthy reconcile loop can run for many passes
+emitting **zero** log lines. **Do not** read "no recent warning log line" as
+"reconcile stalled" (a real past mis-diagnosis). Judge liveness from the
+controller-runtime metrics on `/metrics`, which tick on **every** pass:
+
+- `controller_runtime_reconcile_total{controller="rotation"}` — increments per
+  reconcile; a rising `rate()` means the loop is alive.
+- `controller_runtime_reconcile_time_seconds_count{controller="rotation"}` — same
+  per-pass count, via the latency histogram.
+- `workqueue_*` (e.g. `workqueue_adds_total`, `workqueue_depth`,
+  `workqueue_work_duration_seconds_*` for `name="rotation"`) — queue activity and
+  backlog.
+
+To *see* per-pass activity in the log while debugging, raise the controller's log
+verbosity (`--zap-devel`, or a higher `-v`). At debug verbosity (`V(1)`) the
+controller additionally emits, **un-deduplicated, every pass**, the current
+findings and a lightweight `reconcile` heartbeat line (phase, candidate count,
+claim count, in-window, findings count). This is additive debug visibility only —
+it does not change the dedup of the `INFO` log or the Warning Events, nor any
+metric.
+
 ---
 
 ## 4. The freeze workflow
