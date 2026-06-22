@@ -46,3 +46,6 @@ packages:
   - name: kubernetes/kubernetes/kubectl@v1.36.2
   # --- Ephemeral EKS Auto Mode PoC tooling (test/e2e/eks-automode, issue #93) ---
   - name: hashicorp/terraform@v1.15.6
+  # awscli authenticates to AWS, logs Docker in to ECR, and writes the cluster
+  # kubeconfig for the PoC (issue #106). v2 line.
+  - name: aws/aws-cli@2.35.9

@@ -33,13 +33,21 @@ that outlives a single run.
 
 ## Prerequisites
 
-On `PATH`, with **AWS credentials configured** (`aws sts get-caller-identity`
-must succeed) for a principal allowed to create VPC / EKS / IAM resources:
+With **AWS credentials configured** (`aws sts get-caller-identity` must succeed)
+for a principal allowed to create VPC / EKS / IAM / ECR resources.
 
-- [`terraform`](https://developer.hashicorp.com/terraform/install) `1.15.6` (pinned; `.terraform-version` selects it via tenv)
-- [`awscli`](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) v2
-- [`kubectl`](https://kubernetes.io/docs/tasks/tools/)
-- [`helm`](https://helm.sh/docs/intro/install/) (to install the controller chart from [`charts/`](../../../charts/))
+`awscli`, `terraform`, `kubectl`, `helm`, and `ko` are version-pinned in
+[`aqua.yaml`](../../../aqua.yaml) — install [aqua](https://aquaproj.github.io)
+and they resolve from `$PATH` automatically (the repo-root `make` targets, e.g.
+`make e2e-eks-up`, link them for you; aqua lazily installs each on first use).
+
+One tool is **not** managed by aqua and must be on `PATH` yourself:
+
+- [Docker](https://docs.docker.com/get-docker/) with
+  [`buildx`](https://docs.docker.com/build/) — to build and push a **multi-arch**
+  controller image (step 3). Multi-arch matters: Auto Mode may launch amd64
+  *or* arm64 (Graviton) EC2, and a single-arch image fails to run on the other.
+  (The aqua-pinned `ko` can build/push instead of buildx — see step 3.)
 
 ## Lifecycle: apply -> validate -> destroy
 
@@ -63,7 +71,8 @@ terraform init
 terraform apply        # ~15 min for the control plane to come up
 ```
 
-Then write a kubeconfig and point your tools at the cluster:
+Then write a kubeconfig and point your tools at the cluster. `make
+e2e-eks-kubeconfig` prints the exact `export KUBECONFIG=…` line to paste:
 
 ```bash
 eval "$(terraform output -raw kubeconfig_command)"   # or: make e2e-eks-kubeconfig
@@ -72,16 +81,43 @@ kubectl get nodepools.karpenter.sh        # built-in Auto Mode NodePools
 ```
 
 `terraform output` also exposes `cluster_name`, `cluster_endpoint`,
-`availability_zones`, and `auto_mode_node_pools` for the scenario drivers.
+`availability_zones`, `auto_mode_node_pools`, and `ecr_repository_url` for the
+scenario drivers.
 
-### 3. Validate (run the PoC scenarios)
+### 3. Build and push the controller image to ECR
 
-Install the controller from this repo's chart and run the scenarios (#77, #81),
-then record the outcomes back into spec §7.2:
+The chart defaults to an unpublished `ghcr.io` image, so the image must be
+delivered to the cluster first. `kind load` (used by the KWOK harness) has no
+equivalent here — real EC2 nodes pull from a registry. This stack manages a
+private, same-account ECR repo for exactly this; Auto Mode's node role pulls
+same-account images, so **no `imagePullSecret` is needed**.
+
+```bash
+REPO=$(terraform output -raw ecr_repository_url)
+REGION=$(terraform output -raw region)
+
+# Log Docker in to ECR
+aws ecr get-login-password --region "$REGION" \
+  | docker login --username AWS --password-stdin "${REPO%/*}"
+
+# Build + push multi-arch, reusing the repo Dockerfile (run from the repo root):
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t "$REPO:poc" --push ../../..
+
+# …or with ko (no buildx builder setup needed), from the repo root:
+#   KO_DOCKER_REPO=$REPO ko build ./cmd --bare --platform=linux/amd64,linux/arm64 -t poc
+```
+
+### 4. Validate (run the PoC scenarios)
+
+Install the controller from this repo's chart — pointed at the ECR image you
+just pushed — and run the scenarios (#77, #81), then record the outcomes back
+into spec §7.2:
 
 ```bash
 helm install node-rotation-controller ../../../charts/node-rotation-controller \
-  --namespace node-rotation-system --create-namespace
+  --namespace node-rotation-system --create-namespace \
+  --set image.repository="$REPO" --set image.tag=poc
 # ... apply scenario workloads / NodePools and observe rotations ...
 ```
 
@@ -99,7 +135,7 @@ Record results in spec
 file any divergence as a follow-up `fix(...)` issue before any
 production-readiness claim (see the roadmap, spec §6.2).
 
-### 4. Destroy
+### 5. Destroy
 
 ```bash
 terraform destroy        # or: make e2e-eks-down
@@ -111,7 +147,7 @@ Confirm nothing lingers (Auto Mode EC2/EBS, load balancers) before walking away.
 
 ```bash
 make e2e-eks-up          # terraform init + apply
-make e2e-eks-kubeconfig  # write ./kubeconfig for the cluster
+make e2e-eks-kubeconfig  # write ./kubeconfig + print the export KUBECONFIG line
 make e2e-eks-down        # terraform destroy
 ```
 
@@ -122,7 +158,9 @@ These wrap the same Terraform; `terraform.tfvars` must exist first. Like
 
 - `versions.tf` — pinned Terraform / provider versions.
 - `variables.tf` — every input (no hard-coded account/region/name values).
-- `main.tf` — VPC + EKS cluster with `compute_config.enabled = true` (Auto Mode).
-- `outputs.tf` — cluster coordinates + `kubeconfig_command` for the scenario drivers.
+- `main.tf` — VPC + EKS cluster with `compute_config.enabled = true` (Auto Mode)
+  + the private ECR repo the PoC controller image is pushed to.
+- `outputs.tf` — cluster coordinates + `ecr_repository_url` + `kubeconfig_command`
+  for the scenario drivers.
 - `terraform.tfvars.example` — placeholder values to copy to `terraform.tfvars`.
 - `.gitignore` — excludes state, `.terraform/`, real `*.tfvars`, and the kubeconfig.

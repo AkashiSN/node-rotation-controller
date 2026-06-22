@@ -30,6 +30,14 @@ output "availability_zones" {
   value       = local.azs
 }
 
+# Private ECR repo the PoC controller image is built and pushed to before
+# `helm install`. Feed it to `--set image.repository=<this>` (see README.md).
+# Auto Mode's node role pulls same-account images, so no imagePullSecret needed.
+output "ecr_repository_url" {
+  description = "ECR repository URL to push the PoC controller image to, then reference from the chart via image.repository."
+  value       = aws_ecr_repository.controller.repository_url
+}
+
 # Ready-to-run command that writes a kubeconfig the PoC scenarios can use. We
 # emit the command rather than render the kubeconfig into Terraform state, so no
 # cluster credentials are persisted to state. `make e2e-eks-kubeconfig` runs it.
