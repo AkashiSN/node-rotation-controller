@@ -1,0 +1,67 @@
+# Helm values overlay for the node-rotation-controller under the EKS Auto Mode
+# PoC scenarios (issue #93, SCENARIOS.md). The chart is installed verbatim from
+# charts/; only these test-specific knobs are overridden. image.repository and
+# image.tag are supplied on the CLI (the ECR `poc` image), so they are absent here.
+
+# A single replica keeps the PoC simple; the lone replica trivially wins leader
+# election. The PDB is disabled so it never blocks teardown.
+replicaCount: 1
+
+podDisruptionBudget:
+  enabled: false
+
+# Human-readable logs so the rotation lifecycle is easy to follow.
+logging:
+  development: true
+
+config:
+  policy:
+    # Match ONLY the dedicated nrc-poc pool by its marker label. The built-in
+    # general-purpose/system pools (which host the controller itself) are out of
+    # scope and are never rotated.
+    nodepoolSelectors:
+      - matchLabels:
+          noderotation-poc/in-scope: "true"
+
+    # Drive rotation by age, not by the per-claim expireAfter backstop. 5m keeps
+    # each scenario brief yet leaves the fresh surge spare well below the threshold
+    # for the whole rotation. NOTE: A=5m is far below one daily window period
+    # P=24h, so the controller emits expected non-fatal "AVeryAggressive" /
+    # "ThroughputBelowArrival" findings — these are intentional for a fast test,
+    # not errors (see SCENARIOS.md "Gotchas").
+    ageThreshold: 5m
+    minRotationChances: 2
+
+    # Effectively always-open window (union of all entries, spec §3.1) so a
+    # scenario never waits for a window edge.
+    maintenanceWindows:
+      - timezone: UTC
+        days: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+        start: "00:00"
+        end: "23:59"
+
+    surge:
+      maxUnavailable: 1
+      # Generous for real EC2 to launch + join + become Ready (~30s observed).
+      # Scenario C OVERRIDES this to a sub-node-ready value (e.g. 15s) to force a
+      # readyTimeout rollback.
+      readyTimeout: 15m
+      # Short cooldown so back-to-back scenarios are not gated by a prior success
+      # or failure (cooldownAfter gates the NEXT rotation's start via
+      # last-rotation-at / last-failure-at — keep it small).
+      cooldownAfter: 1m
+      # >= readyTimeout so the post-failure backoff never repeats the surge cost
+      # faster than one attempt lasts (avoids the RetryBackoffShort finding) and is
+      # long enough to observe a single rollback before any retry.
+      retryBackoff: 30m
+      matchNodeRequirements:
+        required:
+          - topology.kubernetes.io/zone
+          - kubernetes.io/arch
+          - karpenter.sh/capacity-type
+        preferred: []
+
+    prePull:
+      enabled: false
+    warmup:
+      enabled: false

@@ -121,6 +121,12 @@ helm install node-rotation-controller ../../../charts/node-rotation-controller \
 # ... apply scenario workloads / NodePools and observe rotations ...
 ```
 
+> **Step-by-step runbook:** [`SCENARIOS.md`](SCENARIOS.md) is the reproducible
+> walkthrough — the exact NodePool, workloads, and controller config (in
+> [`scenarios/`](scenarios/)), the trigger/observe commands, the **expected
+> output** for each scenario, and the non-obvious gotchas. Follow it to re-run the
+> validation below and reproduce the spec §7.2 results.
+
 The PoC subset this cluster exists to validate (issue #93 acceptance criteria):
 
 | § / Issue | Scenario |
