@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -98,6 +99,17 @@ func newReconciler(t *testing.T, clock time.Time, rec *fakeRecorder, objs ...cli
 		Recorder:          rec,
 		Clock:             func() time.Time { return clock },
 	}
+}
+
+// mustSchedule builds the default test schedule, for reconcilers assembled
+// outside newReconciler (e.g. with a custom interceptor client).
+func mustSchedule(t *testing.T) *window.Schedule {
+	t.Helper()
+	s, err := window.New(testPolicy().MaintenanceWindows)
+	if err != nil {
+		t.Fatalf("build schedule: %v", err)
+	}
+	return s
 }
 
 // --- object builders -------------------------------------------------------
@@ -538,6 +550,75 @@ func TestReadyTimeoutFailsAndReaps(t *testing.T) {
 	}
 	if rec.failure != 1 {
 		t.Errorf("failure metric: got %d", rec.failure)
+	}
+}
+
+// TestStaleReReadDoesNotMisfireReadyTimeout pins #95 item 3: advancePending stamps
+// started-at write-once and then re-reads the candidate through the (informer)
+// cache. When that cached Get briefly lags the write it observes started-at empty,
+// so now − parseTime("") is huge and trivially exceeds readyTimeout — rolling back
+// a freshly selected candidate instantly instead of after the real timeout. The
+// fix uses the started-at captured at patch time for the timeout check, so a
+// lagging re-read must NOT cause a failure. We simulate the lag with an interceptor
+// that drops started-at from the candidate on the re-read immediately following the
+// Update that stamped it.
+func TestStaleReReadDoesNotMisfireReadyTimeout(t *testing.T) {
+	rec := &fakeRecorder{}
+	// Fresh candidate: no prior started-at, so advancePending stamps it THIS pass.
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
+		ncAnn(annotations.State, annotations.StatePending))
+	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
+	node := testK8sNode(candNode, true, nil, false)
+
+	// stamped flips true once the Update writes started-at; the very next candidate
+	// Get is the lagging re-read, where we strip started-at to mimic cache staleness.
+	var stamped, lagged bool
+	cl := fake.NewClientBuilder().WithScheme(scheme.New()).
+		WithObjects(pool, cand, node).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if nc, ok := obj.(*karpv1.NodeClaim); ok && nc.Name == "nc-old" &&
+					nc.Annotations[annotations.StartedAt] != "" {
+					stamped = true
+				}
+				return c.Update(ctx, obj, opts...)
+			},
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if err := c.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				if nc, ok := obj.(*karpv1.NodeClaim); ok && nc.Name == "nc-old" && stamped && !lagged {
+					lagged = true
+					delete(nc.Annotations, annotations.StartedAt) // stale read: started-at not yet visible
+				}
+				return nil
+			},
+		}).Build()
+	r := &RotationReconciler{
+		Client:            cl,
+		Policy:            testPolicy(),
+		Schedule:          mustSchedule(t),
+		Namespace:         testNS,
+		PlaceholderImage:  "registry.k8s.io/pause:3.10",
+		PriorityClassName: "noderotation-placeholder",
+		Recorder:          rec,
+		Clock:             func() time.Time { return testNow },
+	}
+
+	step(t, r, pool)
+
+	if !lagged {
+		t.Fatal("test did not exercise the lagging re-read; interceptor never stripped started-at")
+	}
+	c := getClaimOrNil(t, r, "nc-old")
+	if c == nil {
+		t.Fatal("candidate vanished")
+	}
+	if c.Annotations[annotations.State] == annotations.StateFailed {
+		t.Error("freshly stamped candidate must NOT be rolled back to failed on a stale cached re-read (#95 item 3)")
+	}
+	if rec.failure != 0 {
+		t.Errorf("no failure must be recorded on a stale re-read: got %d", rec.failure)
 	}
 }
 
