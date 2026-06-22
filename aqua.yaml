@@ -31,9 +31,10 @@ packages:
   # kustomize releases carry a `kustomize/` tag prefix; pin the full tag (aqua
   # only auto-applies version_prefix when resolving "latest", not an exact pin).
   - name: kubernetes-sigs/kustomize@kustomize/v5.6.0
-  # helm is pinned to the latest v3 line on purpose: the chart and the
-  # helm-unittest v1.1.1 plugin are validated against Helm 3, not Helm 4.
-  - name: helm/helm@v3.21.2
+  # helm is pinned to the v4 line — the version CI already used de-facto
+  # (azure/setup-helm installed latest). The chart, values.schema.json, and the
+  # helm-unittest v1.1.1 plugin all render/pass under it.
+  - name: helm/helm@v4.2.2
   # kubectl tracks the controller's Kubernetes client minor (k8s.io/api v0.36 ->
   # 1.36); one minor ahead of the kind v0.31.0 node (v1.35) is within skew policy.
   - name: kubernetes/kubernetes/kubectl@v1.36.2
