@@ -40,6 +40,11 @@ v1.0. The specification remains the source of truth — keep code and spec in sy
 - **One Issue = one PR = one branch = one git worktree.** Each unit of work
   lives in its own `git worktree` so concurrent work streams never share a
   working tree and cannot interfere with one another.
+- **Place worktrees under `.worktrees/`.** Create each worktree inside the repo
+  at `.worktrees/<branch-topic>` (e.g.
+  `git worktree add -b chore/foo .worktrees/foo origin/main`). The directory is
+  git-ignored, so the working tree stays inside the repo (visible to editors)
+  without being tracked — instead of a sibling directory outside the repo.
 - **Tear down after merge.** Once a PR is squash-merged, remove its worktree
   (`git worktree remove`) and delete the branch. Worktrees are disposable and
   must not accumulate.
