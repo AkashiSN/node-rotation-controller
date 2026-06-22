@@ -71,6 +71,7 @@ components + chart), then `go test -tags e2e ./test/e2e/kwok/...`.
 
 | Criterion (issue #92) | Status | Where |
 |---|---|---|
+| New-provision → `complete` by inducing a **brand-new** NodeClaim with **no** pre-existing spare (issue #96) | ✅ proven | `testNewProvision` |
 | Capacity-absorb → `complete` with **no** new NodeClaim | ✅ proven | `testCapacityAbsorb` |
 | Completion chain (placeholder deleted, target unfrozen, anchor cleared last) | ✅ proven | `testCapacityAbsorb` |
 | Success + drain-duration via **scraping `/metrics`** | ✅ proven | `metrics_test.go` |
@@ -89,22 +90,21 @@ than the few seconds KWOK's fast drain would otherwise leave to observe.
 These are honest gaps, not skipped assertions. They move to EKS (#93) or a
 follow-up.
 
-1. **New-NodeClaim provisioning of the surge node.** Core Karpenter v1 lists
-   `kubernetes.io/hostname` in `RestrictedLabels`, so the **provisioner rejects
-   any provisionable Pod whose `nodeAffinity` references it** ("using label
-   kubernetes.io/hostname is not allowed …"). The controller's placeholder
-   **always** carries the §3.3 candidate-exclusion (`kubernetes.io/hostname
-   NotIn {candidate, near-deadline}`). Consequently a brand-new surge node cannot
-   be *induced* under KWOK — the placeholder stays `Pending` and the attempt
-   rolls back at `readyTimeout`. The harness therefore drives completion via the
-   **capacity-absorb** path, where `kube-scheduler` (not Karpenter's provisioner)
-   evaluates the hostname `NotIn` while bin-packing onto an existing node. The
-   new-provision **assertion of the new NodeClaim/Node's pool labels** is covered
-   indirectly (the absorb surge-target's pool label is asserted), but a *brand-new
-   surge NodeClaim reaching `complete`* is out of scope here. NOTE: because this
-   is **core** Karpenter behavior (not KWOK-specific), it is tracked as a
-   controller/spec **design decision** in **#96** (placeholder hostname-exclusion
-   design); it is *not* fixed under #92.
+1. **~~New-NodeClaim provisioning of the surge node.~~ (RESOLVED — issue #96.)**
+   Core Karpenter v1 lists `kubernetes.io/hostname` in `RestrictedLabels`, so the
+   provisioner rejects any provisionable Pod whose **required** `nodeAffinity`
+   references it ("using label kubernetes.io/hostname is not allowed …"). The
+   placeholder originally carried the §3.3 candidate-exclusion
+   (`kubernetes.io/hostname NotIn {candidate, near-deadline}`) as a **required**
+   term, so a brand-new surge node could not be induced under KWOK — the
+   placeholder stayed `Pending` and rolled back at `readyTimeout`. Issue #96
+   converts that exclusion to a **soft preferred** term: Karpenter's scheduler
+   only relaxes preferred node-affinity and never folds it into the NodeClaim
+   requirements, so the placeholder is hostname-free to the provisioner and the
+   **new-provision path now works** — `testNewProvision` drives a surge to
+   `complete` by inducing a brand-new NodeClaim with **no** pre-existing spare. The
+   candidate stays off the placeholder via the controller's cordon plus
+   `surge_ready`'s `host != candidate` re-check, not the (now soft) hostname term.
 
 2. **do-not-disrupt honored against voluntary disruption.** We assert the
    annotation is *set and owned* on both surge-pair nodes, but do **not** claim

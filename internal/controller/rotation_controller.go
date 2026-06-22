@@ -1054,8 +1054,13 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 }
 
 // excludedHostnames is the placeholder's hostname NotIn set: the candidate node
-// plus every near-deadline host (a triggered claim's node) so the surge does not
-// land on a node that will itself rotate soon (spec §3.3).
+// plus every near-deadline host (a triggered claim's node) so the surge prefers
+// not to land on a node that will itself rotate soon (spec §3.3). The placeholder
+// applies this set as a SOFT (preferred) anti-affinity, not a required term, so
+// Karpenter can still provision a new surge node for it (issue #96); the candidate
+// is hard-guaranteed off the placeholder by its cordon (applied in pending) plus
+// surge_ready's host != candidate re-check, and the near-deadline exclusion is
+// best-effort (spec §3.3 bounded residual). The set itself is unchanged.
 func (r *RotationReconciler) excludedHostnames(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim, candNode *corev1.Node, res resolved) ([]string, error) {
 	set := map[string]bool{hostnameOf(candNode): true}
 	claims, err := r.poolClaims(ctx, pool)
