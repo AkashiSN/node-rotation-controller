@@ -74,6 +74,12 @@ func (w *warningEmitter) EmitFindings(ctx context.Context, pool *karpv1.NodePool
 			continue
 		}
 		current[f.Code] = true
+		// Un-deduplicated debug record (issue #100): emit the finding every pass at
+		// debug verbosity, independent of the transition dedup below, so raised -v /
+		// -zap-devel shows every evaluation rather than only transitions. Reconcile
+		// liveness must still be judged from the controller_runtime_reconcile_* /
+		// workqueue_* metrics, not from this log (spec §4.2).
+		l.V(1).Info("schedule feasibility warning (debug, per-pass)", "code", f.Code, "detail", f.Message)
 		if s.findingCodes[f.Code] {
 			continue // already warned and still active — no re-fire
 		}
@@ -98,6 +104,9 @@ func (w *warningEmitter) EmitShortLead(ctx context.Context, pool *karpv1.NodePoo
 	current := map[string]bool{}
 	for _, c := range selection.ShortLeadClaims(claims, leadTime) {
 		current[c.Name] = true
+		// Un-deduplicated debug record (issue #100): see EmitFindings — emitted every
+		// pass at debug verbosity, independent of the transition dedup below.
+		l.V(1).Info("short-lead NodeClaim (debug, per-pass)", "nodeclaim", c.Name)
 		if s.shortLead[c.Name] {
 			continue
 		}
