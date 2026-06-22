@@ -21,24 +21,36 @@ import (
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 )
 
-// Post-aging assertion budgets. After a subtest sleeps the candidate up to
-// ageThreshold, the deadline for the controller's reconcile + KWOK-Karpenter
-// provision/drain to complete must NOT be coupled to ageThreshold: eventually
-// starts its clock when it is called (after the sleep), so folding ageThreshold
-// into the timeout only inflates the deadline by an irrelevant constant while the
-// REAL headroom for the controller work stayed pinned to the small tail (+90s /
-// +120s). Under a runner load spike that tail was exhausted and the absorb/drain
-// subtests tipped into timeout (#101). These fixed margins decouple the wait
-// budget from the aging sleep so it no longer shrinks with ageThreshold; they are
-// generous because KWOK transitions take seconds — a healthy runner finishes well
-// inside them, and the slack only absorbs load spikes.
+// Post-aging assertion budgets. Each surge subtest first sleeps the candidate up
+// to ageThreshold, then calls eventually(...) to wait on the controller's
+// reconcile + KWOK-Karpenter provision/drain. eventually starts its clock when it
+// is called (after the sleep), so the timeout it is given IS the real headroom for
+// the controller work — the aging sleep is not subtracted from it.
+//
+// The flake (#101) was therefore purely a magnitude problem: the per-wait budgets
+// were too tight to absorb an observed ~2x runner-load spike (e.g. the absorb-bind
+// and PDB-draining waits were only 5m30s and timed out at exactly 5m30s on a slow
+// runner, while the same commit passed comfortably on a faster one). They were
+// also needlessly coupled to ageThreshold (ageThreshold+90s / +120s), which made
+// the headroom scale with how long we age the node rather than with the controller
+// work it must cover.
+//
+// These fixed, ageThreshold-independent budgets decouple the wait from the aging
+// sleep AND strictly exceed every previous per-wait timeout (the old values were
+// 7m for new-provision bind/complete, 5m30s for absorb/confine/PDB bind-style
+// waits, and 6m for drain/complete waits), so coverage only ever grows. They are
+// generous on purpose: KWOK transitions take seconds, so a healthy runner finishes
+// well inside them and the slack only absorbs load spikes; the budgets are spent in
+// full only on a genuine failure, which the subtest fails on anyway.
 const (
 	// surgeBindBudget covers a single in-flight observation (placeholder binds /
-	// candidate enters draining) after the aging sleep.
-	surgeBindBudget = 5 * time.Minute
-	// surgeCompleteBudget covers driving a rotation through to `complete` (the
-	// full provision/absorb + drain chain) after the aging sleep.
-	surgeCompleteBudget = 6 * time.Minute
+	// candidate enters draining) after the aging sleep. Exceeds all prior bind-style
+	// budgets (max was the 7m new-provision bind).
+	surgeBindBudget = 8 * time.Minute
+	// surgeCompleteBudget covers driving a rotation through to `complete` (the full
+	// provision/absorb + drain chain) after the aging sleep. Exceeds all prior
+	// complete budgets (max was 7m).
+	surgeCompleteBudget = 10 * time.Minute
 )
 
 // TestKWOKSurge drives and asserts the v1 surge rotation lifecycle against the
