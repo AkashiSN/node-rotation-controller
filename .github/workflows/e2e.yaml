@@ -71,16 +71,12 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-go@v6
-        if: steps.changes.outputs.run == 'true'
-        with:
-          go-version-file: go.mod
-
-      # kind, ko, kustomize, helm, kubectl are pinned in aqua.yaml and resolved
-      # from $PATH. aqua-installer puts aqua's bin on $GITHUB_PATH and (default
-      # `aqua i -l`) links every command so bare names resolve; each binary is
-      # lazily fetched on first use. The warmup step below fetches just the e2e
-      # tools up front (fail-fast + clear logs) without building the unrelated
+      # The Go toolchain and kind, ko, kustomize, helm, kubectl are all pinned in
+      # aqua.yaml and resolved from $PATH — no actions/setup-go. aqua-installer
+      # puts aqua's bin on $GITHUB_PATH and (default `aqua i -l`) links every
+      # command so bare names resolve; each binary (incl. go) is lazily fetched on
+      # first use. The warmup step below fetches just the e2e tools up front
+      # (fail-fast + clear logs) without building the unrelated
       # gopls/golangci-lint/setup-envtest/terraform packages.
       - uses: aquaproj/aqua-installer@v4.0.4
         if: steps.changes.outputs.run == 'true'
@@ -105,9 +101,9 @@ jobs:
         if: steps.changes.outputs.run == 'true'
         run: docker build -t "$E2E_KWOK_IMAGE" .
 
-      - name: Install e2e tooling (kind, ko, kustomize, helm, kubectl)
+      - name: Install e2e tooling (go, kind, ko, kustomize, helm, kubectl)
         if: steps.changes.outputs.run == 'true'
-        run: kind version && ko version && kustomize version && helm version --short && kubectl version --client
+        run: go version && kind version && ko version && kustomize version && helm version --short && kubectl version --client
 
       # Build the KWOK provider image up front so its (slow) ko build is a
       # distinct, cacheable step in the logs.

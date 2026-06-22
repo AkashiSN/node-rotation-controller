@@ -13,19 +13,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The Go toolchain and every CLI come from aqua (aqua.yaml) — there is no
+  # actions/setup-go. aqua-installer installs aqua and links the commands;
+  # `make` lazily installs each pinned version (incl. go) on first use. The
+  # cache persists the Go module/build cache and aqua's tool store across runs.
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      # golangci-lint and gopls are pinned in aqua.yaml and resolved from $PATH;
-      # `make lint` / `make gopls-check` invoke them by bare name (aqua lazily
-      # installs the pinned version on first use).
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+      - name: Cache Go + aqua tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.local/share/aquaproj-aqua
+          key: ci-${{ runner.os }}-${{ hashFiles('go.sum', 'aqua.yaml') }}
+          restore-keys: ci-${{ runner.os }}-
       - name: golangci-lint
         run: make lint
       - name: gopls check (severity>=hint)
@@ -35,23 +42,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      # setup-envtest (pinned in aqua.yaml) fetches the envtest control-plane
-      # binaries during `make test`; provide it via aqua on $PATH.
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+      - name: Cache Go + aqua tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.local/share/aquaproj-aqua
+          key: ci-${{ runner.os }}-${{ hashFiles('go.sum', 'aqua.yaml') }}
+          restore-keys: ci-${{ runner.os }}-
       - run: make test
 
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: aquaproj/aqua-installer@v4.0.4
         with:
-          go-version-file: go.mod
+          aqua_version: v2.60.1
+      - name: Cache Go + aqua tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.local/share/aquaproj-aqua
+          key: ci-${{ runner.os }}-${{ hashFiles('go.sum', 'aqua.yaml') }}
+          restore-keys: ci-${{ runner.os }}-
       - run: make build
       - uses: docker/setup-buildx-action@v4
       - name: Build container image (no push)
@@ -64,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # helm is pinned in aqua.yaml (v3 line) and resolved from $PATH; the
+      # helm is pinned in aqua.yaml (v4 line) and resolved from $PATH; the
       # helm-unittest plugin is installed into it below.
       - uses: aquaproj/aqua-installer@v4.0.4
         with:

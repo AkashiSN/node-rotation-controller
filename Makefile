@@ -8,10 +8,10 @@ CHART ?= charts/node-rotation-controller
 # minor in go.mod (v0.<minor>.x -> 1.<minor>).
 ENVTEST_K8S_VERSION ?= 1.36
 
-# CLI tools (setup-envtest, golangci-lint, gopls, kind, ko, kustomize, helm,
-# kubectl, terraform) are pinned in aqua.yaml and invoked by bare name; aqua
-# lazily installs the pinned version on first use. LOCALBIN is only the
-# build/output dir for the manager binary and the envtest control-plane assets.
+# The Go toolchain and all CLIs (go, setup-envtest, golangci-lint, gopls, kind,
+# ko, kustomize, helm, kubectl, terraform) are pinned in aqua.yaml and invoked by
+# bare name; aqua lazily installs the pinned version on first use. LOCALBIN is
+# only the build/output dir for the manager binary and the envtest assets.
 LOCALBIN ?= $(shell pwd)/bin
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
@@ -46,15 +46,15 @@ E2E_EKS_DIR ?= test/e2e/eks-automode
 all: build
 
 .PHONY: fmt
-fmt:
+fmt: aqua-tools
 	go fmt ./...
 
 .PHONY: vet
-vet:
+vet: aqua-tools
 	go vet ./...
 
 .PHONY: build
-build: fmt vet
+build: aqua-tools fmt vet
 	go build -o $(LOCALBIN)/manager ./cmd
 
 .PHONY: test
