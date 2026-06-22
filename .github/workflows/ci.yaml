@@ -20,9 +20,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v9
+      # golangci-lint and gopls are pinned in aqua.yaml and resolved from $PATH;
+      # `make lint` / `make gopls-check` invoke them by bare name (aqua lazily
+      # installs the pinned version on first use).
+      - uses: aquaproj/aqua-installer@v4.0.4
         with:
-          version: v2.12.2
+          aqua_version: v2.60.1
+      - name: golangci-lint
+        run: make lint
       - name: gopls check (severity>=hint)
         run: make gopls-check
 
@@ -33,6 +38,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # setup-envtest (pinned in aqua.yaml) fetches the envtest control-plane
+      # binaries during `make test`; provide it via aqua on $PATH.
+      - uses: aquaproj/aqua-installer@v4.0.4
+        with:
+          aqua_version: v2.60.1
       - run: make test
 
   build:
@@ -54,7 +64,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: azure/setup-helm@v4
+      # helm is pinned in aqua.yaml (v3 line) and resolved from $PATH; the
+      # helm-unittest plugin is installed into it below.
+      - uses: aquaproj/aqua-installer@v4.0.4
+        with:
+          aqua_version: v2.60.1
       - name: helm lint
         run: helm lint charts/node-rotation-controller
       - name: helm template (defaults)

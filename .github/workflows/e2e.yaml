@@ -76,21 +76,28 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: azure/setup-helm@v4
+      # kind, ko, kustomize, helm, kubectl are pinned in aqua.yaml and resolved
+      # from $PATH. aqua-installer puts aqua's bin on $GITHUB_PATH and (default
+      # `aqua i -l`) links every command so bare names resolve; each binary is
+      # lazily fetched on first use. The warmup step below fetches just the e2e
+      # tools up front (fail-fast + clear logs) without building the unrelated
+      # gopls/golangci-lint/setup-envtest/terraform packages.
+      - uses: aquaproj/aqua-installer@v4.0.4
         if: steps.changes.outputs.run == 'true'
+        with:
+          aqua_version: v2.60.1
 
-      # kind, ko, kustomize are installed into ./bin by the Makefile at pinned
-      # versions; cache the module/build cache to keep the KWOK provider build
-      # (ko) and tool installs fast across runs.
-      - name: Cache Go build/module + e2e tools
+      # Cache the Go module/build cache (keeps the KWOK provider ko build fast)
+      # and aqua's tool store (kind/ko/kustomize/helm/kubectl binaries) across runs.
+      - name: Cache Go build/module + aqua tools
         if: steps.changes.outputs.run == 'true'
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-            bin
-          key: e2e-kwok-${{ runner.os }}-${{ hashFiles('go.sum', 'Makefile') }}
+            ~/.local/share/aquaproj-aqua
+          key: e2e-kwok-${{ runner.os }}-${{ hashFiles('go.sum', 'Makefile', 'aqua.yaml') }}
           restore-keys: |
             e2e-kwok-${{ runner.os }}-
 
@@ -98,36 +105,32 @@ jobs:
         if: steps.changes.outputs.run == 'true'
         run: docker build -t "$E2E_KWOK_IMAGE" .
 
-      - name: Install e2e tooling (kind, ko, kustomize)
+      - name: Install e2e tooling (kind, ko, kustomize, helm, kubectl)
         if: steps.changes.outputs.run == 'true'
-        run: make kind ko kustomize
+        run: kind version && ko version && kustomize version && helm version --short && kubectl version --client
 
       # Build the KWOK provider image up front so its (slow) ko build is a
       # distinct, cacheable step in the logs.
       - name: Build Karpenter KWOK provider image
         if: steps.changes.outputs.run == 'true'
-        run: ./bin/ko version >/dev/null && PATH="$PWD/bin:$PATH" test/e2e/kwok/build-kwok-image.sh
+        run: ko version >/dev/null && test/e2e/kwok/build-kwok-image.sh
 
       - name: Bootstrap cluster (kind + Karpenter KWOK + controller chart)
         if: steps.changes.outputs.run == 'true'
         run: |
-          PATH="$PWD/bin:$PATH" \
           CLUSTER_NAME="$E2E_KWOK_CLUSTER" \
           CONTROLLER_IMAGE="$E2E_KWOK_IMAGE" \
             test/e2e/kwok/bootstrap.sh
 
       - name: Run e2e (go test -tags e2e)
         if: steps.changes.outputs.run == 'true'
-        run: |
-          PATH="$PWD/bin:$PATH" \
-            go test -tags e2e -count=1 -v -timeout 50m ./test/e2e/kwok/...
+        run: go test -tags e2e -count=1 -v -timeout 50m ./test/e2e/kwok/...
 
       # Failure artifacts from the FIRST commit (issue #92): cluster dumps,
       # controller + Karpenter logs, and NodeClaim/NodePool/Pod YAML.
       - name: Collect failure artifacts
         if: failure() && steps.changes.outputs.run == 'true'
         run: |
-          PATH="$PWD/bin:$PATH"
           out=artifacts; mkdir -p "$out"
           kubectl cluster-info dump --all-namespaces --output-directory "$out/cluster-dump" || true
           for ns in node-rotation-system kube-system default; do
@@ -153,4 +156,4 @@ jobs:
 
       - name: Tear down kind cluster
         if: always() && steps.changes.outputs.run == 'true'
-        run: ./bin/kind delete cluster --name "$E2E_KWOK_CLUSTER" || true
+        run: kind delete cluster --name "$E2E_KWOK_CLUSTER" || true

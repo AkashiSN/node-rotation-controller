@@ -89,7 +89,12 @@ chart はコントローラ（leader election 付き `replicas=2`）、その RB
 
 ## 開発
 
-Go 1.26 以上と `make` が必要。Docker は `make docker-build` のときのみ必要。
+Go 1.26 以上、`make`、[aqua](https://aquaproj.github.io) が必要。Docker は
+`make docker-build` のときのみ必要。CLI ツール（golangci-lint・gopls・
+setup-envtest・kind・ko・kustomize・helm・kubectl・terraform）は
+[`aqua.yaml`](aqua.yaml) でバージョン固定され、`$PATH` から解決される。aqua を
+インストールして `$(aqua root-dir)/bin` を `$PATH` に追加すれば、`make` の各
+ターゲットが固定バージョンを自動的に利用する（aqua が初回利用時に遅延インストール）。
 
 | コマンド | 用途 |
 |----------|------|
