@@ -316,6 +316,19 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
 	r.observe(pool, res, now, claims, p, derived)
 
+	// Per-pass heartbeat at debug verbosity (issue #100): a single un-deduplicated
+	// line every reconcile so liveness is visible at raised -v / -zap-devel even
+	// when no findings change — unlike the transition-deduped warning above, which
+	// stays silent in steady state. The authoritative liveness signal remains the
+	// controller_runtime_reconcile_* / workqueue_* metrics (spec §4.2); this log is
+	// a human-readable aid, not a substitute for them.
+	log.V(1).Info("reconcile",
+		"phase", reconcilePhase(pool),
+		"candidates", selection.CountEligible(claims, r.selInputs(res, now)),
+		"claims", len(claims),
+		"inWindow", r.Schedule.InWindow(now),
+		"findings", len(derived.Findings))
+
 	// Surface non-fatal feasibility findings and per-node short-lead conditions
 	// (issue #50): deduplicated logs + Warning Events. Fatal findings keep their
 	// own §5.2 gate behavior below.
@@ -461,6 +474,20 @@ func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolv
 	})
 }
 
+// reconcilePhase reports a coarse, human-readable phase for the per-pass debug
+// heartbeat (issue #100): the in-flight rotation's state when one is anchored,
+// else "idle". It reads the same anchor annotations the reconcile drives on, so
+// it never adds a client call.
+func reconcilePhase(pool *karpv1.NodePool) string {
+	if pool.Annotations[annotations.ActiveRotation] == "" {
+		return "idle"
+	}
+	if st := pool.Annotations[annotations.ActiveRotationState]; st != "" {
+		return st
+	}
+	return annotations.StatePending
+}
+
 // firstFatal returns the first Fatal finding (spec §3.2 layer 1), if any. Used to
 // gate a NodePool out of starting new rotations when its schedule cannot
 // guarantee the configured rotation chances (issue #27).
@@ -525,12 +552,19 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 		return r.abortPendingExpiry(ctx, pool, cand)
 	}
 
-	// Assert pending + write-once started-at (a single claim update).
+	// Assert pending + write-once started-at (a single claim update). Capture the
+	// authoritative started-at from inside the mutator — either the value already
+	// present or the one we stamp this pass — so the readyTimeout check below never
+	// depends on a stale cache re-read. A cached Get that briefly lags this write
+	// would observe started-at empty, making now − parseTime("") trivially exceed
+	// readyTimeout and roll back a freshly selected candidate instantly (#95 item 3).
+	var stampedStartedAt string
 	if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
 		m[annotations.State] = annotations.StatePending
 		if m[annotations.StartedAt] == "" {
 			m[annotations.StartedAt] = rfc3339(r.now())
 		}
+		stampedStartedAt = m[annotations.StartedAt]
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -543,8 +577,10 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	}
 
 	// readyTimeout — checked FIRST (before the recreate branch) so a crash on this
-	// failure path cannot resurrect the placeholder (spec §5.2).
-	startedAt, _ := parseTime(cand.Annotations[annotations.StartedAt])
+	// failure path cannot resurrect the placeholder (spec §5.2). Use the started-at
+	// captured at patch time (not the re-read above, which may lag the write and
+	// read empty — #95 item 3); the re-read still serves the other fields below.
+	startedAt, _ := parseTime(stampedStartedAt)
 	if r.now().Sub(startedAt) > res.readyTimeout {
 		return r.failPending(ctx, pool, cand)
 	}

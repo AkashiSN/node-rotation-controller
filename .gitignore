@@ -33,3 +33,8 @@ test/e2e/kwok/kubeconfig
 test/e2e/kwok/*.kubeconfig
 test/e2e/kwok/artifacts/
 artifacts/
+
+# Per-branch git worktrees live under .worktrees/ so they stay inside the repo
+# tree (visible to editors) without being tracked. See "Parallel development
+# with worktrees" in AGENTS.md.
+.worktrees/

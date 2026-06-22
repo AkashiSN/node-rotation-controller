@@ -478,6 +478,23 @@ in-memory, so a controller restart re-emits each active warning once. Fatal
 findings are not events — they block the start of a rotation and are logged by
 the §5.2 feasibility gate.
 
+> **Liveness is judged from metrics, not from the warning log.** The same
+> transition dedup applies to the `INFO`-level warning **log** lines, so in
+> steady state — stable findings, no transitions — a healthy reconcile loop can
+> run for many passes emitting **zero** log lines. The deduped warning log is
+> therefore **not** a liveness signal: reconcile liveness must be read from the
+> `controller_runtime_reconcile_total` / `controller_runtime_reconcile_time_seconds_*`
+> counters and the `workqueue_*` metrics (depth, adds, work duration), which tick
+> on every pass regardless of whether findings change. To *see* per-pass activity
+> in the log when debugging, raise the controller's log verbosity
+> (`--zap-devel` / a higher `-v`): at debug verbosity (`V(1)`) the controller
+> additionally emits, **un-deduplicated, every pass**, the current findings and a
+> lightweight per-reconcile `reconcile` heartbeat (phase, candidate count, claim
+> count, in-window, findings count). This debug output is purely additive — it
+> does not change the dedup of the `INFO` log or the Warning Events, nor any
+> metric — and is a human-readable aid only; the metrics above remain the
+> authoritative liveness signal.
+
 Suggested alerts:
 
 - `increase(noderotation_completed_total{outcome=~"failure|expired"}[1h]) > 0`

@@ -21,6 +21,38 @@ import (
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 )
 
+// Post-aging assertion budgets. Each surge subtest first sleeps the candidate up
+// to ageThreshold, then calls eventually(...) to wait on the controller's
+// reconcile + KWOK-Karpenter provision/drain. eventually starts its clock when it
+// is called (after the sleep), so the timeout it is given IS the real headroom for
+// the controller work — the aging sleep is not subtracted from it.
+//
+// The flake (#101) was therefore purely a magnitude problem: the per-wait budgets
+// were too tight to absorb an observed ~2x runner-load spike (e.g. the absorb-bind
+// and PDB-draining waits were only 5m30s and timed out at exactly 5m30s on a slow
+// runner, while the same commit passed comfortably on a faster one). They were
+// also needlessly coupled to ageThreshold (ageThreshold+90s / +120s), which made
+// the headroom scale with how long we age the node rather than with the controller
+// work it must cover.
+//
+// These fixed, ageThreshold-independent budgets decouple the wait from the aging
+// sleep AND strictly exceed every previous per-wait timeout (the old values were
+// 7m for new-provision bind/complete, 5m30s for absorb/confine/PDB bind-style
+// waits, and 6m for drain/complete waits), so coverage only ever grows. They are
+// generous on purpose: KWOK transitions take seconds, so a healthy runner finishes
+// well inside them and the slack only absorbs load spikes; the budgets are spent in
+// full only on a genuine failure, which the subtest fails on anyway.
+const (
+	// surgeBindBudget covers a single in-flight observation (placeholder binds /
+	// candidate enters draining) after the aging sleep. Exceeds all prior bind-style
+	// budgets (max was the 7m new-provision bind).
+	surgeBindBudget = 8 * time.Minute
+	// surgeCompleteBudget covers driving a rotation through to `complete` (the full
+	// provision/absorb + drain chain) after the aging sleep. Exceeds all prior
+	// complete budgets (max was 7m).
+	surgeCompleteBudget = 10 * time.Minute
+)
+
 // TestKWOKSurge drives and asserts the v1 surge rotation lifecycle against the
 // real Karpenter v1 KWOK reference cloudprovider on a kind cluster. The cluster
 // is provisioned by bootstrap.sh (the Makefile e2e-kwok target / e2e.yaml job),
@@ -116,7 +148,7 @@ func testNewProvision(ctx context.Context, t *testing.T, cl client.Client) {
 	//    soft-preference fix unblocks — issue #96), and the placeholder binds to its
 	//    Node. A required-hostname placeholder would have stayed Pending here.
 	var surgeClaim, surgeNode string
-	eventually(t, ageThreshold+3*time.Minute, "Karpenter to provision a NEW NodeClaim for the placeholder", func() error {
+	eventually(t, surgeBindBudget, "Karpenter to provision a NEW NodeClaim for the placeholder", func() error {
 		cur, err := listClaims(ctx, cl, poolA)
 		if err != nil {
 			return err
@@ -157,7 +189,7 @@ func testNewProvision(ctx context.Context, t *testing.T, cl client.Client) {
 	// 5. The rotation reaches complete: last-rotation stamped, anchor cleared, the
 	//    candidate NodeClaim drained away, and the surge NodeClaim survives (it is
 	//    the new node that replaced the candidate).
-	eventually(t, ageThreshold+3*time.Minute, "the new-provision rotation to reach complete", func() error {
+	eventually(t, surgeCompleteBudget, "the new-provision rotation to reach complete", func() error {
 		pool, err := getNodePool(ctx, cl, poolA)
 		if err != nil {
 			return err
@@ -272,7 +304,7 @@ func testCapacityAbsorb(ctx context.Context, t *testing.T, cl client.Client) {
 	//    onto the pre-existing spare node — the §3.3 capacity-absorb path: the
 	//    surge target is a node that already existed before the rotation started,
 	//    NOT a freshly provisioned surge node.
-	eventually(t, ageThreshold+90*time.Second, "the placeholder to bind to the pre-existing spare (absorb)", func() error {
+	eventually(t, surgeBindBudget, "the placeholder to bind to the pre-existing spare (absorb)", func() error {
 		ph, err := getPlaceholder(ctx, cl, candClaim)
 		if err != nil {
 			return err
@@ -289,7 +321,7 @@ func testCapacityAbsorb(ctx context.Context, t *testing.T, cl client.Client) {
 
 	// 3a. The rotation has reached the drain (the old NodeClaim is being deleted),
 	//     but the PDB above holds it — so the in-flight claim set is now stable.
-	eventually(t, ageThreshold+120*time.Second, "the candidate to enter draining (drain held by PDB)", func() error {
+	eventually(t, surgeBindBudget, "the candidate to enter draining (drain held by PDB)", func() error {
 		c, err := getClaim(ctx, cl, candClaim)
 		if err != nil {
 			return fmt.Errorf("candidate %s: %v", candClaim, err)
@@ -338,7 +370,7 @@ func testCapacityAbsorb(ctx context.Context, t *testing.T, cl client.Client) {
 
 	// 4. The rotation reaches complete via the drain path: last-rotation stamped,
 	//    anchor cleared, candidate NodeClaim drained away.
-	eventually(t, ageThreshold+120*time.Second, "the candidate rotation to reach complete", func() error {
+	eventually(t, surgeCompleteBudget, "the candidate rotation to reach complete", func() error {
 		pool, err := getNodePool(ctx, cl, poolA)
 		if err != nil {
 			return err
@@ -415,7 +447,7 @@ func testConfinement(ctx context.Context, t *testing.T, cl client.Client) {
 	// While the placeholder is in flight, capture its required nodepool selector
 	// and its bound host; assert both confine to pool-a.
 	var surgeHost string
-	eventually(t, ageThreshold+90*time.Second, "the placeholder to bind within pool-a", func() error {
+	eventually(t, surgeBindBudget, "the placeholder to bind within pool-a", func() error {
 		ph, err := getPlaceholder(ctx, cl, candClaim)
 		if err != nil || ph == nil {
 			// Placeholder may already be deleted post-completion; fall back to the
@@ -445,7 +477,7 @@ func testConfinement(ctx context.Context, t *testing.T, cl client.Client) {
 	// the whole time: its claim set is unchanged and its node never gained a
 	// surge-for marker.
 	pbClaimsBefore, _ := listClaims(ctx, cl, poolB)
-	eventually(t, ageThreshold+120*time.Second, "rotation complete via pool-a absorb", func() error {
+	eventually(t, surgeCompleteBudget, "rotation complete via pool-a absorb", func() error {
 		pool, err := getNodePool(ctx, cl, poolA)
 		if err != nil {
 			return err
@@ -503,7 +535,7 @@ func testPDB(ctx context.Context, t *testing.T, cl client.Client) {
 
 	// The rotation should reach draining (candidate NodeClaim deletionTimestamp set)
 	// but NOT complete: the blocking PDB holds the candidate Pod's eviction.
-	eventually(t, ageThreshold+90*time.Second, "the candidate to enter draining (deletionTimestamp set)", func() error {
+	eventually(t, surgeBindBudget, "the candidate to enter draining (deletionTimestamp set)", func() error {
 		c, err := getClaim(ctx, cl, candClaim)
 		if err != nil {
 			return fmt.Errorf("candidate %s: %v", candClaim, err)
