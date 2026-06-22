@@ -1,0 +1,37 @@
+# Example variables for the ephemeral EKS Auto Mode PoC cluster.
+#
+# Copy to `terraform.tfvars` (gitignored) and fill in real values. NEVER commit
+# a populated `terraform.tfvars` — it is excluded by .gitignore precisely so no
+# account-specific values land in this public repository.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#   # edit terraform.tfvars, then: terraform init && terraform apply
+
+# Region to create the ephemeral cluster in. (placeholder — set your own)
+region = "us-west-2"
+
+# Base name for the cluster and derived resources.
+name = "nrc-eks-automode-e2e"
+
+# EKS control-plane Kubernetes version.
+kubernetes_version = "1.33"
+
+# VPC CIDR for the ephemeral network.
+vpc_cidr = "10.0.0.0/16"
+
+# Number of AZs to span (>= 2 for the same-AZ surge / zonal-EBS scenarios).
+azs_count = 2
+
+# Built-in EKS Auto Mode NodePools to enable.
+auto_mode_node_pools = ["general-purpose", "system"]
+
+# Restrict the public EKS API endpoint to your egress IP for anything that
+# outlives a single PoC run. Example (replace with YOUR.IP.ADDR.ESS/32):
+# public_access_cidrs = ["203.0.113.10/32"]
+public_access_cidrs = ["0.0.0.0/0"]
+
+# Extra tags for cost tracking and cleanup sweeps.
+tags = {
+  owner = "REPLACE_ME"
+  ttl   = "1d"
+}

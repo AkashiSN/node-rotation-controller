@@ -31,6 +31,8 @@ KUSTOMIZE_VERSION ?= v5.6.0
 # Cluster + image names shared by the e2e-kwok target and the Go driver.
 E2E_KWOK_CLUSTER ?= nrc-kwok-e2e
 E2E_KWOK_IMAGE ?= ghcr.io/akashisn/node-rotation-controller:e2e
+# Directory of the ephemeral EKS Auto Mode Terraform (test/e2e/eks-automode, #93).
+E2E_EKS_DIR ?= test/e2e/eks-automode
 
 .PHONY: all
 all: build
@@ -135,3 +137,20 @@ e2e-kwok: kind ko kustomize docker-build-e2e
 .PHONY: docker-build-e2e
 docker-build-e2e:
 	docker build -t $(E2E_KWOK_IMAGE) .
+
+# e2e-eks-* manage the ephemeral, real-cloud EKS Auto Mode PoC cluster
+# (test/e2e/eks-automode, issue #93). Like e2e-kwok these are STANDALONE — never
+# run by `make test`. They REQUIRE AWS credentials and a `terraform.tfvars`
+# (copy from terraform.tfvars.example) and they CREATE BILLABLE AWS RESOURCES.
+# Ephemeral by design: up -> run scenarios -> down. See the README in that dir.
+.PHONY: e2e-eks-up
+e2e-eks-up:
+	cd $(E2E_EKS_DIR) && terraform init && terraform apply
+
+.PHONY: e2e-eks-kubeconfig
+e2e-eks-kubeconfig:
+	cd $(E2E_EKS_DIR) && eval "$$(terraform output -raw kubeconfig_command)"
+
+.PHONY: e2e-eks-down
+e2e-eks-down:
+	cd $(E2E_EKS_DIR) && terraform destroy
