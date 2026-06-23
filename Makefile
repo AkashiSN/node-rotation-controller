@@ -34,6 +34,10 @@ aqua-tools:
 		echo "aqua not found — install it (https://aquaproj.github.io) so the pinned CLIs in aqua.yaml resolve"; \
 		exit 1; \
 	}
+	@# controller-gen comes from the local registry (aqua/registry.yaml); aqua
+	@# requires its policy to be trusted before installing. The allow is idempotent,
+	@# so granting it here keeps `make` self-bootstrapping locally and in CI.
+	@aqua policy allow aqua-policy.yaml
 	@aqua install --only-link
 
 # Cluster + image names shared by the e2e-kwok target and the Go driver.
@@ -52,6 +56,18 @@ fmt: aqua-tools
 .PHONY: vet
 vet: aqua-tools
 	go vet ./...
+
+# controller-gen (pinned in aqua.yaml via the local registry) reads the kubebuilder
+# markers under ./api to generate the CRD manifests and zz_generated deepcopy.
+CRD_DIR ?= config/crd/bases
+
+.PHONY: generate
+generate: aqua-tools
+	controller-gen object paths=./api/...
+
+.PHONY: manifests
+manifests: aqua-tools
+	controller-gen crd paths=./api/... output:crd:dir=$(CRD_DIR)
 
 .PHONY: build
 build: aqua-tools fmt vet

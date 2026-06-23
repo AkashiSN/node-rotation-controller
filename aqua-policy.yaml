@@ -1,0 +1,13 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/aquaproj/aqua/main/json-schema/aqua-policy.json
+#
+# aqua enforces a policy before installing packages from a non-standard (local)
+# registry. This file trusts the local registry (aqua/registry.yaml) that provides
+# controller-gen. `make` runs `aqua policy allow aqua-policy.yaml` (idempotent) via
+# the aqua-tools target so the trust is granted automatically, locally and in CI.
+registries:
+  - name: local
+    type: local
+    path: aqua/registry.yaml
+packages:
+  - registry: local

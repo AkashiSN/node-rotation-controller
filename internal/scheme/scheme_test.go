@@ -18,6 +18,16 @@ func TestNewRegistersKarpenterV1(t *testing.T) {
 	}
 }
 
+func TestNewRegistersRotationPolicyV1Alpha1(t *testing.T) {
+	s := scheme.New()
+	for _, kind := range []string{"RotationPolicy", "RotationPolicyList"} {
+		gvk := schema.GroupVersionKind{Group: "noderotation.io", Version: "v1alpha1", Kind: kind}
+		if !s.Recognizes(gvk) {
+			t.Errorf("scheme does not recognize %s", gvk)
+		}
+	}
+}
+
 func TestNewRegistersCoreTypes(t *testing.T) {
 	s := scheme.New()
 	for _, gvk := range []schema.GroupVersionKind{

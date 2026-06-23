@@ -850,7 +850,47 @@ sweep は **ちょうど 1 回、最初の reconcile が何らかの作業をす
 
 ## 5.4 設定スキーマ
 
-v1 は ConfigMap 単一。複数ポリシー対応が必要になれば CRD 化を検討。
+設定キャリアは単一の `policy.yaml` ConfigMap から cluster-scoped な `RotationPolicy` CRD へ移行中で、NodePool ごとに異なるポリシーを表現できるようにする（issue #119）。移行は段階的に進む: まず `RotationPolicy` の Go API 型と CRD マニフェスト（以下のフィールド形）を導入し、続いてコントローラが `RotationPolicy` オブジェクトを読むよう切り替え、ConfigMap を削除する。この切り替えが入るまでは、コントローラは CRD の後に記載した ConfigMap を読み続ける。
+
+### RotationPolicy CRD (`noderotation.io/v1alpha1`)
+
+`RotationPolicy` は cluster-scoped（NodePool が cluster-scoped であり、namespaced なポリシーはインピーダンスミスマッチになる）で、自身の `nodePoolSelector` とポリシーブロック一式を持つ。フィールド形は以下の ConfigMap と 1:1 で、これはキャリアの変更（1 つの ConfigMap → N 個の CRD オブジェクト）であってポリシーフィールドの再定義ではない。バージョンは `v1alpha1`（1.0 前で凍結しない）で、1.0 マイルストーンで `v1` に安定化する。CRD の OpenAPI スキーマが構造ルールを admission 時に強制し、typo が実行時にしか落ちなかった ConfigMap の弱点を塞ぐ — ノードを削除するコントローラでは重要。ターゲティング・競合解決・未マッチ NodePool のフォールバックは、コントローラが `RotationPolicy` を消費するよう切り替える際に規定する（issue #119）。
+
+```yaml
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: api                       # cluster-scoped。NodePool ポリシーごとに 1 オブジェクト
+spec:
+  nodePoolSelector:               # このポリシーが統治する NodePool を選択
+    matchLabels:
+      workload: api
+  ageThreshold: auto              # "auto"（NodePool ごとに導出、§3.2）または Go duration による上書き
+  minRotationChances: 2           # K。下限 1、2 未満は警告のみ
+  maintenanceWindows:             # 現在はポリシーごと。実効ウィンドウは全エントリの和集合（§3.1）
+    - timezone: Asia/Tokyo
+      days: [Wed, Sat]
+      start: "02:00"
+      end:   "06:00"
+  surge:
+    maxUnavailable: 1             # v1 は 1 固定（直列）。OpenAPI スキーマが 1 以外を拒否
+    readyTimeout: 15m             # 0 超でなければならない（実行時に検証）
+    cooldownAfter: 10m            # 0 超でなければならない
+    retryBackoff: 30m             # 0 超でなければならない
+    matchNodeRequirements:        # placeholder が複製する候補ノードの requirement（§3.3）
+      required:                   # 空のとき以下の集合にデフォルト（実行時に適用）
+        - topology.kubernetes.io/zone
+        - kubernetes.io/arch
+        - karpenter.sh/capacity-type
+      preferred: []
+  prePull:                        # v2（v1 では無効）。`enabled` のみ受理
+    enabled: false
+status:                           # 観測／導出のみ — 権威ある実行時状態ではない（§5.3）
+  matchedNodePools: 0
+  conditions: []
+```
+
+### ConfigMap（現行キャリア。コントローラが `RotationPolicy` を消費した時点で削除）
 
 ```yaml
 apiVersion: v1
