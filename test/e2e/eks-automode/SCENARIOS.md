@@ -547,6 +547,97 @@ fires far inside the 336h backstop every cycle.
 
 ---
 
+### Scenario J — capacity-absorb (bin-packed) path
+
+**Goal.** When same-pool spare capacity already exists, the placeholder
+**bin-packs onto it** instead of inducing a new node — the §3.3 *capacity-absorb
+path*. The drain is just as safe (the spare's headroom is physically reserved)
+but no replacement node is launched. Scenarios 0/A–I all took the *new-provision*
+path; this is the other §3.3 outcome.
+
+**Preconditions.** [§3](#3-shared-setup) (controller installed). Uses
+`scenarios/workload-absorb.yaml` (two pods, **same AZ** — set the manifest's
+`topology.kubernetes.io/zone` to one of `terraform output availability_zones`).
+The pool starts **out of scope** so you can stage both nodes before any rotation.
+Read the **Caution** below first — the obvious setup silently new-provisions.
+
+**Run.** Stage the candidate first (so it is the oldest, hence the sole
+`>ageThreshold` candidate), then the spare last (so it stays *young* — below
+`ageThreshold`, so not itself a candidate):
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-          # halt while staging
+
+# 1. candidate first -> own 2-vCPU node
+kubectl apply -f scenarios/workload-absorb.yaml -l app=poc-absorb-cand
+kubectl wait --for=condition=Ready pod -l app=poc-absorb-cand --timeout=5m
+#    wait >5m so it crosses ageThreshold, and any extra empty node consolidates
+#    away (until `kubectl get nodeclaims -l karpenter.sh/nodepool=nrc-poc` == 1)
+
+# 2. spare last, stays young. 1800m forces its own 4-vCPU node (same AZ) with room
+kubectl apply -f scenarios/workload-absorb.yaml                    # adds the spare
+kubectl wait --for=condition=Ready pod -l app=poc-absorb-spare --timeout=5m
+
+# 3. enable rotation; the candidate rotates and the placeholder absorbs the spare
+kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
+```
+
+Watch the placeholder bind and the claim count hold:
+
+```bash
+CAND=$(kubectl get nodeclaims -l karpenter.sh/nodepool=nrc-poc \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort | head -1)  # oldest = candidate
+kubectl get pod -n node-rotation-system "noderotation-surge-$CAND" -o wide -w     # binds to the SPARE node
+kubectl get nodeclaims -l karpenter.sh/nodepool=nrc-poc -w                        # stays at 2 (never 3)
+```
+
+**Expected.** The placeholder is `Successfully assigned` straight to the
+**pre-existing spare node** (its `describe` shows **no `FailedScheduling`**), and
+**no new NodeClaim appears** — the pool's claim count holds at **2** for the whole
+rotation (a new-provision would spike it to 3). The `surge-for` marker lands on
+the **spare** (the surge target is pre-existing). After the drain the candidate
+pod re-lands on the spare's reserved headroom and the old NodeClaim is deleted,
+collapsing the pool to **one** node.
+
+```bash
+# the bound host == the spare, marked as the surge target:
+kubectl get nodes -l noderotation-poc/pool=poc -o json \
+  | jq -r '.items[]|select(.metadata.annotations["noderotation.io/surge-for"])|.metadata.name'
+# claim count never exceeded 2 (new-provision would have shown 3):
+kubectl get nodeclaims -l karpenter.sh/nodepool=nrc-poc --no-headers | wc -l
+```
+
+```text
+noderotation_completed_total{nodepool="nrc-poc",outcome="success"} +1
+noderotation_in_progress{nodepool="nrc-poc"} 0
+```
+
+> **Caution — two traps that silently force the *new-provision* path instead:**
+>
+> 1. **The spare must be young (below `ageThreshold`).** A spare that is itself a
+>    candidate is "near-deadline", so the placeholder's soft hostname exclusion
+>    (§3.3, issue #96) lowers its score; `kube-scheduler` hesitates and Karpenter
+>    wins the provision race, so a new node appears. Stage the candidate first,
+>    wait out `ageThreshold`, then add the spare just before enabling rotation.
+> 2. **No pod anti-affinity between the candidate and spare workloads.**
+>    Anti-affinity is symmetric: the spare pod's "not with the candidate" term
+>    blocks the *drained* candidate pod from re-landing on the spare (the §3.3
+>    per-pod-placement disclaimer), so Karpenter provisions a node for it.
+>    Separate the two nodes by **sizing** instead (the manifest's 1800m spare
+>    can't fit the candidate's 2-vCPU node, so it gets its own 4-vCPU node).
+>
+> Both nodes must also be **same-AZ** (the placeholder copies the candidate's zone
+> as a *required* term); `scenarios/workload-absorb.yaml` pins the zone for this.
+
+**Cleanup.**
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-
+kubectl delete -f scenarios/workload-absorb.yaml
+```
+
+---
+
 ## 5. Cleanup between / after scenarios
 
 | Action | Command |
@@ -555,7 +646,7 @@ fires far inside the 336h backstop every cycle.
 | Reclaim leftover empty surge node | automatic (`consolidateAfter: 60s`); or `kubectl delete nodeclaim <empty>` |
 | Make a `failed` candidate fresh | `kubectl annotate nodeclaim <c> noderotation.io/state- noderotation.io/failed-at- noderotation.io/retry-count-` |
 | Clear a manual freeze (Scenario E) | `kubectl annotate nodepool nrc-poc noderotation.io/freeze-` |
-| Remove a scenario's workload | `kubectl delete -f scenarios/<workload>.yaml` (`workload`, `statefulset-ebs`, `pdb-workload`, `nodepool-b`) |
+| Remove a scenario's workload | `kubectl delete -f scenarios/<workload>.yaml` (`workload`, `statefulset-ebs`, `pdb-workload`, `workload-absorb`, `nodepool-b`) |
 
 ---
 

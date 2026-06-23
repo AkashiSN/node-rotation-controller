@@ -1,0 +1,79 @@
+# Scenario J (capacity-absorb) workloads — SCENARIOS.md §4.
+#
+# Two stateless pods pinned to the nrc-poc pool, in the SAME AZ (the placeholder
+# copies the candidate's zone as a *required* term, so a cross-AZ spare is
+# infeasible). The candidate (250m) lands on a 2-vCPU node; the spare (1800m)
+# cannot fit that node, so Karpenter gives it its own 4-vCPU node with ~1970m
+# free — ample headroom to ABSORB the candidate's 250m placeholder instead of
+# inducing a third node.
+#
+# Apply the candidate FIRST and wait out ageThreshold, then apply the spare just
+# before enabling rotation, so the spare stays young (sub-ageThreshold = NOT
+# itself a candidate). A near-deadline spare is soft-excluded (§3.3, issue #96)
+# and Karpenter wins the provision race; deliberately there is NO pod
+# anti-affinity (it is symmetric and would block the drained candidate pod from
+# re-landing on the spare). Both Deployments carry an `app` label on the object
+# itself so `kubectl apply -f … -l app=poc-absorb-cand` selects just the
+# candidate. See the Scenario J "Caution".
+#
+# The zone below (us-west-2a) is the only cluster-specific value here: set BOTH
+# nodeSelectors to one of `terraform output availability_zones` for your region.
+# What matters is only that the two match — capacity-absorb needs both nodes in
+# the same AZ.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: poc-absorb-cand
+  namespace: default
+  labels:
+    app: poc-absorb-cand
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: poc-absorb-cand
+  template:
+    metadata:
+      labels:
+        app: poc-absorb-cand
+    spec:
+      nodeSelector:
+        noderotation-poc/pool: poc
+        topology.kubernetes.io/zone: us-west-2a
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: poc-absorb-spare
+  namespace: default
+  labels:
+    app: poc-absorb-spare
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: poc-absorb-spare
+  template:
+    metadata:
+      labels:
+        app: poc-absorb-spare
+    spec:
+      nodeSelector:
+        noderotation-poc/pool: poc
+        topology.kubernetes.io/zone: us-west-2a
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: 1800m   # > candidate node free room -> own 4-vCPU node, leaving ample absorb headroom
+              memory: 64Mi
