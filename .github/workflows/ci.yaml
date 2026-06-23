@@ -24,6 +24,9 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+          # Trust the committed aqua-policy.yaml so the local registry providing
+          # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
+          policy_allow: "true"
       - name: Cache Go + aqua tools
         uses: actions/cache@v4
         with:
@@ -52,6 +55,9 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+          # Trust the committed aqua-policy.yaml so the local registry providing
+          # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
+          policy_allow: "true"
       - name: Cache Go + aqua tools
         uses: actions/cache@v4
         with:
@@ -70,6 +76,9 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+          # Trust the committed aqua-policy.yaml so the local registry providing
+          # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
+          policy_allow: "true"
       - name: Cache Go + aqua tools
         uses: actions/cache@v4
         with:
@@ -96,6 +105,9 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+          # Trust the committed aqua-policy.yaml so the local registry providing
+          # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
+          policy_allow: "true"
       - name: helm lint
         run: helm lint charts/node-rotation-controller
       - name: helm template (defaults)

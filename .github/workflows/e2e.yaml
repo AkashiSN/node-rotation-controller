@@ -82,6 +82,9 @@ jobs:
         if: steps.changes.outputs.run == 'true'
         with:
           aqua_version: v2.60.1
+          # Trust the committed aqua-policy.yaml so the local registry providing
+          # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
+          policy_allow: "true"
 
       # Cache the Go module/build cache (keeps the KWOK provider ko build fast)
       # and aqua's tool store (kind/ko/kustomize/helm/kubectl binaries) across runs.

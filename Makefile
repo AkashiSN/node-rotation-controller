@@ -34,9 +34,10 @@ aqua-tools:
 		echo "aqua not found — install it (https://aquaproj.github.io) so the pinned CLIs in aqua.yaml resolve"; \
 		exit 1; \
 	}
-	@# controller-gen comes from the local registry (aqua/registry.yaml); aqua
-	@# requires its policy to be trusted before installing. The allow is idempotent,
-	@# so granting it here keeps `make` self-bootstrapping locally and in CI.
+	@# controller-gen is served from the local registry (aqua/registry.yaml), which
+	@# puts aqua into policy-enforcing mode. Trust the committed policy (idempotent)
+	@# so `make` is self-bootstrapping for local dev. CI grants the same trust via
+	@# aqua-installer's policy_allow input (see .github/workflows).
 	@aqua policy allow aqua-policy.yaml
 	@aqua install --only-link
 

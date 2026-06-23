@@ -5,11 +5,16 @@
 # registry. Once any policy file is in effect, EVERY package must be allowed by it
 # — including the standard registry — so this file trusts both the standard
 # registry and the local registry (aqua/registry.yaml) that provides controller-gen.
-# `make` runs `aqua policy allow aqua-policy.yaml` (idempotent) via the aqua-tools
-# target so the trust is granted automatically, locally and in CI.
+# The standard ref MUST be a semver() constraint, not a pinned tag: a pinned ref
+# does not match the registry version resolved from aqua.yaml and silently denies
+# every standard package.
+#
+# The Makefile exports AQUA_POLICY_CONFIG pointing at this file, which trusts it
+# deterministically (no per-machine `aqua policy allow` state) so `make` works the
+# same locally and in CI.
 registries:
   - type: standard
-    ref: v4.526.0
+    ref: semver(">= 0.0.0")
   - name: local
     type: local
     path: aqua/registry.yaml
