@@ -1,13 +1,19 @@
 package controller
 
 import (
+	"context"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
+	"github.com/AkashiSN/node-rotation-controller/internal/scheme"
 )
 
 // poolGov builds a NodePool with the given labels and (optionally) an
@@ -103,4 +109,64 @@ func TestComputeStatus_InvalidBeatsConflict(t *testing.T) {
 	if c := readyCond(st); c.Reason != noderotationv1alpha1.ReasonInvalid {
 		t.Errorf("Ready reason = %s, want Invalid (intrinsic precedence)", c.Reason)
 	}
+}
+
+// --- RotationPolicyStatusReconciler tests ----------------------------------
+
+func newStatusReconciler(objs ...client.Object) (*RotationPolicyStatusReconciler, client.Client) {
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme.New()).
+		WithObjects(objs...).
+		WithStatusSubresource(&noderotationv1alpha1.RotationPolicy{}).
+		Build()
+	return &RotationPolicyStatusReconciler{Client: cl}, cl
+}
+
+func reconcilePolicy(t *testing.T, r *RotationPolicyStatusReconciler, name string) {
+	t.Helper()
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
+		t.Fatalf("Reconcile(%s): %v", name, err)
+	}
+}
+
+func TestStatusReconciler_WritesStatus(t *testing.T) {
+	pol := testRotationPolicy("api", map[string]string{"workload": "api"})
+	pool := poolGov("p1", map[string]string{"workload": "api"}, true)
+	r, cl := newStatusReconciler(pol, &pool)
+
+	reconcilePolicy(t, r, "api")
+
+	var got noderotationv1alpha1.RotationPolicy
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: "api"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.MatchedNodePools != 1 || got.Status.RotatingNodePools != 1 {
+		t.Errorf("status = matched %d rotating %d, want 1/1", got.Status.MatchedNodePools, got.Status.RotatingNodePools)
+	}
+	if c := readyCond(got.Status); c.Status != metav1.ConditionTrue {
+		t.Errorf("Ready = %s, want True", c.Status)
+	}
+}
+
+func TestStatusReconciler_NoOpWhenUnchanged(t *testing.T) {
+	pol := testRotationPolicy("api", map[string]string{"workload": "api"})
+	pool := poolGov("p1", map[string]string{"workload": "api"}, false)
+	r, cl := newStatusReconciler(pol, &pool)
+
+	reconcilePolicy(t, r, "api")
+	var first noderotationv1alpha1.RotationPolicy
+	_ = cl.Get(context.Background(), types.NamespacedName{Name: "api"}, &first)
+
+	reconcilePolicy(t, r, "api") // second pass must not write again
+	var second noderotationv1alpha1.RotationPolicy
+	_ = cl.Get(context.Background(), types.NamespacedName{Name: "api"}, &second)
+
+	if first.ResourceVersion != second.ResourceVersion {
+		t.Errorf("status churned: rv %s -> %s (no-op guard failed)", first.ResourceVersion, second.ResourceVersion)
+	}
+}
+
+func TestStatusReconciler_MissingPolicyIsNoError(t *testing.T) {
+	r, _ := newStatusReconciler()
+	reconcilePolicy(t, r, "gone") // IgnoreNotFound — must not error
 }
