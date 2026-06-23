@@ -4,6 +4,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// RotationPolicy status condition types and reasons (#124). The controller and
+// its tests share these so the observed-state vocabulary has one source of truth.
+const (
+	// ConditionTypeReady summarizes whether the policy can govern rotations.
+	ConditionTypeReady = "Ready"
+	// ReasonAccepted: the policy spec is valid and not contested by a tie.
+	ReasonAccepted = "Accepted"
+	// ReasonInvalid: the spec fails reconcile-time validation (e.g. an overnight
+	// window the OpenAPI schema cannot reject). Takes precedence over Conflict.
+	ReasonInvalid = "Invalid"
+	// ReasonConflict: the policy ties with one or more equally-specific policies
+	// for at least one NodePool, so neither governs it (spec §5.4, #119 §3).
+	ReasonConflict = "Conflict"
+)
+
 // RotationPolicySpec defines the rotation policy for the NodePools its selector
 // matches. The field shapes mirror the former policy.yaml ConfigMap one-to-one
 // (spec §5.4) — this is a carrier change (one ConfigMap → N CRD objects), not a
@@ -144,6 +159,13 @@ type RotationPolicyStatus struct {
 	// +optional
 	MatchedNodePools int32 `json:"matchedNodePools,omitempty"`
 
+	// rotatingNodePools is the number of governed NodePools with an in-flight
+	// rotation (the noderotation.io/active-rotation anchor set, spec §5.2/§5.3).
+	// Observational only — derived from the NodePool anchors each pass, never the
+	// source of truth.
+	// +optional
+	RotatingNodePools int32 `json:"rotatingNodePools,omitempty"`
+
 	// conditions reports the policy's observed state (e.g. a conflict that blocks rotation).
 	// +listType=map
 	// +listMapKey=type
@@ -156,6 +178,7 @@ type RotationPolicyStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Age-Threshold",type=string,JSONPath=`.spec.ageThreshold`
 // +kubebuilder:printcolumn:name="Matched",type=integer,JSONPath=`.status.matchedNodePools`
+// +kubebuilder:printcolumn:name="Rotating",type=integer,JSONPath=`.status.rotatingNodePools`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // RotationPolicy is a cluster-scoped rotation policy governing the NodePools its

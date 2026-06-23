@@ -23,6 +23,9 @@ spec:
     - jsonPath: .status.matchedNodePools
       name: Matched
       type: integer
+    - jsonPath: .status.rotatingNodePools
+      name: Rotating
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -319,6 +322,14 @@ spec:
                 description: observedGeneration is the .metadata.generation the status
                   was last computed from.
                 format: int64
+                type: integer
+              rotatingNodePools:
+                description: |-
+                  rotatingNodePools is the number of governed NodePools with an in-flight
+                  rotation (the noderotation.io/active-rotation anchor set, spec §5.2/§5.3).
+                  Observational only — derived from the NodePool anchors each pass, never the
+                  source of truth.
+                format: int32
                 type: integer
             type: object
         required:

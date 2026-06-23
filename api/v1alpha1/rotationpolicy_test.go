@@ -83,3 +83,25 @@ func TestRotationPolicyDeepCopyRoundTrip(t *testing.T) {
 		t.Error("DeepCopyObject did not return *RotationPolicy")
 	}
 }
+
+func TestRotationPolicyStatusDeepCopyPreservesRotatingNodePools(t *testing.T) {
+	in := &RotationPolicy{
+		Status: RotationPolicyStatus{
+			ObservedGeneration: 7,
+			MatchedNodePools:   3,
+			RotatingNodePools:  2,
+			Conditions: []metav1.Condition{{
+				Type:   ConditionTypeReady,
+				Status: metav1.ConditionTrue,
+				Reason: ReasonAccepted,
+			}},
+		},
+	}
+	out := in.DeepCopy()
+	if out.Status.RotatingNodePools != 2 {
+		t.Errorf("RotatingNodePools = %d, want 2", out.Status.RotatingNodePools)
+	}
+	if out.Status.Conditions[0].Type != ConditionTypeReady || out.Status.Conditions[0].Reason != ReasonAccepted {
+		t.Errorf("condition not preserved: %+v", out.Status.Conditions[0])
+	}
+}
