@@ -132,9 +132,10 @@ jobs:
             --set config.policy.prePull.enabled=true
           assert_rejected "placeholder.priorityClass.value=0 (must be negative, max -1)" \
             --set placeholder.priorityClass.value=0
-          # A removed/unknown policy key (e.g. a stale warmup override from before
-          # v3 was dropped) must be rejected at render time, not silently rendered
-          # into policy.yaml where the controller's strict parser would crashloop on
-          # it. config.policy is additionalProperties:false, mirroring UnmarshalStrict.
-          assert_rejected "config.policy.warmup.* (unknown key; warmup was removed)" \
-            --set config.policy.warmup.enabled=false
+          # An unknown policy key must be rejected at render time, not silently
+          # rendered into policy.yaml where the controller's strict parser
+          # (yaml.UnmarshalStrict) would crashloop on it at startup. config.policy is
+          # additionalProperties:false, mirroring that strict parsing — this guards
+          # the fix from a silent regression.
+          assert_rejected "config.policy.<unknown> (additionalProperties:false)" \
+            --set config.policy.unknownKey=1
