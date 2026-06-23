@@ -1,8 +1,10 @@
 # Ephemeral EKS Auto Mode cluster for the node-rotation-controller real-cloud
 # PoC (issue #93). This stands up the minimum real-cloud surface needed to run
 # the §7.2 PoC items the KWOK harness (test/e2e/kwok, #92) cannot cover:
-# same-AZ surge + zonal-EBS rebind, real capacity-shortage rollback, NodePool
-# `limits` exhaustion, and the `expireAfter` real-soak race.
+# same-AZ surge + zonal-EBS rebind, NodePool `limits` exhaustion, voluntary drain,
+# multi-NodePool confinement, do-not-disrupt markers, expired outcome handling, and
+# the scaled `expireAfter` backstop-margin soak. Genuine same-AZ ICE/capacity
+# shortage and a full tight-race soak remain open.
 #
 # Ephemeral by design: apply -> run scenarios -> destroy. See README.md.
 

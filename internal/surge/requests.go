@@ -26,8 +26,8 @@ import (
 //
 // Each remaining Pod is sized by the standard Kubernetes effective-request
 // algorithm (regular + restartable-init/sidecar containers, init-container peak,
-// pod overhead) via k8s.io/component-helpers. The precise padding and exclusion
-// filter are finalized in the PoC (spec §3.3).
+// pod overhead) via k8s.io/component-helpers; v1 applies no extra padding beyond
+// that computed request (spec §3.3).
 func ReschedulableRequests(pods []corev1.Pod, nodeName string) corev1.ResourceList {
 	total := corev1.ResourceList{}
 	for i := range pods {

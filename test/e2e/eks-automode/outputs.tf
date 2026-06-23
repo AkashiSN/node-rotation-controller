@@ -21,7 +21,7 @@ output "cluster_version" {
 }
 
 output "auto_mode_node_pools" {
-  description = "Built-in EKS Auto Mode NodePools enabled on the cluster. The controller's surge PoC targets these via the Karpenter v1 NodeClaim CRD."
+  description = "Built-in EKS Auto Mode NodePools enabled on the cluster. The PoC uses them for system/controller placement; rotation scenarios target the dedicated `nrc-poc` NodePool."
   value       = var.auto_mode_node_pools
 }
 

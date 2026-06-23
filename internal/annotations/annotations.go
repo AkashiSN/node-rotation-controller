@@ -16,8 +16,8 @@ const Prefix = "noderotation.io/"
 // (spec §3.3, §5.3). Its value is the old NodeClaim's metadata.name. It is set
 // as a label on the placeholder Pod and as an annotation on each
 // controller-frozen node; the marker is what finds the placeholder and resolves
-// the surge target after the old NodeClaim is gone, and what distinguishes a
-// controller-applied karpenter.sh/do-not-disrupt from an operator's.
+// the surge target after the old NodeClaim is gone. It is not an ownership
+// marker for karpenter.sh/do-not-disrupt; DoNotDisruptOwned carries that.
 const SurgeFor = Prefix + "surge-for"
 
 // Per-NodeClaim progress-state keys (spec §5.3 State Model). The selector reads

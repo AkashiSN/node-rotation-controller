@@ -48,7 +48,7 @@ variable "azs_count" {
 }
 
 variable "auto_mode_node_pools" {
-  description = "Built-in EKS Auto Mode NodePools to enable. EKS Auto Mode ships managed `general-purpose` and `system` NodePools; the controller's surge PoC targets `general-purpose`. Set to [] to manage NodePools yourself via the manifests applied after apply."
+  description = "Built-in EKS Auto Mode NodePools to enable. EKS Auto Mode ships managed `general-purpose` and `system` NodePools; the PoC keeps them available for system/controller placement while scenarios rotate the dedicated `nrc-poc` NodePool applied after cluster creation."
   type        = list(string)
   default     = ["general-purpose", "system"]
 }

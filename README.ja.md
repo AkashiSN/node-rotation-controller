@@ -9,7 +9,7 @@ EKS Auto Mode をはじめ、Node Expiration が Forceful で Disruption Budgets
 
 ## Status
 
-**v0.3 — v1 surge MVP 実装済み（pre-1.0）。** v1 の make-before-break 置換ステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。これは **早期検証段階であり、まだ production-ready ではない** — 実際の EKS Auto Mode クラスタでの soak テストは未実施（v1.0 に向けた[ロードマップ](docs/ja/specification.md#62-ロードマップ)を参照）。設計の source of truth は引き続き [docs/ja/specification.md](docs/ja/specification.md)。Karpenter の契約は[互換性](#互換性)を参照。
+**v0.3 — v1 surge MVP 実装済み（pre-1.0）。** v1 の make-before-break 置換ステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。これは **早期検証段階であり、まだ production-ready ではない** — EKS Auto Mode PoC では core surge path を検証済みだが、edge case と full multi-hour tight-race soak は未了である（v1.0 に向けた[ロードマップ](docs/ja/specification.md#62-ロードマップ)を参照）。設計の canonical source of truth は [docs/specification.md](docs/specification.md) であり、[docs/ja/specification.md](docs/ja/specification.md) は同期された日本語訳である。Karpenter の契約は[互換性](#互換性)を参照。
 
 English: [README.md](README.md) / [docs/specification.md](docs/specification.md)
 
