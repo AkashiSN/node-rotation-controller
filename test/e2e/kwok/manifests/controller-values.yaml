@@ -29,9 +29,8 @@ logging:
 
 config:
   policy:
-    # Match BOTH e2e NodePools by their shared marker label. Tests then narrow
-    # behaviour per pool via the pool=a / pool=b labels on the NodePools and the
-    # candidate NodeClaims' own pool membership.
+    # Match only nodepool-a by its in-scope marker. nodepool-b deliberately stays
+    # out of scope so it can hold spare capacity for confinement assertions.
     nodepoolSelectors:
       - matchLabels:
           noderotation-e2e/in-scope: "true"

@@ -1,8 +1,8 @@
 # Contributing to node-rotation-controller
 
-Thanks for your interest! This project is in the **specification phase** — the
-design is being refined before implementation begins. Feedback on the design
-(via Issues) is especially valuable right now.
+Thanks for your interest! This project is in the **v0.3 MVP phase**: the v1 surge
+implementation is in place, and the design is still being refined toward v1.0.
+Feedback on the design and implementation is welcome via Issues.
 
 ## Ways to contribute
 

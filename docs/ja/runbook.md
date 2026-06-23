@@ -6,8 +6,9 @@
 
 英語原文: [docs/runbook.md](../runbook.md)。
 
-> 本コントローラは pre-1.0 であり、実際の EKS Auto Mode クラスタでの soak テストは
-> 未実施（[§6.2 ロードマップ](specification.md#62-ロードマップ)を参照）。本ランブックは
+> 本コントローラは pre-1.0 である。EKS Auto Mode PoC では core surge path を
+> 検証済みだが、edge case と full multi-hour tight-race soak は未了である
+> （[§7.2 検証済み前提](specification.md#72-検証済み前提)を参照）。本ランブックは
 > production 展開の出発点であって、保証ではない。
 
 ## 目次
