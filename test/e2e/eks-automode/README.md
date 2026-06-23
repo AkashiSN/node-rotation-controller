@@ -17,7 +17,7 @@ It is the **real-cloud companion** to the KWOK harness:
 > does not touch the controller (`internal/`, `cmd/`). EKS Auto Mode provides
 > Karpenter v1 natively, so the controller still routes every node operation
 > through the Karpenter `NodeClaim` CRD — the project's core architectural
-> invariant (see [`CLAUDE.md`](../../../CLAUDE.md)) is preserved.
+> invariant (see [`docs/specification.md`](../../../docs/specification.md)) is preserved.
 
 ## Cost warning — ephemeral by design
 
