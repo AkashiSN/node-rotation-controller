@@ -140,15 +140,6 @@
                   "description": "v2 feature; must be false in v1 (spec §5.4)."
                 }
               }
-            },
-            "warmup": {
-              "type": "object",
-              "properties": {
-                "enabled": {
-                  "const": false,
-                  "description": "v3 feature; must be false in v1 (spec §5.4)."
-                }
-              }
             }
           }
         }

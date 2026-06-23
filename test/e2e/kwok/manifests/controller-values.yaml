@@ -90,5 +90,3 @@ config:
 
     prePull:
       enabled: false
-    warmup:
-      enabled: false

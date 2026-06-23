@@ -26,7 +26,6 @@ type Policy struct {
 	MaintenanceWindows []MaintenanceWindow `json:"maintenanceWindows"`
 	Surge              Surge               `json:"surge"`
 	PrePull            FeatureToggle       `json:"prePull"` // v2; must be disabled in v1
-	Warmup             FeatureToggle       `json:"warmup"`  // v3; must be disabled in v1
 }
 
 // Selector matches in-scope NodePools by label (spec §3.2, §5.4).
@@ -209,12 +208,9 @@ func (p *Policy) Validate() error {
 		errs = append(errs, w.validate(i)...)
 	}
 
-	// v2/v3 features are not implemented in v1; a true value is a misconfig.
+	// The v2 pre-pull feature is not implemented in v1; a true value is a misconfig.
 	if p.PrePull.Enabled {
 		errs = append(errs, errors.New("prePull.enabled must be false in v1"))
-	}
-	if p.Warmup.Enabled {
-		errs = append(errs, errors.New("warmup.enabled must be false in v1"))
 	}
 
 	return errors.Join(errs...)

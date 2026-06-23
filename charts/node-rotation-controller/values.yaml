@@ -216,8 +216,3 @@ config:
     # images list lands when pre-pull ships in v0.4.
     prePull:
       enabled: false
-
-    # v3 (disabled in v1). The v1 parser accepts only `enabled` here; the
-    # jobTemplate lands when warm-up ships in v0.5.
-    warmup:
-      enabled: false
