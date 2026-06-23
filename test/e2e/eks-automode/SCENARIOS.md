@@ -638,6 +638,248 @@ kubectl delete -f scenarios/workload-absorb.yaml
 
 ---
 
+### Scenario K — leader-change resume
+
+**Goal.** Killing the leader mid-rotation does not restart or lose the rotation:
+a new leader resumes it **purely from annotations** (§5.1, durable state on the
+NodeClaim).
+
+**Preconditions.** [§3](#3-shared-setup), the stateless `workload.yaml` (one
+`nrc-poc` node, candidate `>ageThreshold`).
+
+**Run.** Enable rotation, wait until the candidate is `state=pending` with a
+`surge-claim` stamped, then delete the leader Pod:
+
+```bash
+CAND=$(kubectl get nodeclaims -l karpenter.sh/nodepool=nrc-poc -o jsonpath='{.items[0].metadata.name}')
+kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
+# wait until: kubectl get nodeclaim $CAND -o jsonpath='{.metadata.annotations.noderotation\.io/state}' == pending
+#        and  ...noderotation\.io/surge-claim is non-empty; note both it and started-at
+kubectl -n node-rotation-system delete pod -l app.kubernetes.io/name=node-rotation-controller
+```
+
+**Expected.** A new replica takes the Lease
+(`kubectl -n node-rotation-system get lease node-rotation-controller.noderotation.io`
+holder changes) and continues the **same** rotation — `surge-claim` and
+`started-at` are unchanged — advancing `pending → draining → complete`. The
+candidate NodeClaim is rotated away; `noderotation_completed_total{outcome="success"}`
+increments. Nothing restarts from scratch.
+
+**Cleanup.** `kubectl label nodepool nrc-poc noderotation-poc/in-scope-`
+
+---
+
+### Scenario L — window boundary (in-flight completes, no new start)
+
+**Goal.** A rotation already in-flight **completes past the window boundary**;
+once the window closes, **no new rotation starts** even with an eligible
+candidate (§3.1).
+
+**Preconditions.** [§3](#3-shared-setup), the stateless `workload.yaml` scaled to
+**two** replicas so two `nrc-poc` nodes exist (`kubectl scale deploy poc-workload
+--replicas=2`), both `>ageThreshold`.
+
+**Run.** `maintenanceWindows` is read at startup, so the boundary is made
+deterministic by closing the window while a rotation is in-flight (rather than
+racing a wall-clock minute):
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
+# wait until the oldest candidate is state=pending (rotation 1 in-flight)
+# close the window: end 23:59 -> 00:01 (now is outside [00:00,00:01]) and restart
+sed 's/end: "23:59"/end: "00:01"/' scenarios/controller-values.yaml > /tmp/win-closed.yaml
+helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
+  --namespace node-rotation-system -f /tmp/win-closed.yaml \
+  --set image.repository="$REPO" --set image.tag=poc
+kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
+```
+
+**Expected.** Despite the window now being **closed** (and the controller having
+restarted), rotation 1 **still completes** — the in-flight rotation finishes past
+the boundary. Rotation 2 (the second candidate) does **not** start:
+
+```text
+noderotation_window_active 0            # window closed
+noderotation_candidates{nodepool="nrc-poc"} 1   # second candidate still eligible
+noderotation_in_progress{nodepool="nrc-poc"} 0  # but no new rotation starts
+```
+
+**Cleanup.** Restore the open window and halt:
+
+```bash
+helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
+  --namespace node-rotation-system -f scenarios/controller-values.yaml \
+  --set image.repository="$REPO" --set image.tag=poc
+kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-
+kubectl scale deploy poc-workload --replicas=1
+```
+
+---
+
+### Scenario M — placeholder preemption (victim + `readyTimeout` rollback)
+
+**Goal.** Two facets of §3.3 *Placeholder priority* / *Rollback*, each with its own
+setup because they cannot be observed in the same run:
+
+- **Part A — preemption victim.** The placeholder (negative priority
+  `noderotation-placeholder` = -10, `preemptionPolicy: Never`, a bare Pod with no
+  ReplicaSet) is the deliberate preemption **victim**: a higher-priority Pod
+  evicts it, and it never preempts anything itself.
+- **Part B — `readyTimeout`-bounded rollback.** Under sustained higher-priority
+  pressure the placeholder can never complete the surge, so the rotation
+  self-terminates into a **clean rollback** rather than churning forever.
+
+> Why two setups: to *preempt* a placeholder it must be **Running** (Part A injects
+> a preemptor once it is). But a placeholder that is **Running** has already passed
+> `surge_ready`, so it cannot also demonstrate the *pending→rollback* path — Part B
+> keeps it `Pending` from the start instead. The strict single chain
+> *preempt → recreate → readyTimeout* has a narrow window on real EKS too
+> (absorb/bind → `surge_ready` is fast), as under KWOK (#95 item 2); the idempotent
+> recreate-on-missing is pinned by envtest.
+
+#### Part A — preemption victim
+
+**Preconditions.** [§3](#3-shared-setup), pool **out of scope**. Stage the
+capacity-absorb pair from [Scenario J](#scenario-j--capacity-absorb-bin-packed-path)
+(candidate 250m on a 2-vCPU node `>ageThreshold`; a *young* 1800m spare on its own
+4-vCPU node, same AZ) so the placeholder will be **Running** on the spare.
+
+**Run.** Enable rotation, wait until the placeholder is **Running** on the spare,
+then inject the preemptor:
+
+```bash
+kubectl apply -f scenarios/workload-absorb.yaml -l app=poc-absorb-cand   # candidate first
+# wait >5m (candidate crosses ageThreshold) and consolidation down to ONE nrc-poc node, then:
+kubectl apply -f scenarios/workload-absorb.yaml                          # adds the young spare
+kubectl wait --for=condition=Ready pod -l app=poc-absorb-spare --timeout=5m
+kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
+
+CAND=$(kubectl get nodeclaims -l karpenter.sh/nodepool=nrc-poc -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort | head -1)
+# wait until pod noderotation-surge-$CAND is Running on the SPARE node, then preempt it:
+kubectl apply -f scenarios/preemption.yaml -l app=poc-preemptor   # 1900m high-priority Pod
+```
+
+**Expected.** The preemptor evicts the placeholder from the spare — the placeholder
+is the victim and never the preemptor:
+
+```text
+kubectl get events -n node-rotation-system | grep "noderotation-surge-$CAND"
+#   Normal  Preempted        ... Preempted by pod <poc-preemptor-uid> on node <spare>
+#   Warning FailedScheduling ... preemption: not eligible due to preemptionPolicy=Never
+```
+
+The `Preempted` event confirms the victim role; `not eligible due to
+preemptionPolicy=Never` confirms the placeholder never preempts others to make
+room (so it never re-pends by evicting anything); being a bare Pod, only the
+controller would recreate it. (If the drain was already underway when the preempt
+landed, the rotation still completes — a drain-phase preempt is harmless.)
+
+**Cleanup.**
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-
+kubectl delete -f scenarios/preemption.yaml --ignore-not-found
+kubectl delete -f scenarios/workload-absorb.yaml --ignore-not-found
+```
+
+#### Part B — `readyTimeout`-bounded rollback
+
+**Preconditions.** [§3](#3-shared-setup), pool **out of scope**. Stage a small
+candidate, a high-priority blocker holding the only same-AZ spare, new nodes
+blocked by `limits`, and a short `readyTimeout`:
+
+```bash
+kubectl apply -f scenarios/workload-absorb.yaml -l app=poc-absorb-cand   # candidate (250m), >ageThreshold
+# shorten readyTimeout so the rollback is quick (e.g. 120s) and restart
+sed 's/      readyTimeout: 15m/      readyTimeout: 120s/' scenarios/controller-values.yaml > /tmp/rt-short.yaml
+helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
+  --namespace node-rotation-system -f /tmp/rt-short.yaml \
+  --set image.repository="$REPO" --set image.tag=poc
+kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
+# blocker (high priority, anti-affinity to the candidate) claims the only spare 4-vCPU node
+kubectl apply -f scenarios/preemption.yaml -l app=poc-blocker
+kubectl wait --for=condition=Ready pod poc-blocker --timeout=5m
+# block new nodes: leave headroom for the 250m placeholder pre-check but not a whole node
+#   provisioned = cand 2 + blocker 4 = 6; a new 2-vCPU node would be 8
+kubectl patch nodepool nrc-poc --type merge -p '{"spec":{"limits":{"cpu":"7"}}}'
+```
+
+**Run.** `kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite`
+
+**Expected.** The placeholder cannot bind (candidate node cordoned, blocker node
+full, new node blocked by `limits`) and **cannot preempt the blocker** (it is
+negative-priority + `Never`), so it stays `Pending` until `readyTimeout` fires a
+clean rollback:
+
+```text
+noderotation_completed_total{nodepool="nrc-poc",outcome="failure"} +1
+noderotation_retry_count{nodepool="nrc-poc"} 1
+```
+
+The candidate is **retained** (not rotated), `state=failed`, its node
+**un-cordoned**, and the induced surge claim reaped.
+
+**Cleanup.**
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-
+kubectl delete -f scenarios/preemption.yaml --ignore-not-found
+kubectl delete -f scenarios/workload-absorb.yaml --ignore-not-found
+kubectl patch nodepool nrc-poc --type merge -p '{"spec":{"limits":{"cpu":"16"}}}'
+# restore readyTimeout and clear the failed marker (see Gotchas)
+helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
+  --namespace node-rotation-system -f scenarios/controller-values.yaml \
+  --set image.repository="$REPO" --set image.tag=poc
+kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
+```
+
+---
+
+### Scenario N — `do-not-disrupt` honored against voluntary disruption
+
+**Goal.** Karpenter **honors** `karpenter.sh/do-not-disrupt=true` — the value the
+controller applies to both surge nodes (Scenario H) — against **voluntary**
+disruption: no node is disrupted while the annotation is set (§3.3, #95). (That it
+does *not* block `expireAfter` is documented Karpenter behavior, not retested.)
+
+**Preconditions.** [§3](#3-shared-setup), the stateless `workload.yaml` (one
+`nrc-poc` node), pool **out of scope** (this exercises Karpenter's Drift, not the
+controller's rotation).
+
+**Run.** First take the pool **out of scope** — the shared NodePool ships the
+`noderotation-poc/in-scope` label (it is in scope by default, see [§2](#2-how-the-scenarios-work)),
+so without this the controller could rotate the very node this scenario is testing
+and contaminate the Drift result. Then put `do-not-disrupt` on the node and induce
+Drift by changing the NodePool `spec.template`:
+
+```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-      # stop the controller rotating it
+kubectl get nodepool nrc-poc -o jsonpath='active-rotation=[{.metadata.annotations.noderotation\.io/active-rotation-state}]{"\n"}'  # verify: empty (no in-flight rotation)
+NODE=$(kubectl get nodes -l noderotation-poc/pool=poc -o jsonpath='{.items[0].metadata.name}')
+kubectl annotate node "$NODE" karpenter.sh/do-not-disrupt=true --overwrite
+kubectl patch nodepool nrc-poc --type merge -p '{"spec":{"template":{"metadata":{"labels":{"poc-drift":"v1"}}}}}'
+```
+
+**Expected.** The node goes `Drifted=True` but is **not** replaced while the
+annotation is set (watch for several minutes — no new NodeClaim, claim count
+unchanged). Removing the annotation lets Karpenter immediately drift-replace it
+(make-before-break — a replacement claim appears, then the old one is deleted):
+
+```bash
+kubectl get nodeclaim "$(kubectl get nodeclaims -l karpenter.sh/nodepool=nrc-poc -o jsonpath='{.items[0].metadata.name}')" \
+  -o jsonpath='Drifted={.status.conditions[?(@.type=="Drifted")].status}{"\n"}'   # True, yet not replaced
+kubectl annotate node "$NODE" karpenter.sh/do-not-disrupt-     # now it gets drift-replaced
+```
+
+**Cleanup.** Revert the template change:
+
+```bash
+kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/template/metadata/labels/poc-drift"}]'
+```
+
+---
+
 ## 5. Cleanup between / after scenarios
 
 | Action | Command |
@@ -646,7 +888,8 @@ kubectl delete -f scenarios/workload-absorb.yaml
 | Reclaim leftover empty surge node | automatic (`consolidateAfter: 60s`); or `kubectl delete nodeclaim <empty>` |
 | Make a `failed` candidate fresh | `kubectl annotate nodeclaim <c> noderotation.io/state- noderotation.io/failed-at- noderotation.io/retry-count-` |
 | Clear a manual freeze (Scenario E) | `kubectl annotate nodepool nrc-poc noderotation.io/freeze-` |
-| Remove a scenario's workload | `kubectl delete -f scenarios/<workload>.yaml` (`workload`, `statefulset-ebs`, `pdb-workload`, `workload-absorb`, `nodepool-b`) |
+| Remove a scenario's workload | `kubectl delete -f scenarios/<workload>.yaml` (`workload`, `statefulset-ebs`, `pdb-workload`, `workload-absorb`, `preemption`, `nodepool-b`) |
+| Revert a Scenario N drift label | `kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/template/metadata/labels/poc-drift"}]'` |
 
 ---
 
