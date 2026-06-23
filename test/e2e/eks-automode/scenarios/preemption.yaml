@@ -1,15 +1,26 @@
 # Scenario M (placeholder preemption) helpers — SCENARIOS.md §4.
 #
-# A dedicated high-priority class + a "blocker" Pod that occupies the only
-# same-AZ spare so the negative-priority surge placeholder cannot bind there,
-# cannot preempt the blocker, and (with NodePool limits blocking new nodes) stays
-# Pending until readyTimeout fires a clean rollback. The blocker carries a
-# required anti-affinity to the candidate workload so it lands on its OWN node
-# (not the candidate's) and a request large enough to claim a 4-vCPU node with
-# only ~170m free — too little for the 250m placeholder.
+# A dedicated high-priority class plus two Pods for the scenario's two parts:
 #
-# Cluster-specific value: set topology.kubernetes.io/zone to one of
-# `terraform output availability_zones` (must match the candidate's AZ).
+#   - poc-preemptor (Part A — preemption victim): injected AFTER the placeholder
+#     is Running on the capacity-absorb spare. Sized (1900m) to evict ONLY the
+#     negative-priority placeholder from that spare (not the resident workload),
+#     producing a real `Preempted` event on the placeholder. No anti-affinity —
+#     it must land where the placeholder is (the candidate node is cordoned + too
+#     small, so kube-scheduler picks the spare and preempts the placeholder).
+#
+#   - poc-blocker (Part B — readyTimeout rollback): applied BEFORE rotation to
+#     occupy the only same-AZ spare so the placeholder can never bind there,
+#     cannot preempt it (placeholder is negative-priority + Never), and — with
+#     NodePool limits blocking new nodes — stays Pending until readyTimeout fires
+#     a clean rollback. Required anti-affinity to the candidate keeps it on its
+#     OWN node; 3600m claims a 4-vCPU node leaving ~170m free (< the 250m placeholder).
+#
+# Apply ONLY the Pod the active part needs (see SCENARIOS.md), e.g.
+#   kubectl apply -f scenarios/preemption.yaml          # both Pods + the class
+# or extract a single doc. Cluster-specific value: set
+# topology.kubernetes.io/zone to one of `terraform output availability_zones`
+# (must match the candidate's AZ).
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
@@ -17,6 +28,27 @@ metadata:
 value: 1000000
 preemptionPolicy: PreemptLowerPriority
 description: "PoC Scenario M — preempts / blocks the negative-priority surge placeholder"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: poc-preemptor
+  namespace: default
+  labels:
+    app: poc-preemptor
+spec:
+  priorityClassName: poc-high-priority
+  nodeSelector:
+    noderotation-poc/pool: poc
+    topology.kubernetes.io/zone: us-west-2a
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: pause
+      image: registry.k8s.io/pause:3.10
+      resources:
+        requests:
+          cpu: 1900m   # evicts ONLY the 250m placeholder from the absorb spare (resident workload stays)
+          memory: 64Mi
 ---
 apiVersion: v1
 kind: Pod
