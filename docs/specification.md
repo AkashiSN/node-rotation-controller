@@ -852,7 +852,47 @@ The sweep runs **exactly once, gated before the first reconcile does any work** 
 
 ## 5.4 Configuration Schema
 
-The v1 schema is a single ConfigMap. CRD-based configuration is reserved for a later version if multi-policy support is required.
+The configuration carrier is migrating from the single `policy.yaml` ConfigMap to a cluster-scoped `RotationPolicy` CRD so distinct NodePools can carry divergent policy (issue #119). The migration lands incrementally: the `RotationPolicy` Go API types and CRD manifests ship first (the field shapes below), then the controller switches to consuming `RotationPolicy` objects and the ConfigMap is removed. Until that switch lands, the controller still reads the ConfigMap documented after the CRD.
+
+### RotationPolicy CRD (`noderotation.io/v1alpha1`)
+
+`RotationPolicy` is cluster-scoped (NodePools are cluster-scoped; a namespaced policy would be an impedance mismatch) and carries its own `nodePoolSelector` plus the full policy block. The field shapes are lifted one-to-one from the ConfigMap below — this is a carrier change (one ConfigMap → N CRD objects), not a redefinition of the policy fields. The version is `v1alpha1` (pre-1.0, not frozen) and stabilizes to `v1` at the 1.0 milestone. The CRD's OpenAPI schema enforces the structural rules at admission time, closing the ConfigMap weakness where a typo failed only at runtime — which matters for a controller that deletes nodes. Targeting, conflict resolution, and the unmatched-NodePool fallback are specified with the controller's switch to consuming `RotationPolicy` (issue #119).
+
+```yaml
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: api                       # cluster-scoped; one object per NodePool policy
+spec:
+  nodePoolSelector:               # selects the NodePools this policy governs
+    matchLabels:
+      workload: api
+  ageThreshold: auto              # "auto" (derived per NodePool, §3.2) or a Go duration override
+  minRotationChances: 2           # K; floor 1, values < 2 only warn
+  maintenanceWindows:             # per-policy now; the effective window is the UNION of entries (§3.1)
+    - timezone: Asia/Tokyo
+      days: [Wed, Sat]
+      start: "02:00"
+      end:   "06:00"
+  surge:
+    maxUnavailable: 1             # v1 fixed at 1 (serial); the OpenAPI schema rejects any other value
+    readyTimeout: 15m             # must be > 0 (validated at runtime)
+    cooldownAfter: 10m            # must be > 0
+    retryBackoff: 30m             # must be > 0
+    matchNodeRequirements:        # which candidate-node requirements the placeholder replicates (§3.3)
+      required:                   # defaulted to the set below when empty (applied at runtime)
+        - topology.kubernetes.io/zone
+        - kubernetes.io/arch
+        - karpenter.sh/capacity-type
+      preferred: []
+  prePull:                        # v2 (disabled in v1); only `enabled` is accepted
+    enabled: false
+status:                           # observational/derived only — never authoritative runtime state (§5.3)
+  matchedNodePools: 0
+  conditions: []
+```
+
+### ConfigMap (current carrier, removed once the controller consumes `RotationPolicy`)
 
 ```yaml
 apiVersion: v1

@@ -6,6 +6,7 @@ ARG TARGETARCH
 WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download
+COPY api/ api/
 COPY cmd/ cmd/
 COPY internal/ internal/
 # TARGETOS/TARGETARCH are injected by buildx; fall back to the host's values so

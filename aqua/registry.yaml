@@ -1,0 +1,15 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/aquaproj/aqua/main/json-schema/registry-yaml.json
+#
+# Local aqua registry for tools the standard registry does not carry.
+# controller-gen (sigs.k8s.io/controller-tools) is absent from the standard
+# registry, so it is declared here as a go_install package: aqua runs `go install`
+# with the pinned Go toolchain to build it from source. The consumed version is
+# pinned in ../aqua.yaml; this local registry is trusted via ../aqua-policy.yaml.
+packages:
+  - type: go_install
+    name: sigs.k8s.io/controller-tools/cmd/controller-gen
+    path: sigs.k8s.io/controller-tools/cmd/controller-gen
+    description: Generate CRD manifests and DeepCopy methods from kubebuilder markers
+    files:
+      - name: controller-gen

@@ -24,6 +24,9 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+          # Trust the committed aqua-policy.yaml so the local registry providing
+          # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
+          policy_allow: "true"
       - name: Cache Go + aqua tools
         uses: actions/cache@v4
         with:
@@ -37,6 +40,13 @@ jobs:
         run: make lint
       - name: gopls check (severity>=hint)
         run: make gopls-check
+      - name: verify generated artifacts are up to date
+        run: |
+          make generate manifests
+          git diff --exit-code -- api config || { \
+            echo "::error::deepcopy/CRD manifests are stale — run 'make generate manifests' and commit the result"; \
+            exit 1; \
+          }
 
   test:
     runs-on: ubuntu-latest
@@ -45,6 +55,9 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+          # Trust the committed aqua-policy.yaml so the local registry providing
+          # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
+          policy_allow: "true"
       - name: Cache Go + aqua tools
         uses: actions/cache@v4
         with:
@@ -63,6 +76,9 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+          # Trust the committed aqua-policy.yaml so the local registry providing
+          # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
+          policy_allow: "true"
       - name: Cache Go + aqua tools
         uses: actions/cache@v4
         with:
@@ -89,6 +105,9 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.4
         with:
           aqua_version: v2.60.1
+          # Trust the committed aqua-policy.yaml so the local registry providing
+          # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
+          policy_allow: "true"
       - name: helm lint
         run: helm lint charts/node-rotation-controller
       - name: helm template (defaults)
