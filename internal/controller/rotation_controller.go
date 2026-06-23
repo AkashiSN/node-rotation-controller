@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -23,8 +24,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
+	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 	"github.com/AkashiSN/node-rotation-controller/internal/policy"
+	"github.com/AkashiSN/node-rotation-controller/internal/resolve"
 	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
 	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 	"github.com/AkashiSN/node-rotation-controller/internal/surge"
@@ -45,10 +48,6 @@ const (
 // rests on the NodePool's active-rotation anchor (§5.2 step 1).
 type RotationReconciler struct {
 	client.Client
-
-	// Policy and Schedule resolve the per-NodePool gates and timeouts.
-	Policy   *policy.Policy
-	Schedule *window.Schedule
 
 	// Namespace, PlaceholderImage, and PriorityClassName configure the surge
 	// placeholder Pod (spec §3.3).
@@ -127,15 +126,71 @@ func (r *RotationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	if !r.inScope(&pool) {
+
+	// Resolve the single RotationPolicy that governs this NodePool (spec §5.4):
+	// most-specific selector wins; an equal-specificity tie or a runtime-invalid
+	// policy is a hard conflict; a NodePool matched by no policy is not rotated.
+	pol, sched, conflict, err := r.governingPolicy(ctx, &pool)
+	switch {
+	case err != nil:
+		// Transient: listing RotationPolicies failed. Requeue with backoff; do not
+		// treat it as a conflict (no event, no gauge flip).
+		return ctrl.Result{}, err
+	case conflict != "":
+		// Tie or runtime-invalid policy: refuse to rotate this pool, never guess
+		// (#119 §3). Drop the stale rotation gauges so they don't latch, raise the
+		// conflict gauge, and emit a deduplicated Warning event. The misconfig is
+		// re-evaluated on the next self-requeue and on any RotationPolicy change.
+		log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation policy conflict; not rotating", "detail", conflict)
+		r.recorder().ForgetPool(pool.Name)
+		r.recorder().ObservePolicyConflict(pool.Name, true)
+		r.warn().EmitConflict(ctx, &pool, conflict)
+		return ctrl.Result{RequeueAfter: longRequeue}, nil
+	case pol == nil:
+		// No governing policy: not rotated (the expireAfter backstop still applies,
+		// spec §4). Drop any series left by a policy that used to govern it; a future
+		// RotationPolicy create/update re-enqueues the pool via the watch.
+		r.recorder().ForgetPool(pool.Name)
+		r.warn().Forget(pool.Name)
 		return ctrl.Result{}, nil
 	}
-	return r.reconcileNodePool(ctx, &pool)
+
+	// Governed: clear any prior conflict signal and run one rotation step.
+	r.recorder().ObservePolicyConflict(pool.Name, false)
+	r.warn().ClearConflict(pool.Name)
+	return r.reconcileNodePool(ctx, &pool, pol, sched)
 }
 
-// inScope reports whether the NodePool matches the configured selectors (§3.2).
-func (r *RotationReconciler) inScope(pool *karpv1.NodePool) bool {
-	return len(selection.InScopeNodePools([]karpv1.NodePool{*pool}, r.Policy.NodePoolSelectors)) == 1
+// governingPolicy resolves the RotationPolicy that governs pool (spec §5.4).
+// The return shape is a tri-state plus a transient error:
+//   - err != nil          → listing failed; the caller requeues with backoff.
+//   - conflict != ""       → an equal-specificity tie or a runtime-invalid policy;
+//     the caller refuses to rotate and surfaces it (the string is the event detail).
+//   - pol == nil (no err)  → no policy matches; the pool is not rotated.
+//   - pol != nil           → the governing policy and its maintenance schedule.
+func (r *RotationReconciler) governingPolicy(ctx context.Context, pool *karpv1.NodePool) (*policy.Policy, *window.Schedule, string, error) {
+	var list noderotationv1alpha1.RotationPolicyList
+	if err := r.List(ctx, &list); err != nil {
+		return nil, nil, "", err
+	}
+
+	winner, outcome, tied := resolve.Governing(pool, list.Items)
+	switch outcome {
+	case resolve.NoMatch:
+		return nil, nil, "", nil
+	case resolve.Conflict:
+		return nil, nil, fmt.Sprintf("NodePool is matched by multiple equally-specific RotationPolicies %v; refusing to rotate until the overlap is resolved", tied), nil
+	}
+
+	pol, err := resolve.ToPolicy(winner.Spec)
+	if err != nil {
+		return nil, nil, fmt.Sprintf("RotationPolicy %q is invalid: %v", winner.Name, err), nil
+	}
+	sched, err := window.New(pol.MaintenanceWindows)
+	if err != nil {
+		return nil, nil, fmt.Sprintf("RotationPolicy %q has an unbuildable schedule: %v", winner.Name, err), nil
+	}
+	return pol, sched, "", nil
 }
 
 // SetupWithManager registers the reconciler. It is keyed on the NodePool: the
@@ -159,7 +214,29 @@ func (r *RotationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(placeholderRunning())).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(nodePoolFromLabel),
 			builder.WithPredicates(nodeBecameReady())).
+		// A RotationPolicy create/update/delete re-evaluates EVERY NodePool: adding,
+		// editing, or removing one policy can change which policy wins — or whether a
+		// tie exists — for any pool the change's selector touches, and removing a
+		// policy can hand a pool to a different one (spec §5.4). Enqueuing all pools
+		// is the simple, always-correct mapping; the pool count bounds the fan-out.
+		Watches(&noderotationv1alpha1.RotationPolicy{}, handler.EnqueueRequestsFromMapFunc(r.allNodePools)).
 		Complete(r)
+}
+
+// allNodePools enqueues a reconcile for every NodePool — the conservative mapping
+// for a RotationPolicy change, whose effect on policy resolution is not local to a
+// single pool (spec §5.4).
+func (r *RotationReconciler) allNodePools(ctx context.Context, _ client.Object) []reconcile.Request {
+	var pools karpv1.NodePoolList
+	if err := r.List(ctx, &pools); err != nil {
+		log.FromContext(ctx).Error(err, "listing NodePools to re-evaluate a RotationPolicy change")
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(pools.Items))
+	for i := range pools.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: pools.Items[i].Name}})
+	}
+	return reqs
 }
 
 // nodePoolFromLabel maps an object carrying the karpenter.sh/nodepool label
@@ -227,8 +304,13 @@ func nodeReadyObj(obj client.Object) bool {
 	return ok && nodeReady(n)
 }
 
-// resolved holds the per-NodePool durations derived from policy + schedule.
+// resolved holds the per-NodePool policy and schedule that govern the pool
+// (resolved from its RotationPolicy, spec §5.4) plus the durations derived from
+// them. pol and sched are carried so the methods threaded with a resolved no
+// longer read a single cluster-wide Policy/Schedule off the reconciler.
 type resolved struct {
+	pol          *policy.Policy
+	sched        *window.Schedule
 	leadTime     selection.LeadTime // K·P + t_rot, resolved per claim (§3.2)
 	override     *time.Duration     // explicit ageThreshold, nil in auto mode
 	retryBackoff time.Duration
@@ -237,12 +319,12 @@ type resolved struct {
 	drainBound   time.Duration // tGP + buffer; DrainFallback when tGP unset (§5.2)
 }
 
-func (r *RotationReconciler) resolve(pool *karpv1.NodePool) resolved {
-	s := r.Policy.Surge
+func (r *RotationReconciler) resolve(pool *karpv1.NodePool, pol *policy.Policy, sched *window.Schedule) resolved {
+	s := pol.Surge
 	tgp, unset := poolTGP(pool)
-	p, _ := r.Schedule.WorstCasePeriod()
+	p, _ := sched.WorstCasePeriod()
 
-	override, isAuto, _ := r.Policy.AgeThresholdOverride()
+	override, isAuto, _ := pol.AgeThresholdOverride()
 	var ov *time.Duration
 	if !isAuto {
 		d := override
@@ -255,12 +337,14 @@ func (r *RotationReconciler) resolve(pool *karpv1.NodePool) resolved {
 	}
 
 	return resolved{
+		pol:   pol,
+		sched: sched,
 		// Base omits tGP; LeadTime.For adds each claim's own terminationGracePeriod
 		// so a template tGP shortened after a claim was stamped cannot under-estimate
 		// the per-node lead time (§3.2, per-node trigger). The pool tGP above feeds
 		// only the representative drainBound (§5.2) and schedule.Derive validation.
 		leadTime: selection.LeadTime{
-			Base:          time.Duration(r.Policy.K())*p + s.ReadyTimeout.Duration + schedule.Buffer,
+			Base:          time.Duration(pol.K())*p + s.ReadyTimeout.Duration + schedule.Buffer,
 			DrainFallback: schedule.DrainFallback,
 		},
 		override:     ov,
@@ -290,11 +374,13 @@ func (r *RotationReconciler) selInputs(res resolved, now time.Time) selection.In
 }
 
 // reconcileNodePool is the §5.2 driver: drive any in-flight rotation first
-// (serial), else evaluate the start gates and begin a new one.
-func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1.NodePool) (ctrl.Result, error) {
+// (serial), else evaluate the start gates and begin a new one. pol and sched are
+// the NodePool's governing RotationPolicy and its maintenance schedule, resolved
+// in Reconcile (spec §5.4).
+func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1.NodePool, pol *policy.Policy, sched *window.Schedule) (ctrl.Result, error) {
 	log := log.FromContext(ctx).WithValues("nodepool", pool.Name)
 	now := r.now()
-	res := r.resolve(pool)
+	res := r.resolve(pool, pol, sched)
 
 	// List the pool's claims once and feed both the §4.2 gauges and candidate
 	// selection: the state is identical for both and unchanged in between (step 2
@@ -309,8 +395,8 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// WorstCasePeriod/ShortestWindow's ok is always true here: policy.Validate
 	// rejects an empty maintenanceWindows (and empty days), so the Schedule always
 	// has ≥1 occurrence. N is the pool's in-scope claim count (issue #36).
-	p, _ := r.Schedule.WorstCasePeriod()
-	d, _ := r.Schedule.ShortestWindow()
+	p, _ := sched.WorstCasePeriod()
+	d, _ := sched.ShortestWindow()
 	derived := r.derivedThresholds(pool, res, p, d, len(claims))
 
 	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
@@ -326,7 +412,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		"phase", reconcilePhase(pool),
 		"candidates", selection.CountEligible(claims, r.selInputs(res, now)),
 		"claims", len(claims),
-		"inWindow", r.Schedule.InWindow(now),
+		"inWindow", sched.InWindow(now),
 		"findings", len(derived.Findings))
 
 	// Surface non-fatal feasibility findings and per-node short-lead conditions
@@ -338,7 +424,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// ── 1. Drive the in-flight rotation, keyed on the anchor (it outlives the
 	//        old NodeClaim's deletion on success).
 	if name := pool.Annotations[annotations.ActiveRotation]; name != "" {
-		return r.advance(ctx, pool, name)
+		return r.advance(ctx, pool, name, res)
 	}
 
 	// ── 1b. Fatal feasibility gate (spec §3.2 layer 1): a schedule that cannot
@@ -380,18 +466,18 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		}
 		return ctrl.Result{}, err
 	}
-	return r.advance(ctx, pool, cand.Name)
+	return r.advance(ctx, pool, cand.Name, res)
 }
 
 // observe computes and emits the §4.2 reconcile-time gauges from the live claims
 // (listed once by the caller) on every pass. Recomputing each pass is what lets
 // the 0/1 and "highest"/"count" gauges reset: a cleared drain stops alerting, a
 // pool with no failures reports zero retries. The window-active gauge is
-// cluster-wide (label-free) but set here because the reconcile is the only
-// periodic tick (§5.2).
+// per-NodePool — each pool's governing-policy schedule resolves independently
+// (spec §5.4) — and set here because the reconcile is the only periodic tick (§5.2).
 func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now time.Time, claims []karpv1.NodeClaim, p time.Duration, derived schedule.Result) {
 	rec := r.recorder()
-	rec.ObserveWindow(r.Schedule.InWindow(now))
+	rec.ObserveWindow(pool.Name, res.sched.InWindow(now))
 
 	o := PoolObservation{
 		Candidates:      selection.CountEligible(claims, r.selInputs(res, now)),
@@ -467,8 +553,8 @@ func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolv
 		ReadyTimeout:   res.readyTimeout,
 		Cooldown:       res.cooldown,
 		RetryBackoff:   res.retryBackoff,
-		K:              r.Policy.K(),
-		MaxUnavailable: r.Policy.SurgeMaxUnavailable(),
+		K:              res.pol.K(),
+		MaxUnavailable: res.pol.SurgeMaxUnavailable(),
 		NodeCount:      nodeCount,
 		Override:       res.override,
 	})
@@ -503,7 +589,7 @@ func firstFatal(findings []schedule.Finding) (schedule.Finding, bool) {
 // startGates is the §5.2 step-2 gate set, shared verbatim with the failed →
 // pending re-entry so the two never diverge.
 func (r *RotationReconciler) startGates(pool *karpv1.NodePool, res resolved, now time.Time) bool {
-	if !r.Schedule.InWindow(now) {
+	if !res.sched.InWindow(now) {
 		return false
 	}
 	if frozen(pool, now) {
@@ -518,9 +604,10 @@ func (r *RotationReconciler) startGates(pool *karpv1.NodePool, res resolved, now
 	return true
 }
 
-// advance runs one step for the in-flight rotation, keyed by the anchor name.
-func (r *RotationReconciler) advance(ctx context.Context, pool *karpv1.NodePool, name string) (ctrl.Result, error) {
-	res := r.resolve(pool)
+// advance runs one step for the in-flight rotation, keyed by the anchor name. res
+// carries the NodePool's governing policy and schedule (spec §5.4), resolved once
+// by the caller.
+func (r *RotationReconciler) advance(ctx context.Context, pool *karpv1.NodePool, name string, res resolved) (ctrl.Result, error) {
 	cand, err := r.getClaim(ctx, name)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -790,7 +877,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 		}); err != nil {
 			return ctrl.Result{}, err
 		}
-		return r.advance(ctx, pool, cand.Name) // falls into the pending handler, re-stamps started-at
+		return r.advance(ctx, pool, cand.Name, res) // falls into the pending handler, re-stamps started-at
 	}
 
 	// Otherwise: repair a torn failure write (crash between the failed write and
@@ -1071,7 +1158,7 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 		Node:              node,
 		Pool:              pool,
 		Requests:          surge.ReschedulableRequests(pods, cand.Status.NodeName),
-		Match:             r.Policy.Surge.MatchNodeRequirements,
+		Match:             res.pol.Surge.MatchNodeRequirements,
 		ExcludedHostnames: excluded,
 		PriorityClassName: r.PriorityClassName,
 		Image:             r.PlaceholderImage,

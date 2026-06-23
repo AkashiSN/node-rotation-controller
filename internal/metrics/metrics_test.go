@@ -140,12 +140,12 @@ func TestWindowActiveGauge(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	rec := metrics.New(reg)
 
-	rec.ObserveWindow(true)
-	if got := metricValue(t, reg, "noderotation_window_active", map[string]string{}); got != 1 {
+	rec.ObserveWindow("api", true)
+	if got := metricValue(t, reg, "noderotation_window_active", map[string]string{"nodepool": "api"}); got != 1 {
 		t.Errorf("window_active = %v, want 1", got)
 	}
-	rec.ObserveWindow(false)
-	if got := metricValue(t, reg, "noderotation_window_active", map[string]string{}); got != 0 {
+	rec.ObserveWindow("api", false)
+	if got := metricValue(t, reg, "noderotation_window_active", map[string]string{"nodepool": "api"}); got != 0 {
 		t.Errorf("window_active = %v, want 0", got)
 	}
 }
@@ -175,7 +175,10 @@ func TestDurationHistogramRecordsObservation(t *testing.T) {
 // production path compiles against the shared registry type.
 func TestNewRegistersOnRegisterer(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	_ = metrics.New(reg)
+	rec := metrics.New(reg)
+	// Every collector is now a *Vec, which Gather() omits until it has a series, so
+	// emit one observation to prove the registry serves the registered collectors.
+	rec.ObserveWindow("api", true)
 	if n := countSeries(t, reg); n == 0 {
 		t.Fatal("New registered no collectors")
 	}
@@ -214,8 +217,7 @@ func metricPresent(t *testing.T, reg *prometheus.Registry, name string, labels m
 // ForgetPool must drop every per-NodePool series so a deleted NodePool stops
 // exporting stale gauges/counters — the per-pool analogue of the recomputed-gauge
 // reset, since a deleted pool's reconciles stop and would otherwise latch the
-// last value forever. The cluster-wide window_active gauge and other pools are
-// untouched.
+// last value forever. Other pools' series are untouched.
 func TestForgetPoolClearsSeries(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	rec := metrics.New(reg)
@@ -223,8 +225,9 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 	rec.ObservePool("api", controller.PoolObservation{Candidates: 3, DrainStuck: true, RetryCount: 2})
 	rec.Success("api")
 	rec.ObserveDuration("api", controller.PhaseSurgeWait, time.Minute)
+	rec.ObserveWindow("api", true)
 	rec.ObservePool("web", controller.PoolObservation{Candidates: 5}) // unrelated pool stays
-	rec.ObserveWindow(true)
+	rec.ObserveWindow("web", true)
 
 	rec.ForgetPool("api")
 
@@ -233,6 +236,7 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 		"noderotation_candidates", "noderotation_in_progress", "noderotation_drain_stuck",
 		"noderotation_retry_count", "noderotation_short_lead_nodes", "noderotation_freeze_until_timestamp",
 		"noderotation_age_threshold_seconds", "noderotation_rotation_chances", "noderotation_window_period_seconds",
+		"noderotation_window_active",
 	} {
 		if metricPresent(t, reg, name, api) {
 			t.Errorf("%s{nodepool=api} still present after ForgetPool", name)
@@ -245,11 +249,11 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 		t.Error("duration_seconds{nodepool=api} still present after ForgetPool")
 	}
 
-	// The unrelated pool and the cluster-wide gauge survive.
+	// The unrelated pool's series survive — including its own window_active.
 	if got := metricValue(t, reg, "noderotation_candidates", map[string]string{"nodepool": "web"}); got != 5 {
 		t.Errorf("web candidates clobbered: got %v, want 5", got)
 	}
-	if got := metricValue(t, reg, "noderotation_window_active", map[string]string{}); got != 1 {
-		t.Errorf("window_active clobbered: got %v, want 1", got)
+	if got := metricValue(t, reg, "noderotation_window_active", map[string]string{"nodepool": "web"}); got != 1 {
+		t.Errorf("web window_active clobbered: got %v, want 1", got)
 	}
 }

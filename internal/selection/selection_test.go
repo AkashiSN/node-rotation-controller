@@ -9,7 +9,6 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
-	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 )
 
@@ -17,57 +16,6 @@ import (
 var now = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 const day = 24 * time.Hour
-
-func pool(name string, labels map[string]string) karpv1.NodePool {
-	return karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
-}
-
-func names(pools []karpv1.NodePool) []string {
-	out := make([]string, len(pools))
-	for i, p := range pools {
-		out[i] = p.Name
-	}
-	return out
-}
-
-func TestInScopeNodePoolsMatchesAllLabelsWithinSelector(t *testing.T) {
-	pools := []karpv1.NodePool{
-		pool("a", map[string]string{"workload": "api", "team": "core"}),
-		pool("b", map[string]string{"workload": "api"}), // missing team → no match
-	}
-	sel := []policy.Selector{{MatchLabels: map[string]string{"workload": "api", "team": "core"}}}
-
-	got := names(selection.InScopeNodePools(pools, sel))
-	if len(got) != 1 || got[0] != "a" {
-		t.Fatalf("want [a], got %v", got)
-	}
-}
-
-func TestInScopeNodePoolsOrsAcrossSelectors(t *testing.T) {
-	pools := []karpv1.NodePool{
-		pool("a", map[string]string{"workload": "api"}),
-		pool("b", map[string]string{"workload": "batch"}),
-		pool("c", map[string]string{"workload": "system"}),
-	}
-	sel := []policy.Selector{
-		{MatchLabels: map[string]string{"workload": "api"}},
-		{MatchLabels: map[string]string{"workload": "batch"}},
-	}
-
-	got := names(selection.InScopeNodePools(pools, sel))
-	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
-		t.Fatalf("want [a b], got %v", got)
-	}
-}
-
-func TestInScopeNodePoolsEmptyWhenNothingMatches(t *testing.T) {
-	pools := []karpv1.NodePool{pool("a", map[string]string{"workload": "api"})}
-	sel := []policy.Selector{{MatchLabels: map[string]string{"workload": "batch"}}}
-
-	if got := selection.InScopeNodePools(pools, sel); len(got) != 0 {
-		t.Fatalf("want none, got %v", names(got))
-	}
-}
 
 // claimOpt mutates a NodeClaim during construction.
 type claimOpt func(*karpv1.NodeClaim)

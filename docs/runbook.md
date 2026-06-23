@@ -118,9 +118,9 @@ model passes. Do **not** copy the `1h` from the example blindly.
 
 Exposed on `/metrics` ([§4.2](specification.md#42-observability)). Names and
 labels below are the **exact** strings emitted by the controller. Per-NodePool
-series are **cleared when the NodePool is deleted** so a removed pool does not
-latch its last value forever; the cluster-wide `noderotation_window_active` is
-unaffected.
+series are **cleared when the NodePool is deleted** — and likewise when a pool
+loses its governing `RotationPolicy` (no policy matches it any longer) — so a pool
+that stops reconciling does not latch its last value forever.
 
 | Metric | Type | Labels | Read it as |
 |--------|------|--------|------------|
@@ -128,7 +128,8 @@ unaffected.
 | `noderotation_in_progress` | Gauge | `nodepool` | Active rotations (0 or 1 in v1 — serial per pool). |
 | `noderotation_completed_total` | Counter | `nodepool`, `outcome` | Cumulative completions. `outcome ∈ {success, failure, expired}`. `expired` = the old node was **force-expired before** a graceful rotation finished (the lead-time race was lost — [§3.5](specification.md#35-backstop-behavior)); it is never counted as `success`. |
 | `noderotation_duration_seconds` | Histogram | `nodepool`, `phase` | Per-phase latency. `phase ∈ {surge_wait, drain}`. Rising `surge_wait` ≈ slow/failing provisioning; rising `drain` ≈ slow eviction. |
-| `noderotation_window_active` | Gauge | — | `0/1` cluster-wide window membership. **Label-free by design** (the window is a single union in v1). |
+| `noderotation_window_active` | Gauge | `nodepool` | `0/1` window membership for the pool's **governing-policy** maintenance window. Per-NodePool, since each pool resolves its own `RotationPolicy` window ([§5.4](specification.md#54-configuration-schema)). |
+| `noderotation_policy_conflict` | Gauge | `nodepool` | `0/1`. `1` = the pool is **blocked from rotating** by a `RotationPolicy` conflict — an equal-specificity selector tie or a runtime-invalid governing policy ([§5.4](specification.md#54-configuration-schema)). Resolve the overlap (or fix the policy); the pool also emits a `PolicyConflict` Warning event. |
 | `noderotation_freeze_until_timestamp` | Gauge | `nodepool` | Unix timestamp of the active freeze (`0` = no freeze). Non-zero → rotation is **deliberately suppressed** (see [§4](#4-the-freeze-workflow)). |
 | `noderotation_age_threshold_seconds` | Gauge | `nodepool` | The derived `ageThreshold` `A` ([§3.2](specification.md#32-candidate-selection)). Varies per pool. |
 | `noderotation_rotation_chances` | Gauge | `nodepool` | Guaranteed rotation chances `G` for the derived threshold. With auto-derivation `G = K`; an override may lower it (and is validated). |

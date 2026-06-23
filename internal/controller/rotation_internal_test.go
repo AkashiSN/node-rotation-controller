@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
+	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 	"github.com/AkashiSN/node-rotation-controller/internal/scheme"
@@ -38,7 +39,6 @@ const (
 
 func testPolicy() *policy.Policy {
 	p := &policy.Policy{
-		NodePoolSelectors: []policy.Selector{{MatchLabels: map[string]string{"workload": "api"}}},
 		MaintenanceWindows: []policy.MaintenanceWindow{{
 			Timezone: "UTC",
 			Days:     []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"},
@@ -61,38 +61,44 @@ type fakeRecorder struct {
 	window                    []bool
 	durations                 []recDuration
 	forgotten                 []string
+	conflicts                 map[string]bool // last ObservePolicyConflict value per pool
 }
 
 func (f *fakeRecorder) Success(string)         { f.success++ }
 func (f *fakeRecorder) Expired(string, string) { f.expired++ }
 func (f *fakeRecorder) Failure(string, string) { f.failure++ }
+func (f *fakeRecorder) ObservePolicyConflict(np string, blocked bool) {
+	if f.conflicts == nil {
+		f.conflicts = map[string]bool{}
+	}
+	f.conflicts[np] = blocked
+}
 func (f *fakeRecorder) ObservePool(np string, o PoolObservation) {
 	if f.obs == nil {
 		f.obs = map[string]PoolObservation{}
 	}
 	f.obs[np] = o
 }
-func (f *fakeRecorder) ObserveWindow(active bool) { f.window = append(f.window, active) }
+func (f *fakeRecorder) ObserveWindow(_ string, active bool) { f.window = append(f.window, active) }
 func (f *fakeRecorder) ObserveDuration(np, phase string, d time.Duration) {
 	f.durations = append(f.durations, recDuration{np, phase, d})
 }
 func (f *fakeRecorder) ForgetPool(np string) { f.forgotten = append(f.forgotten, np) }
 
+// newReconciler builds a reconciler over a fake client seeded with objs. The
+// governing policy/schedule are NOT stored on the reconciler (they are resolved
+// per-NodePool from RotationPolicy objects at reconcile time, spec §5.4); tests
+// that drive reconcileNodePool/resolve thread them explicitly via testPolicy()
+// and mustSchedule(). Resolution-path tests (Reconcile) seed RotationPolicy
+// objects into objs themselves.
 func newReconciler(t *testing.T, clock time.Time, rec *fakeRecorder, objs ...client.Object) *RotationReconciler {
 	t.Helper()
-	p := testPolicy()
-	sched, err := window.New(p.MaintenanceWindows)
-	if err != nil {
-		t.Fatalf("build schedule: %v", err)
-	}
 	cl := fake.NewClientBuilder().WithScheme(scheme.New()).WithObjects(objs...).Build()
 	if rec == nil {
 		rec = &fakeRecorder{}
 	}
 	return &RotationReconciler{
 		Client:            cl,
-		Policy:            p,
-		Schedule:          sched,
 		Namespace:         testNS,
 		PlaceholderImage:  "registry.k8s.io/pause:3.10",
 		PriorityClassName: "noderotation-placeholder",
@@ -101,8 +107,7 @@ func newReconciler(t *testing.T, clock time.Time, rec *fakeRecorder, objs ...cli
 	}
 }
 
-// mustSchedule builds the default test schedule, for reconcilers assembled
-// outside newReconciler (e.g. with a custom interceptor client).
+// mustSchedule builds the default test schedule from testPolicy's window.
 func mustSchedule(t *testing.T) *window.Schedule {
 	t.Helper()
 	s, err := window.New(testPolicy().MaintenanceWindows)
@@ -110,6 +115,24 @@ func mustSchedule(t *testing.T) *window.Schedule {
 		t.Fatalf("build schedule: %v", err)
 	}
 	return s
+}
+
+// testRotationPolicy builds a RotationPolicy CRD object governing testPoolName
+// (selector workload=api) with the same all-week window as testPolicy. Used by
+// the resolution-path tests that drive the public Reconcile entry point.
+func testRotationPolicy(name string, sel map[string]string) *noderotationv1alpha1.RotationPolicy {
+	return &noderotationv1alpha1.RotationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: noderotationv1alpha1.RotationPolicySpec{
+			NodePoolSelector: &metav1.LabelSelector{MatchLabels: sel},
+			MaintenanceWindows: []noderotationv1alpha1.MaintenanceWindow{{
+				Timezone: "UTC",
+				Days:     []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"},
+				Start:    "00:00",
+				End:      "23:59",
+			}},
+		},
+	}
 }
 
 // --- object builders -------------------------------------------------------
@@ -248,7 +271,7 @@ func placeholderExists(t *testing.T, r *RotationReconciler) bool {
 
 func step(t *testing.T, r *RotationReconciler, pool *karpv1.NodePool) {
 	t.Helper()
-	if _, err := r.reconcileNodePool(context.Background(), pool); err != nil {
+	if _, err := r.reconcileNodePool(context.Background(), pool, testPolicy(), mustSchedule(t)); err != nil {
 		t.Fatalf("reconcileNodePool: %v", err)
 	}
 }
@@ -596,8 +619,6 @@ func TestStaleReReadDoesNotMisfireReadyTimeout(t *testing.T) {
 		}).Build()
 	r := &RotationReconciler{
 		Client:            cl,
-		Policy:            testPolicy(),
-		Schedule:          mustSchedule(t),
 		Namespace:         testNS,
 		PlaceholderImage:  "registry.k8s.io/pause:3.10",
 		PriorityClassName: "noderotation-placeholder",

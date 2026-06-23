@@ -27,6 +27,12 @@ podDisruptionBudget:
 logging:
   development: true
 
+# NOTE (issue #119): the controller no longer reads this config.policy ConfigMap —
+# it resolves each NodePool's governing RotationPolicy at reconcile time. The live
+# policy for the e2e is manifests/rotationpolicy.yaml (applied by bootstrap.sh);
+# the block below is retained only because the chart still renders the (ignored)
+# ConfigMap until the chart migration (#125), and MUST be kept in sync with the
+# RotationPolicy manifest.
 config:
   policy:
     # Match only nodepool-a by its in-scope marker. nodepool-b deliberately stays

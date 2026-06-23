@@ -1,9 +1,15 @@
-// Package policy models the v1 ConfigMap configuration schema (spec §5.4):
-// parsing, defaulting, and structural validation of data.policy.yaml. It owns
-// only the wire format and structural correctness (shape, enum strings, time
-// and timezone formats, the v1 surge constraints). Scheduling feasibility — the
+// Package policy models the per-NodePool rotation policy (spec §5.4): the
+// in-memory value object that a RotationPolicy CRD spec is converted into (see
+// internal/resolve), with defaulting and structural validation. It owns only
+// structural correctness (shape, enum strings, time and timezone formats, the v1
+// surge constraints) — admission-time enforcement of the same rules lives on the
+// CRD's OpenAPI/CEL schema (api/v1alpha1). Scheduling feasibility — the
 // ageThreshold derivation and its layered warnings — lives in internal/schedule,
 // and the temporal evaluation of maintenance windows lives in internal/window.
+//
+// NodePool targeting (which policy governs which NodePool) is NOT modeled here:
+// the selector lives on the CRD object (spec.nodePoolSelector) and matching /
+// conflict resolution is internal/resolve's job (spec §5.4).
 package policy
 
 import (
@@ -14,23 +20,17 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/yaml"
 )
 
-// Policy is the parsed data.policy.yaml document (spec §5.4). Field tags are
-// json: because sigs.k8s.io/yaml routes YAML through encoding/json.
+// Policy is the resolved per-NodePool rotation policy (spec §5.4) — the validated
+// value object carrying the rotation gates and timeouts. Field tags are json: to
+// match the CRD spec field names one-to-one (the carrier the values come from).
 type Policy struct {
-	NodePoolSelectors  []Selector          `json:"nodepoolSelectors"`
 	AgeThreshold       string              `json:"ageThreshold"`       // "auto" or a Go duration (e.g. "120h")
 	MinRotationChances *int                `json:"minRotationChances"` // K; floor 1. Pointer distinguishes unset (default 2) from an explicit 0 (invalid).
 	MaintenanceWindows []MaintenanceWindow `json:"maintenanceWindows"`
 	Surge              Surge               `json:"surge"`
 	PrePull            FeatureToggle       `json:"prePull"` // v2; must be disabled in v1
-}
-
-// Selector matches in-scope NodePools by label (spec §3.2, §5.4).
-type Selector struct {
-	MatchLabels map[string]string `json:"matchLabels"`
 }
 
 // MaintenanceWindow is one recurrence entry; the effective window is the union
@@ -89,25 +89,11 @@ var isoWeekdays = map[string]time.Weekday{
 	"sun": time.Sunday,
 }
 
-// Load parses data.policy.yaml, applies the §5.4 defaults, and runs structural
-// validation. Unknown keys are rejected (UnmarshalStrict) so a typo'd field is
-// loud rather than silently dropped. A non-nil error means the document is
-// structurally invalid; scheduling feasibility is checked separately.
-func Load(data []byte) (*Policy, error) {
-	var p Policy
-	if err := yaml.UnmarshalStrict(data, &p); err != nil {
-		return nil, fmt.Errorf("parse policy: %w", err)
-	}
-	p.ApplyDefaults()
-	if err := p.Validate(); err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
-// ApplyDefaults fills zero-valued fields with the §5.4 defaults. It is exported
-// so callers can default a hand-built Policy without round-tripping YAML. Only
-// zero values are touched, so an explicit setting is never overwritten.
+// ApplyDefaults fills zero-valued fields with the §5.4 defaults. The CRD's
+// OpenAPI schema already defaults these at admission time, so a Policy converted
+// from an apiserver read is normally complete; this re-default is defense in
+// depth for a hand-built or fake-client-sourced Policy. Only zero values are
+// touched, so an explicit setting is never overwritten.
 func (p *Policy) ApplyDefaults() {
 	if p.AgeThreshold == "" {
 		p.AgeThreshold = ageThresholdAuto
@@ -145,18 +131,10 @@ func (p *Policy) ApplyDefaults() {
 
 // Validate runs structural checks only (shape, enums, formats, the v1 surge
 // constraints). Scheduling feasibility (A<=0, G<K, throughput) is the job of
-// internal/schedule. Call ApplyDefaults first (Load does).
+// internal/schedule. Call ApplyDefaults first (resolve.ToPolicy does). NodePool
+// targeting is not checked here — the selector lives on the CRD, not on Policy.
 func (p *Policy) Validate() error {
 	var errs []error
-
-	if len(p.NodePoolSelectors) == 0 {
-		errs = append(errs, errors.New("nodepoolSelectors must not be empty"))
-	}
-	for i, s := range p.NodePoolSelectors {
-		if len(s.MatchLabels) == 0 {
-			errs = append(errs, fmt.Errorf("nodepoolSelectors[%d].matchLabels must not be empty", i))
-		}
-	}
 
 	// K floor is structural: K < 1 is an invalid config (spec §3.2 layer 1
 	// fatal). The K == 1 warning is a scheduling concern (internal/schedule).

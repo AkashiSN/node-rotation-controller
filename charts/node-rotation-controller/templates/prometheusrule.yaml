@@ -46,22 +46,26 @@ spec:
               NodePool {{`{{ $labels.nodepool }}`}} has had eligible candidates
               for two consecutive windows without clearing them — rotation
               throughput may be too low (spec §4.2, R2). See docs/runbook.md.
-        # The window is active with non-zero candidates but nothing is
-        # completing: rotation is wedged inside the window (spec §4.2).
+        # A pool's window is active with non-zero candidates but nothing is
+        # completing for that pool: rotation is wedged inside the window (spec §4.2).
+        # Correlated per NodePool, because maintenanceWindows is now per-policy and
+        # noderotation_window_active carries a nodepool label (spec §5.4): each pool
+        # is judged against its OWN candidates and completions, not a cluster-wide sum.
         - alert: NodeRotationStalledInWindow
           expr: |-
             noderotation_window_active == 1
-            and on() (sum(noderotation_candidates) > 0)
-            and on() ((sum(increase(noderotation_completed_total[{{ .Values.prometheusRule.stalledInWindow.completionRange }}])) or vector(0)) == 0)
+            and on(nodepool) (noderotation_candidates > 0)
+            unless on(nodepool) (sum by(nodepool) (increase(noderotation_completed_total[{{ .Values.prometheusRule.stalledInWindow.completionRange }}])) > 0)
           for: {{ .Values.prometheusRule.stalledInWindow.for }}
           labels:
             severity: {{ .Values.prometheusRule.stalledInWindow.severity }}
           annotations:
             summary: node-rotation-controller window active with no completions
             description: >-
-              The maintenance window is active with non-zero candidates but zero
-              completions for {{ .Values.prometheusRule.stalledInWindow.for }} —
-              rotation appears wedged (spec §4.2). See docs/runbook.md.
+              NodePool {{`{{ $labels.nodepool }}`}} has its maintenance window active
+              with non-zero candidates but zero completions for
+              {{ .Values.prometheusRule.stalledInWindow.for }} — rotation appears
+              wedged (spec §4.2). See docs/runbook.md.
         # The in-flight drain has exceeded tGP + buffer: a blocking PDB or a
         # stuck finalizer is holding it (spec §5.2). The serial gate is held on
         # purpose, so no other node in the pool rotates until this clears.

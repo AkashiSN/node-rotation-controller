@@ -1,0 +1,47 @@
+# The live rotation policy for the KWOK e2e (issue #119): the controller resolves
+# each NodePool's governing RotationPolicy at reconcile time and no longer reads
+# the policy.yaml ConfigMap. The field values here MUST mirror the (now-ignored)
+# config.policy block in controller-values.yaml — in particular ageThreshold 4m
+# and the surge timings the Go driver (e2e_test.go) depends on. bootstrap.sh
+# applies this after the Helm install (the chart's crds/ installs the CRD first).
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: nodepool-a
+spec:
+  # Match only nodepool-a by its in-scope marker; nodepool-b stays unmatched
+  # (not rotated) so it can hold spare capacity for confinement assertions.
+  nodePoolSelector:
+    matchLabels:
+      noderotation-e2e/in-scope: "true"
+  # Drive rotation by age, not by the per-claim expireAfter backstop. 4m keeps the
+  # capacity-absorb spare below the near-deadline hostname-exclusion threshold for
+  # the whole rotation (see e2e_test.go testCapacityAbsorb). Keep in sync with the
+  # ageThreshold constant in the Go driver.
+  ageThreshold: 4m
+  minRotationChances: 2
+  # Effective window is the UNION of entries (spec §3.1); cover all seven days
+  # 00:00–23:59 so it is effectively always open and the suite never waits on a
+  # window edge.
+  maintenanceWindows:
+    - timezone: UTC
+      days: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+      start: "00:00"
+      end: "23:59"
+  surge:
+    maxUnavailable: 1
+    # Generous enough for KWOK to bind/drain; tiny cooldown so back-to-back
+    # subtests are not gated by a prior success's cooldown; short retryBackoff so a
+    # cache-lag mis-fire re-enters pending and converges within the subtest window
+    # (see controller-values.yaml and test/e2e/kwok/README.md for the rationale).
+    readyTimeout: 2m
+    cooldownAfter: 1s
+    retryBackoff: 5s
+    matchNodeRequirements:
+      required:
+        - topology.kubernetes.io/zone
+        - kubernetes.io/arch
+        - karpenter.sh/capacity-type
+      preferred: []
+  prePull:
+    enabled: false

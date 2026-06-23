@@ -1,0 +1,27 @@
+suite: PrometheusRule alert expressions (spec §4.2 / §5.4)
+# Guards the per-NodePool correlation of NodeRotationStalledInWindow. With
+# per-policy maintenanceWindows (§5.4) noderotation_window_active carries a
+# nodepool label, so the rule must join window_active, candidates, and completions
+# by nodepool — not the pre-#123 cluster-wide `on()` join against global sums,
+# which would alert every active-window pool whenever any pool stalls.
+templates:
+  - templates/prometheusrule.yaml
+tests:
+  - it: StalledInWindow correlates window/candidates/completions per nodepool
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      # guard the rule index this test pins its expr assertions to
+      - equal:
+          path: spec.groups[0].rules[2].alert
+          value: NodeRotationStalledInWindow
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'and on\(nodepool\) \(noderotation_candidates > 0\)'
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'unless on\(nodepool\) \(sum by\(nodepool\) \(increase\(noderotation_completed_total'
+      # the old cluster-wide form must be gone
+      - notMatchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'on\(\) \(sum\(noderotation_candidates\)'

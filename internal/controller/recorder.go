@@ -15,7 +15,8 @@ import "time"
 //   - ObservePool sets the per-NodePool gauges that reflect current state; they
 //     are recomputed and re-set on every reconcile so they reset correctly (a
 //     resolved drain stops alerting, a successful pool reports zero retries).
-//   - ObserveWindow sets the cluster-wide, label-free window-active gauge.
+//   - ObserveWindow sets the per-NodePool window-active gauge (each pool resolves
+//     its own governing-policy schedule, spec §5.4).
 //   - ObserveDuration records a completed phase duration into the histogram.
 type Recorder interface {
 	// Success records a controller-driven rotation that completed (cooldown consumed).
@@ -26,8 +27,14 @@ type Recorder interface {
 	Failure(nodePool, nodeClaim string)
 	// ObservePool sets the §4.2 reconcile-time gauges for one NodePool.
 	ObservePool(nodePool string, o PoolObservation)
-	// ObserveWindow sets the label-free, cluster-wide window-active gauge (§4.2).
-	ObserveWindow(active bool)
+	// ObserveWindow sets the per-NodePool window-active gauge (§4.2): whether the
+	// pool's governing-policy maintenance window is currently open (spec §5.4).
+	ObserveWindow(nodePool string, active bool)
+	// ObservePolicyConflict sets the noderotation_policy_conflict gauge for one
+	// NodePool: 1 while the pool is blocked from rotating by an equal-specificity
+	// RotationPolicy tie or a runtime-invalid policy (spec §5.4), 0 once a single
+	// governing policy resolves cleanly. ForgetPool drops the series.
+	ObservePolicyConflict(nodePool string, blocked bool)
 	// ObserveDuration records one completed phase duration (§4.2 duration_seconds).
 	ObserveDuration(nodePool, phase string, d time.Duration)
 	// ForgetPool drops every per-NodePool series when the NodePool is deleted, so
@@ -81,6 +88,7 @@ func (noopRecorder) Success(string)                                {}
 func (noopRecorder) Expired(string, string)                        {}
 func (noopRecorder) Failure(string, string)                        {}
 func (noopRecorder) ObservePool(string, PoolObservation)           {}
-func (noopRecorder) ObserveWindow(bool)                            {}
+func (noopRecorder) ObserveWindow(string, bool)                    {}
+func (noopRecorder) ObservePolicyConflict(string, bool)            {}
 func (noopRecorder) ObserveDuration(string, string, time.Duration) {}
 func (noopRecorder) ForgetPool(string)                             {}
