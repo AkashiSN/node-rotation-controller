@@ -43,3 +43,9 @@ rules:
     # (mgr.GetEventRecorder). client-go writes a cluster-scoped object's Event into
     # the "default" namespace, so a namespaced Role would not authorize it.
     verbs: ["create", "patch"]
+  - apiGroups: ["noderotation.io"]
+    resources: ["rotationpolicies"]
+    # The controller resolves each NodePool's governing RotationPolicy at reconcile
+    # time and watches them for changes (spec §5.4, issue #119). Read-only here;
+    # status writes (rotationpolicies/status) are granted when #124 populates them.
+    verbs: ["get", "list", "watch"]

@@ -33,9 +33,10 @@ func hasFinding(findings []schedule.Finding, code string) bool {
 func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	r := newReconciler(t, testNow, nil, pool)
-	res := r.resolve(pool)
-	p, _ := r.Schedule.WorstCasePeriod()
-	d, _ := r.Schedule.ShortestWindow()
+	sched := mustSchedule(t)
+	res := r.resolve(pool, testPolicy(), sched)
+	p, _ := sched.WorstCasePeriod()
+	d, _ := sched.ShortestWindow()
 
 	got := r.derivedThresholds(pool, res, p, d, 3)
 	if got.A != 287*time.Hour {

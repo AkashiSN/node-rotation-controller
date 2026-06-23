@@ -3,56 +3,49 @@ package policy
 import (
 	"testing"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// fullYAML is the §5.4 ConfigMap example (durations in Go format; the spec's
-// prose "4d"-style values are explanatory only — time.ParseDuration rejects "d").
-const fullYAML = `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-ageThreshold: auto
-minRotationChances: 2
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: [Wed, Sat]
-    start: "02:00"
-    end:   "06:00"
-surge:
-  maxUnavailable: 1
-  readyTimeout: 15m
-  cooldownAfter: 10m
-  retryBackoff: 30m
-  matchNodeRequirements:
-    required:
-      - topology.kubernetes.io/zone
-      - kubernetes.io/arch
-      - karpenter.sh/capacity-type
-    preferred: []
-prePull:
-  enabled: false
-`
-
-// minimalYAML carries only the structurally-required fields; everything else
-// must come from ApplyDefaults.
-const minimalYAML = `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: [Wed, Sat]
-    start: "02:00"
-    end:   "06:00"
-`
-
-func TestLoadFull(t *testing.T) {
-	p, err := Load([]byte(fullYAML))
-	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
+// validPolicy is the §5.4 example reduced to the structurally-required fields plus
+// a well-formed window. ApplyDefaults fills the rest. Tests mutate a copy to
+// exercise individual validation branches.
+func validPolicy() *Policy {
+	return &Policy{
+		MaintenanceWindows: []MaintenanceWindow{{
+			Timezone: "Asia/Tokyo",
+			Days:     []string{"Wed", "Sat"},
+			Start:    "02:00",
+			End:      "06:00",
+		}},
 	}
-	if len(p.NodePoolSelectors) != 1 || p.NodePoolSelectors[0].MatchLabels["workload"] != "api" {
-		t.Errorf("nodepoolSelectors not parsed: %+v", p.NodePoolSelectors)
+}
+
+func intPtr(i int) *int                       { return &i }
+func durPtr(d time.Duration) *metav1.Duration { return &metav1.Duration{Duration: d} }
+
+func TestApplyDefaultsAndFields(t *testing.T) {
+	p := &Policy{
+		AgeThreshold:       "auto",
+		MinRotationChances: intPtr(2),
+		MaintenanceWindows: []MaintenanceWindow{{
+			Timezone: "Asia/Tokyo", Days: []string{"Wed", "Sat"}, Start: "02:00", End: "06:00",
+		}},
+		Surge: Surge{
+			MaxUnavailable: intPtr(1),
+			ReadyTimeout:   durPtr(15 * time.Minute),
+			CooldownAfter:  durPtr(10 * time.Minute),
+			RetryBackoff:   durPtr(30 * time.Minute),
+			MatchNodeRequirements: MatchNodeRequirements{Required: []string{
+				"topology.kubernetes.io/zone",
+				"kubernetes.io/arch",
+				"karpenter.sh/capacity-type",
+			}},
+		},
+	}
+	p.ApplyDefaults()
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
 	}
 	if p.AgeThreshold != "auto" {
 		t.Errorf("ageThreshold = %q, want auto", p.AgeThreshold)
@@ -60,34 +53,19 @@ func TestLoadFull(t *testing.T) {
 	if p.K() != 2 {
 		t.Errorf("minRotationChances = %d, want 2", p.K())
 	}
-	if got := len(p.MaintenanceWindows); got != 1 {
-		t.Fatalf("maintenanceWindows len = %d, want 1", got)
-	}
-	w := p.MaintenanceWindows[0]
-	if w.Timezone != "Asia/Tokyo" || w.Start != "02:00" || w.End != "06:00" {
-		t.Errorf("window not parsed: %+v", w)
-	}
 	if p.SurgeMaxUnavailable() != 1 {
 		t.Errorf("maxUnavailable = %d, want 1", p.SurgeMaxUnavailable())
-	}
-	if p.Surge.ReadyTimeout.Duration != 15*time.Minute {
-		t.Errorf("readyTimeout = %v, want 15m", p.Surge.ReadyTimeout.Duration)
-	}
-	if p.Surge.CooldownAfter.Duration != 10*time.Minute {
-		t.Errorf("cooldownAfter = %v, want 10m", p.Surge.CooldownAfter.Duration)
-	}
-	if p.Surge.RetryBackoff.Duration != 30*time.Minute {
-		t.Errorf("retryBackoff = %v, want 30m", p.Surge.RetryBackoff.Duration)
 	}
 	if got := len(p.Surge.MatchNodeRequirements.Required); got != 3 {
 		t.Errorf("required reqs len = %d, want 3", got)
 	}
 }
 
-func TestLoadMinimalAppliesDefaults(t *testing.T) {
-	p, err := Load([]byte(minimalYAML))
-	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
+func TestApplyDefaultsFillsZeroValues(t *testing.T) {
+	p := validPolicy()
+	p.ApplyDefaults()
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
 	}
 	if p.AgeThreshold != "auto" {
 		t.Errorf("ageThreshold default = %q, want auto", p.AgeThreshold)
@@ -120,13 +98,6 @@ func TestLoadMinimalAppliesDefaults(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("required[%d] = %q, want %q", i, got[i], want[i])
 		}
-	}
-}
-
-func TestLoadRejectsUnknownKey(t *testing.T) {
-	const y = minimalYAML + "\nmaxUnavailble: 2\n" // deliberate typo at top level
-	if _, err := Load([]byte(y)); err == nil {
-		t.Fatal("Load accepted unknown key, want error")
 	}
 }
 
@@ -167,210 +138,56 @@ func TestAgeThresholdOverride(t *testing.T) {
 	}
 }
 
+// TestValidateStructuralErrors mutates a structurally-valid Policy into each
+// invalid shape and asserts ApplyDefaults+Validate rejects it. ApplyDefaults runs
+// first (as resolve.ToPolicy does): it never overwrites an explicitly set value,
+// so an explicit 0m duration or maxUnavailable=0 survives to be rejected.
 func TestValidateStructuralErrors(t *testing.T) {
 	tests := []struct {
-		name string
-		yaml string
+		name   string
+		mutate func(*Policy)
 	}{
-		{
-			name: "no selectors",
-			yaml: `
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: [Wed]
-    start: "02:00"
-    end:   "06:00"
-`,
-		},
-		{
-			name: "empty matchLabels",
-			yaml: `
-nodepoolSelectors:
-  - matchLabels: {}
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: [Wed]
-    start: "02:00"
-    end:   "06:00"
-`,
-		},
-		{
-			name: "no windows",
-			yaml: `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-`,
-		},
-		{
-			name: "maxUnavailable not 1",
-			yaml: minimalYAML + `
-surge:
-  maxUnavailable: 2
-`,
-		},
-		{
-			name: "maxUnavailable explicit zero",
-			yaml: minimalYAML + `
-surge:
-  maxUnavailable: 0
-`,
-		},
-		{
-			name: "bad timezone",
-			yaml: `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-maintenanceWindows:
-  - timezone: Asia/Nowhere
-    days: [Wed]
-    start: "02:00"
-    end:   "06:00"
-`,
-		},
-		{
-			name: "bad weekday",
-			yaml: `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: [Funday]
-    start: "02:00"
-    end:   "06:00"
-`,
-		},
-		{
-			name: "bad start time",
-			yaml: `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: [Wed]
-    start: "26:61"
-    end:   "06:00"
-`,
-		},
-		{
-			name: "start equals end",
-			yaml: `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: [Wed]
-    start: "02:00"
-    end:   "02:00"
-`,
-		},
-		{
-			name: "overnight wrap forbidden",
-			yaml: `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: [Wed]
-    start: "22:00"
-    end:   "02:00"
-`,
-		},
-		{
-			name: "empty days",
-			yaml: `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: []
-    start: "02:00"
-    end:   "06:00"
-`,
-		},
-		{
-			name: "prePull enabled",
-			yaml: minimalYAML + `
-prePull:
-  enabled: true
-`,
-		},
-		{
-			name: "K below 1",
-			yaml: minimalYAML + `
-minRotationChances: 0
-`,
-		},
-		{
-			name: "negative readyTimeout",
-			yaml: minimalYAML + `
-surge:
-  readyTimeout: -1m
-`,
-		},
-		{
-			name: "negative cooldownAfter",
-			yaml: minimalYAML + `
-surge:
-  cooldownAfter: -1m
-`,
-		},
-		{
-			name: "negative retryBackoff",
-			yaml: minimalYAML + `
-surge:
-  retryBackoff: -1m
-`,
-		},
-		{
-			name: "explicit zero readyTimeout",
-			yaml: minimalYAML + `
-surge:
-  readyTimeout: 0m
-`,
-		},
-		{
-			name: "explicit zero cooldownAfter",
-			yaml: minimalYAML + `
-surge:
-  cooldownAfter: 0s
-`,
-		},
-		{
-			name: "explicit zero retryBackoff",
-			yaml: minimalYAML + `
-surge:
-  retryBackoff: 0h
-`,
-		},
+		{"maxUnavailable not 1", func(p *Policy) { p.Surge.MaxUnavailable = intPtr(2) }},
+		{"maxUnavailable explicit zero", func(p *Policy) { p.Surge.MaxUnavailable = intPtr(0) }},
+		{"no windows", func(p *Policy) { p.MaintenanceWindows = nil }},
+		{"bad timezone", func(p *Policy) { p.MaintenanceWindows[0].Timezone = "Asia/Nowhere" }},
+		{"bad weekday", func(p *Policy) { p.MaintenanceWindows[0].Days = []string{"Funday"} }},
+		{"bad start time", func(p *Policy) { p.MaintenanceWindows[0].Start = "26:61" }},
+		{"empty days", func(p *Policy) { p.MaintenanceWindows[0].Days = nil }},
+		{"start equals end", func(p *Policy) {
+			p.MaintenanceWindows[0].Start = "02:00"
+			p.MaintenanceWindows[0].End = "02:00"
+		}},
+		{"overnight wrap forbidden", func(p *Policy) {
+			p.MaintenanceWindows[0].Start = "22:00"
+			p.MaintenanceWindows[0].End = "02:00"
+		}},
+		{"prePull enabled", func(p *Policy) { p.PrePull.Enabled = true }},
+		{"K below 1", func(p *Policy) { p.MinRotationChances = intPtr(0) }},
+		{"negative readyTimeout", func(p *Policy) { p.Surge.ReadyTimeout = durPtr(-1 * time.Minute) }},
+		{"negative cooldownAfter", func(p *Policy) { p.Surge.CooldownAfter = durPtr(-1 * time.Minute) }},
+		{"negative retryBackoff", func(p *Policy) { p.Surge.RetryBackoff = durPtr(-1 * time.Minute) }},
+		{"explicit zero readyTimeout", func(p *Policy) { p.Surge.ReadyTimeout = durPtr(0) }},
+		{"explicit zero cooldownAfter", func(p *Policy) { p.Surge.CooldownAfter = durPtr(0) }},
+		{"explicit zero retryBackoff", func(p *Policy) { p.Surge.RetryBackoff = durPtr(0) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := Load([]byte(tt.yaml)); err == nil {
-				t.Fatalf("Load(%s) err = nil, want structural error", tt.name)
+			p := validPolicy()
+			tt.mutate(p)
+			p.ApplyDefaults()
+			if err := p.Validate(); err == nil {
+				t.Fatalf("Validate(%s) err = nil, want structural error", tt.name)
 			}
 		})
 	}
 }
 
 func TestWeekdayCaseInsensitive(t *testing.T) {
-	const y = `
-nodepoolSelectors:
-  - matchLabels:
-      workload: api
-maintenanceWindows:
-  - timezone: Asia/Tokyo
-    days: [wed, SAT]
-    start: "02:00"
-    end:   "06:00"
-`
-	if _, err := Load([]byte(y)); err != nil {
-		t.Fatalf("Load with mixed-case weekdays err = %v", err)
+	p := validPolicy()
+	p.MaintenanceWindows[0].Days = []string{"wed", "SAT"}
+	p.ApplyDefaults()
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate with mixed-case weekdays err = %v", err)
 	}
 }

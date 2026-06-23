@@ -5,9 +5,10 @@
 // controller-runtime metrics registry, so the manager's already-bound /metrics
 // endpoint serves them with no extra server.
 //
-// Label semantics follow the §4.2 label note: window_active is intentionally
-// label-free (cluster-wide in v1); window_period_seconds keeps a forward-looking
-// nodepool label that is identical across pools in v1.
+// Label semantics follow the §4.2 label note: with per-NodePool maintenance
+// windows (issue #119), window_active and window_period_seconds both carry a
+// load-bearing nodepool label — each NodePool resolves its own governing policy's
+// schedule, so window membership and period can differ across pools.
 package metrics
 
 import (
@@ -31,7 +32,8 @@ type Recorder struct {
 	shortLead       *prometheus.GaugeVec
 	drainStuck      *prometheus.GaugeVec
 	retryCount      *prometheus.GaugeVec
-	windowActive    prometheus.Gauge
+	policyConflict  *prometheus.GaugeVec
+	windowActive    *prometheus.GaugeVec
 }
 
 var _ controller.Recorder = (*Recorder)(nil)
@@ -88,15 +90,19 @@ func New(reg prometheus.Registerer) *Recorder {
 			Name: "noderotation_retry_count",
 			Help: "Highest retry-count across the NodePool's NodeClaims (0 when none).",
 		}, poolLabel),
-		windowActive: prometheus.NewGauge(prometheus.GaugeOpts{
+		policyConflict: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "noderotation_policy_conflict",
+			Help: "1 when the NodePool is blocked from rotating by a RotationPolicy conflict (equal-specificity tie or runtime-invalid policy), else 0.",
+		}, poolLabel),
+		windowActive: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "noderotation_window_active",
-			Help: "0/1 indicator of maintenance-window membership (cluster-wide).",
-		}),
+			Help: "0/1 indicator of the NodePool's governing-policy maintenance-window membership.",
+		}, poolLabel),
 	}
 	reg.MustRegister(
 		r.completed, r.duration, r.candidates, r.inProgress, r.freezeUntil,
 		r.ageThreshold, r.rotationChances, r.windowPeriod, r.shortLead,
-		r.drainStuck, r.retryCount, r.windowActive,
+		r.drainStuck, r.retryCount, r.policyConflict, r.windowActive,
 	)
 	return r
 }
@@ -109,7 +115,13 @@ func (r *Recorder) Failure(nodePool, _ string) {
 	r.completed.WithLabelValues(nodePool, "failure").Inc()
 }
 
-func (r *Recorder) ObserveWindow(active bool) { r.windowActive.Set(b2f(active)) }
+func (r *Recorder) ObserveWindow(nodePool string, active bool) {
+	r.windowActive.WithLabelValues(nodePool).Set(b2f(active))
+}
+
+func (r *Recorder) ObservePolicyConflict(nodePool string, blocked bool) {
+	r.policyConflict.WithLabelValues(nodePool).Set(b2f(blocked))
+}
 
 func (r *Recorder) ObserveDuration(nodePool, phase string, d time.Duration) {
 	r.duration.WithLabelValues(nodePool, phase).Observe(d.Seconds())
@@ -135,12 +147,11 @@ func (r *Recorder) ObservePool(nodePool string, o controller.PoolObservation) {
 // ForgetPool deletes every per-NodePool series for nodePool, called when the
 // NodePool is deleted (§4.2). The gauges are recomputed each reconcile, so once a
 // pool's reconciles stop they would otherwise latch their last value forever — a
-// since-deleted drain_stuck=1 would alert indefinitely. The cluster-wide
-// window_active gauge has no nodepool label and is untouched.
+// since-deleted drain_stuck=1 would alert indefinitely.
 func (r *Recorder) ForgetPool(nodePool string) {
 	for _, g := range []*prometheus.GaugeVec{
 		r.candidates, r.inProgress, r.freezeUntil, r.ageThreshold, r.rotationChances,
-		r.windowPeriod, r.shortLead, r.drainStuck, r.retryCount,
+		r.windowPeriod, r.shortLead, r.drainStuck, r.retryCount, r.policyConflict, r.windowActive,
 	} {
 		g.DeleteLabelValues(nodePool)
 	}

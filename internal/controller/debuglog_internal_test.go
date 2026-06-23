@@ -56,7 +56,7 @@ func TestDebugLoggingEmitsHeartbeatAndUndedupFindingsEachPass(t *testing.T) {
 
 	var pass1 []string
 	ctx1 := log.IntoContext(context.Background(), captureLogger(&pass1))
-	if _, err := r.reconcileNodePool(ctx1, pool); err != nil {
+	if _, err := r.reconcileNodePool(ctx1, pool, testPolicy(), mustSchedule(t)); err != nil {
 		t.Fatalf("pass 1 reconcileNodePool: %v", err)
 	}
 
@@ -72,7 +72,7 @@ func TestDebugLoggingEmitsHeartbeatAndUndedupFindingsEachPass(t *testing.T) {
 	// and the un-deduplicated debug finding MUST still fire (the whole point of #100).
 	var pass2 []string
 	ctx2 := log.IntoContext(context.Background(), captureLogger(&pass2))
-	if _, err := r.reconcileNodePool(ctx2, pool); err != nil {
+	if _, err := r.reconcileNodePool(ctx2, pool, testPolicy(), mustSchedule(t)); err != nil {
 		t.Fatalf("pass 2 reconcileNodePool: %v", err)
 	}
 
@@ -102,7 +102,7 @@ func TestDebugHeartbeatReportsInFlightPhase(t *testing.T) {
 
 	var lines []string
 	ctx := log.IntoContext(context.Background(), captureLogger(&lines))
-	if _, err := r.reconcileNodePool(ctx, pool); err != nil {
+	if _, err := r.reconcileNodePool(ctx, pool, testPolicy(), mustSchedule(t)); err != nil {
 		t.Fatalf("reconcileNodePool: %v", err)
 	}
 	if !containsLine(lines, "reconcile", "phase", annotations.StateDraining) {

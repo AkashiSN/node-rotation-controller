@@ -24,10 +24,8 @@ import (
 
 	"github.com/AkashiSN/node-rotation-controller/internal/controller"
 	appmetrics "github.com/AkashiSN/node-rotation-controller/internal/metrics"
-	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 	"github.com/AkashiSN/node-rotation-controller/internal/preflight"
 	"github.com/AkashiSN/node-rotation-controller/internal/scheme"
-	"github.com/AkashiSN/node-rotation-controller/internal/window"
 )
 
 // preflightTimeout bounds the startup Karpenter v1 API checks so a wedged API
@@ -50,7 +48,9 @@ func main() {
 		"Enable leader election. Required when running replicas=2 (spec §5.1); "+
 			"disable only for local development.")
 	flag.StringVar(&configPath, "config-path", "/etc/node-rotation/policy.yaml",
-		"Path to the policy.yaml document (mounted from the node-rotation-config ConfigMap, spec §5.4).")
+		"DEPRECATED and ignored: rotation policy is now read from RotationPolicy CRD objects "+
+			"(spec §5.4, issue #119). The flag is accepted for one release so the existing Helm "+
+			"chart keeps working; the chart drops it (and the ConfigMap) in a follow-up.")
 	flag.StringVar(&namespace, "namespace", "node-rotation-system",
 		"Namespace the surge placeholder Pods are created in.")
 	flag.StringVar(&placeholderImage, "placeholder-image", "registry.k8s.io/pause:3.10",
@@ -64,10 +64,13 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
 	setupLog := ctrl.Log.WithName("setup")
 
-	pol, sched, err := loadPolicy(configPath)
-	if err != nil {
-		setupLog.Error(err, "unable to load policy", "path", configPath)
-		os.Exit(1)
+	// The cluster-wide policy.yaml ConfigMap was replaced by per-NodePool
+	// RotationPolicy CRD objects (spec §5.4, issue #119); the controller resolves a
+	// NodePool's policy at reconcile time. --config-path is accepted but ignored for
+	// one release so the current Helm chart (which still mounts the ConfigMap and
+	// passes the flag) keeps working until the chart drops both in a follow-up.
+	if configPath != "" {
+		setupLog.Info("--config-path is deprecated and ignored; policy is read from RotationPolicy CRD objects (spec §5.4)", "path", configPath)
 	}
 
 	cfg := ctrl.GetConfigOrDie()
@@ -126,8 +129,6 @@ func main() {
 
 	reconciler := &controller.RotationReconciler{
 		Client:            mgr.GetClient(),
-		Policy:            pol,
-		Schedule:          sched,
 		Namespace:         namespace,
 		PlaceholderImage:  placeholderImage,
 		PriorityClassName: priorityClassName,
@@ -160,22 +161,4 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
-}
-
-// loadPolicy reads and validates the policy document and builds the maintenance
-// schedule from it (spec §5.4, §3.1).
-func loadPolicy(path string) (*policy.Policy, *window.Schedule, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	pol, err := policy.Load(data)
-	if err != nil {
-		return nil, nil, err
-	}
-	sched, err := window.New(pol.MaintenanceWindows)
-	if err != nil {
-		return nil, nil, err
-	}
-	return pol, sched, nil
 }

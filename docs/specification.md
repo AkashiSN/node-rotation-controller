@@ -167,7 +167,7 @@ A `NodeClaim` becomes a rotation candidate when **all** of the following hold:
 | Condition | Default | Notes |
 |-----------|---------|-------|
 | `now() > deadline − leadTime`, where `deadline = NodeClaim.metadata.creationTimestamp + NodeClaim.spec.expireAfter` and `leadTime = K·P + t_rot` | `leadTime` is **derived** (see below), not set directly | Anchored on each NodeClaim's **own** `spec.expireAfter` (its authoritative expiry), **not** the NodePool template. The derived `ageThreshold` is the age-equivalent of this trigger; defaults to `auto`, an explicit override is allowed but still validated |
-| Belongs to a `NodePool` matched by the configured selector | Required | A `NodePool` matched by `nodepoolSelectors` is in scope |
+| Belongs to a `NodePool` governed by a `RotationPolicy` | Required | A `NodePool` matched by some `RotationPolicy.spec.nodePoolSelector` is in scope; an unmatched pool is not rotated (§5.4) |
 | `status.conditions[Ready] == True` | Required | NotReady NodeClaims are skipped — an already-unhealthy node is left to EKS Node Auto Repair and the `expireAfter` backstop, not rotated here (the controller only owns the health of nodes it created during a surge) |
 | `metadata.deletionTimestamp` is unset | Required | A claim already being deleted — typically Forceful Expiration in progress (under Auto Mode's `tGP = 24h` a force-draining claim stays alive, and even `Ready`, for hours) — can no longer be rotated gracefully. Selecting it would seize the per-NodePool serial gate only to abort immediately, over and over, livelocking selection and starving every other candidate (§5.2); the §5.2 abort path handles the one rotation such a claim may already be in |
 | `metadata.annotations["noderotation.io/state"]` is empty, or `failed` past its escalated backoff | Required | `pending`/`draining` are in-flight and driven by §5.2 step 1, not re-selected here; `failed` is retried after an **escalating** backoff (doubling per consecutive failure, §5.3); `expired` is **terminal** — a claim caught force-expiring mid-rotation (§5.2) is never re-selected |
@@ -451,7 +451,8 @@ Prometheus metrics exposed on `/metrics`:
 | `noderotation_in_progress` | Gauge | `nodepool` | Active rotation count |
 | `noderotation_completed_total` | Counter | `nodepool`, `outcome` | Cumulative completions; outcome ∈ {success, failure, expired} — `expired` = the old NodeClaim was force-expired before a graceful rotation completed (caught by its `deletionTimestamp` appearing while still `pending` or `failed`, or by its disappearance with no `draining` mirror — §5.2; emitted once per rotation, never counted as success) |
 | `noderotation_duration_seconds` | Histogram | `nodepool`, `phase` | Per-phase duration; phase ∈ {surge_wait, drain}. `surge_wait` = `started-at → surge_ready`; `drain` = `draining-at → old-NodeClaim finalization`, anchored by the NodePool `draining-at` annotation stamped at the `pending → draining` transition because the old NodeClaim's `deletionTimestamp` has finalized away by the single completion point where the histogram is observed once (§5.3) |
-| `noderotation_window_active` | Gauge | — | 0/1 indicator of window membership |
+| `noderotation_window_active` | Gauge | `nodepool` | 0/1 indicator of the NodePool's governing-policy window membership |
+| `noderotation_policy_conflict` | Gauge | `nodepool` | 0/1: the NodePool is blocked from rotating by a `RotationPolicy` conflict — an equal-specificity selector tie or a runtime-invalid governing policy (§5.4). 1 while blocked, 0 once a single valid policy governs it |
 | `noderotation_freeze_until_timestamp` | Gauge | `nodepool` | Unix timestamp of active freeze (0 = no freeze) |
 | `noderotation_age_threshold_seconds` | Gauge | `nodepool` | Derived `ageThreshold` (§3.2) |
 | `noderotation_rotation_chances` | Gauge | `nodepool` | Guaranteed rotation chances `G` for the derived threshold |
@@ -460,9 +461,9 @@ Prometheus metrics exposed on `/metrics`:
 | `noderotation_drain_stuck` | Gauge | `nodepool` | 0/1: the in-flight rotation's drain has exceeded `tGP + buffer` (§5.2) |
 | `noderotation_retry_count` | Gauge | `nodepool` | Highest `noderotation.io/retry-count` (§5.3) across the NodePool's NodeClaims (0 when none) — the systematic-failure signal; annotations alone cannot feed Prometheus alerts |
 
-> **Label note.** `noderotation_window_period_seconds` carries a `nodepool` label, but in v1 the maintenance window is **cluster-wide** (`maintenanceWindows` is a single union, §3.1) — so `P` is identical across all NodePools and this metric reports the same value for every `nodepool`. The label is **forward-looking**: it is retained so the series shape stays stable when per-NodePool windows land (§7.3 Open Question 2). By contrast `noderotation_age_threshold_seconds` and `noderotation_rotation_chances` *already* vary per NodePool in v1 — they fold in each NodePool's representative `expireAfter`/`terminationGracePeriod` — so their `nodepool` label is load-bearing today; and `noderotation_window_active` is deliberately label-free because window *membership* is a single cluster-wide truth in v1.
+> **Label note.** With per-NodePool maintenance windows (each NodePool resolves its own governing `RotationPolicy`, §5.4), `noderotation_window_period_seconds` and `noderotation_window_active` both carry a **load-bearing** `nodepool` label — `P` and window *membership* can differ across pools when their policies carry different `maintenanceWindows`. `noderotation_age_threshold_seconds` and `noderotation_rotation_chances` likewise vary per NodePool (they fold in each pool's representative `expireAfter`/`terminationGracePeriod` *and* its policy's `K`). This resolves the v1 simplification noted in earlier drafts, where a single cluster-wide window made these series identical across pools.
 
-> **Lifecycle note.** The per-`nodepool` series are **cleared when the NodePool is deleted** — the controller drops them on the delete reconcile. The gauges are recomputed each reconcile, so a deleted pool whose reconciles stop would otherwise latch its last value forever (a since-removed `noderotation_drain_stuck = 1` would alert indefinitely). The label-free `noderotation_window_active` is cluster-wide and unaffected.
+> **Lifecycle note.** The per-`nodepool` series are **cleared when the NodePool is deleted** — the controller drops them on the delete reconcile. The gauges are recomputed each reconcile, so a deleted pool whose reconciles stop would otherwise latch its last value forever (a since-removed `noderotation_drain_stuck = 1` would alert indefinitely). A NodePool that loses its governing policy (no `RotationPolicy` matches it any longer) has its series dropped the same way, since it is no longer rotated (§5.4).
 
 **Kubernetes Events.** Warning-level conditions that are computed every
 reconcile are also surfaced as Kubernetes `Warning` Events, so operators see
@@ -572,13 +573,17 @@ Each rotation creates a brief overlap during which both the old and new nodes ar
 │  │    - controller-runtime manager                           ││
 │  │    - replicas=2 with leader election (1 active)           ││
 │  │    - NodePool reconciler; watches NodeClaim/Pod/Node      ││
+│  │      and RotationPolicy (re-resolve on policy change)     ││
 │  │    - 1-minute self-requeue (window edges, drain progress) ││
 │  │    - /metrics endpoint                                    ││
-│  │                                                           ││
-│  │  ConfigMap: node-rotation-config                          ││
-│  │    - maintenanceWindows / minRotationChances / selectors  ││
 │  └───────────────────────────────────────────────────────────┘│
 │                          │ watch / create / delete            │
+│                          ↓                                    │
+│  ┌─ RotationPolicy (noderotation.io/v1alpha1, cluster) ──────┐│
+│  │   each selects NodePools via nodePoolSelector and carries ││
+│  │   maintenanceWindows / minRotationChances / surge (§5.4)  ││
+│  └───────────────────────────────────────────────────────────┘│
+│                          │ resolve governing policy per pool   │
 │                          ↓                                    │
 │  ┌─ NodeClaims (karpenter.sh/v1) ────────────────────────────┐│
 │  │   nc-aaa (15d) ← old, to be rotated                       ││
@@ -587,6 +592,16 @@ Each rotation creates a brief overlap during which both the old and new nodes ar
 │  └───────────────────────────────────────────────────────────┘│
 └───────────────────────────────────────────────────────────────┘
 ```
+
+The reconciler resolves each NodePool's **governing `RotationPolicy`** on every
+pass (§5.4): it lists the cluster's policies, picks the one whose
+`nodePoolSelector` matches the pool most specifically, and reads `maintenanceWindows`,
+`minRotationChances`, and `surge` from it. A `RotationPolicy` create/update/delete
+re-enqueues every NodePool, since one policy change can alter which policy wins for
+any pool. Policy (the `RotationPolicy` spec, the desired configuration) is kept
+distinct from rotation **state** (annotations on `NodeClaim`/`NodePool` and the
+transient Node/placeholder markers, §5.3): the CRD never carries authoritative
+runtime state.
 
 **Startup preflight (Karpenter v1 API surface).** Before the manager begins
 reconciling, the controller fails fast if the public Karpenter API it depends on
@@ -804,7 +819,7 @@ The `cooldownAfter` gate in step 2 anchors on `noderotation.io/last-rotation-at`
 
 ## 5.3 State Model
 
-Progress state lives entirely on Kubernetes objects (the NodePool, the old `NodeClaim`, the two nodes, and the transient placeholder Pod) — **no external datastore** is required. Durable truth is split across two carriers: the NodePool's `active-rotation` anchor records **which** rotation is in flight (and survives the old NodeClaim's deletion on success), with `active-rotation-state` mirroring whether it reached `draining` — the record that lets the completion handler pick the right outcome after the old NodeClaim is gone — while the old NodeClaim's `state` annotation records **where** that rotation is. The placeholder Pod and the node markers are runtime objects that the idempotent handlers (§5.2) re-create or re-assert from those two if lost.
+Progress state lives entirely on Kubernetes objects (the NodePool, the old `NodeClaim`, the two nodes, and the transient placeholder Pod) — **no external datastore** is required. Rotation **state** (this section) is kept strictly separate from rotation **policy** (the `RotationPolicy` CRD, §5.4): policy is the desired configuration an operator authors, while the annotations and markers below are authoritative runtime truth the controller writes and reads back. The CRD is resolved per pass and never stores in-flight state — its eventual `status` subresource is observational only — so the "no external datastore" invariant holds regardless of the policy carrier. Durable truth is split across two carriers: the NodePool's `active-rotation` anchor records **which** rotation is in flight (and survives the old NodeClaim's deletion on success), with `active-rotation-state` mirroring whether it reached `draining` — the record that lets the completion handler pick the right outcome after the old NodeClaim is gone — while the old NodeClaim's `state` annotation records **where** that rotation is. The placeholder Pod and the node markers are runtime objects that the idempotent handlers (§5.2) re-create or re-assert from those two if lost.
 
 | Key | Target | Value | Purpose |
 |-----|--------|-------|---------|
@@ -852,11 +867,11 @@ The sweep runs **exactly once, gated before the first reconcile does any work** 
 
 ## 5.4 Configuration Schema
 
-The configuration carrier is migrating from the single `policy.yaml` ConfigMap to a cluster-scoped `RotationPolicy` CRD so distinct NodePools can carry divergent policy (issue #119). The migration lands incrementally: the `RotationPolicy` Go API types and CRD manifests ship first (the field shapes below), then the controller switches to consuming `RotationPolicy` objects and the ConfigMap is removed. Until that switch lands, the controller still reads the ConfigMap documented after the CRD.
+The configuration carrier is the cluster-scoped `RotationPolicy` CRD, so distinct NodePools can carry divergent policy (issue #119). The controller resolves each NodePool's governing policy from the cluster's `RotationPolicy` objects at reconcile time — it no longer reads the former single `policy.yaml` ConfigMap. The ConfigMap is documented at the end of this section for historical reference only; it is no longer consumed and is removed from the Helm chart in a follow-up.
 
 ### RotationPolicy CRD (`noderotation.io/v1alpha1`)
 
-`RotationPolicy` is cluster-scoped (NodePools are cluster-scoped; a namespaced policy would be an impedance mismatch) and carries its own `nodePoolSelector` plus the full policy block. The field shapes are lifted one-to-one from the ConfigMap below — this is a carrier change (one ConfigMap → N CRD objects), not a redefinition of the policy fields. The version is `v1alpha1` (pre-1.0, not frozen) and stabilizes to `v1` at the 1.0 milestone. The CRD's OpenAPI schema enforces the structural rules at admission time, closing the ConfigMap weakness where a typo failed only at runtime — which matters for a controller that deletes nodes. Targeting, conflict resolution, and the unmatched-NodePool fallback are specified with the controller's switch to consuming `RotationPolicy` (issue #119).
+`RotationPolicy` is cluster-scoped (NodePools are cluster-scoped; a namespaced policy would be an impedance mismatch) and carries its own `nodePoolSelector` plus the full policy block. The field shapes are lifted one-to-one from the legacy ConfigMap — this is a carrier change (one ConfigMap → N CRD objects), not a redefinition of the policy fields. The version is `v1alpha1` (pre-1.0, not frozen) and stabilizes to `v1` at the 1.0 milestone. The CRD's OpenAPI schema enforces the structural rules at admission time, closing the ConfigMap weakness where a typo failed only at runtime — which matters for a controller that deletes nodes. Cross-field rules the OpenAPI schema cannot express (a window's `end` after its `start`; the surge durations strictly positive) are still validated at reconcile time when the policy is resolved; a policy that fails them is treated as a conflict (below) rather than acted on.
 
 ```yaml
 apiVersion: noderotation.io/v1alpha1
@@ -892,7 +907,21 @@ status:                           # observational/derived only — never authori
   conditions: []
 ```
 
-### ConfigMap (current carrier, removed once the controller consumes `RotationPolicy`)
+#### Targeting, conflict resolution, and fallback
+
+A `RotationPolicy` governs the NodePools its `nodePoolSelector` matches (a standard label selector — `matchLabels` and/or `matchExpressions`). More than one policy can match a given NodePool; the controller resolves a **single** governing policy per pool with these decided rules (issue #119 §3–§4):
+
+- **Most-specific match wins.** Specificity is the number of label-key constraints the selector carries (`matchLabels` entries plus `matchExpressions` entries). Among the policies that match a NodePool, the one with the highest specificity governs it. An empty (catch-all) selector scores 0, so it loses to any keyed selector — the intended way to write a broad default that any narrower policy overrides.
+- **An equal-specificity tie is a hard error.** If two or more matching policies tie at the top specificity, the controller **refuses to rotate that NodePool** — it never guesses which policy applies, because guessing wrong deletes the wrong nodes. It emits a `PolicyConflict` Warning event on the NodePool and sets `noderotation_policy_conflict{nodepool} = 1` (§4.2); the pool is re-evaluated on the next reconcile and on any `RotationPolicy` change. A governing policy that fails the reconcile-time validation above (e.g. an overnight window) is surfaced the same way.
+- **A NodePool matched by no policy is not rotated.** There is no implicit cluster-default policy; an unmatched pool is a safe no-op (its `expireAfter` backstop still applies exactly as before). An operator who wants blanket coverage writes a catch-all `RotationPolicy` with a broad/empty selector. The pool's metric series are dropped while it is ungoverned, the same as for a deleted pool (§4.2).
+
+Because a single `RotationPolicy` change can alter which policy wins — or whether a tie exists — for any pool its selector touches, a create/update/delete of any `RotationPolicy` re-enqueues **every** NodePool for re-resolution.
+
+`maintenanceWindows` now lives on each policy, so the maintenance window is **per-NodePool** (resolved from its governing policy); the union semantics (§3.1) apply within one policy's list. This is why `noderotation_window_active` and `noderotation_window_period_seconds` carry a load-bearing `nodepool` label (§4.2).
+
+### ConfigMap (legacy — no longer read by the controller)
+
+The single `policy.yaml` ConfigMap below was the v0.x carrier. The controller no longer reads it; it is retained here only to document the one-to-one field mapping into a `RotationPolicy` (`nodepoolSelectors[].matchLabels` → `spec.nodePoolSelector.matchLabels`, every other field unchanged). The Helm chart drops the ConfigMap in a follow-up.
 
 ```yaml
 apiVersion: v1
@@ -945,7 +974,7 @@ data:
 
 - Semantic versioning (`vMAJOR.MINOR.PATCH`)
 - Pre-1.0 releases (`v0.x.y`) until v1 scope and CRD shape are stable
-- API compatibility surface: ConfigMap schema (`apiVersion: v1, ConfigMap` with documented `data.policy.yaml`), Prometheus metric names, annotation keys
+- API compatibility surface: the `RotationPolicy` CRD schema (stabilizing `v1alpha1` → `v1`), Prometheus metric names, annotation keys
 
 ## 6.2 Roadmap
 
@@ -955,7 +984,7 @@ data:
 | v0.2 (skeleton) | Project layout, controller-runtime bootstrap, leader election, CI |
 | v0.3 (MVP, v1 surge) | Reconcile + surge + drain + metrics + Helm chart |
 | v0.4 | Pre-pull (v2 feature) |
-| v1.0 | Stable ConfigMap schema, documented production runbook, soak-tested on a real EKS Auto Mode cluster |
+| v1.0 | Stable `RotationPolicy` CRD (`v1`), documented production runbook, soak-tested on a real EKS Auto Mode cluster |
 
 ---
 
@@ -996,11 +1025,11 @@ data:
 
 ## 7.3 Open Questions
 
-1. **Migration to CRD-based policy** if multiple NodePools require divergent rotation policies
-2. **Per-NodePool window** vs single cluster-wide window
-3. **Holiday-aware scheduling** (skip rotation if `Sat` falls on a holiday). The v1 design intentionally ignores holidays
-4. **Pre-pull image source provisioning** for v2 — whether to use the standard Karpenter NodeClass image-pulling capability or a dedicated Job
-5. **Multi-cloud verification** (AKS NAP, GKE) before claiming compatibility beyond EKS Auto Mode
+1. **Holiday-aware scheduling** (skip rotation if `Sat` falls on a holiday). The v1 design intentionally ignores holidays
+2. **Pre-pull image source provisioning** for v2 — whether to use the standard Karpenter NodeClass image-pulling capability or a dedicated Job
+3. **Multi-cloud verification** (AKS NAP, GKE) before claiming compatibility beyond EKS Auto Mode
+
+> Resolved by the `RotationPolicy` CRD (issue #119): *CRD-based policy migration when NodePools need divergent rotation policy* and *per-NodePool maintenance window vs a single cluster-wide window* — both delivered by the per-NodePool `RotationPolicy` (§5.4).
 
 ---
 

@@ -91,6 +91,26 @@ tests:
           path: rules[4].verbs
           value: ["create", "patch"]
 
+  - it: ClusterRole rotationpolicies are read-only (resolve + watch, spec §5.4)
+    template: templates/clusterrole.yaml
+    asserts:
+      - equal:
+          path: rules[5].apiGroups[0]
+          value: noderotation.io
+      - equal:
+          path: rules[5].resources[0]
+          value: rotationpolicies
+      - equal:
+          path: rules[5].verbs
+          value: ["get", "list", "watch"]
+      # read-only here: no write verbs until #124 populates status
+      - notContains:
+          path: rules[5].verbs
+          content: update
+      - notContains:
+          path: rules[5].verbs
+          content: patch
+
   - it: ClusterRole never grants any priorityclasses verb (installed statically)
     template: templates/clusterrole.yaml
     asserts:

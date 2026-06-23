@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	karpapis "sigs.k8s.io/karpenter/pkg/apis"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
+	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 	"github.com/AkashiSN/node-rotation-controller/internal/controller"
 	"github.com/AkashiSN/node-rotation-controller/internal/scheme"
@@ -139,7 +141,10 @@ func TestSetupWithManagerWatches(t *testing.T) {
 	}
 
 	testEnv := &envtest.Environment{
-		CRDInstallOptions: envtest.CRDInstallOptions{CRDs: karpapis.CRDs},
+		CRDInstallOptions: envtest.CRDInstallOptions{
+			CRDs:  karpapis.CRDs,
+			Paths: []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		},
 	}
 	cfg, err := testEnv.Start()
 	if err != nil {
@@ -157,12 +162,9 @@ func TestSetupWithManagerWatches(t *testing.T) {
 		t.Fatalf("failed to create manager: %v", err)
 	}
 
-	pol, sched := smokePolicy(t)
 	rec := newReconcileRecorder(mgr.GetClient())
 	reconciler := &controller.RotationReconciler{
 		Client:            rec,
-		Policy:            pol,
-		Schedule:          sched,
 		Namespace:         controllerNS,
 		PlaceholderImage:  "registry.k8s.io/pause:3.10",
 		PriorityClassName: "noderotation-placeholder",
@@ -260,6 +262,17 @@ func TestSetupWithManagerWatches(t *testing.T) {
 		rec.waitEnqueuedAfter(t, watchPoolName, base)
 	})
 
+	// ── Positive: RotationPolicy change re-evaluates NodePools ──────────────
+	// A RotationPolicy create maps to every NodePool (allNodePools), so the
+	// governed in-scope pool re-reconciles. The selector matches workload=api only,
+	// so offPoolName (workload=batch) stays unmatched and never self-requeues — the
+	// negative cases below rely on that.
+	t.Run("RotationPolicy change enqueues the matched NodePool", func(t *testing.T) {
+		base := rec.waitQuiescent(t, watchPoolName)
+		mustCreate(t, ctx, api, watchRotationPolicy())
+		rec.waitEnqueuedAfter(t, watchPoolName, base)
+	})
+
 	// ── Negative cases ──────────────────────────────────────────────────────
 	// Each labels (or namespaces) an object so the watch's predicate/map-func
 	// drops it. The target key checked is offPoolName, whose reconcile must stay
@@ -344,6 +357,23 @@ func nodeClaimSpec() karpv1.NodeClaimSpec {
 
 func inScopeNodePool(name string) *karpv1.NodePool {
 	return nodePool(name, map[string]string{"workload": "api"})
+}
+
+// watchRotationPolicy governs the workload=api NodePool with a well-formed
+// all-week window, used to prove the RotationPolicy watch enqueues its pools.
+func watchRotationPolicy() *noderotationv1alpha1.RotationPolicy {
+	return &noderotationv1alpha1.RotationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "watch-policy"},
+		Spec: noderotationv1alpha1.RotationPolicySpec{
+			NodePoolSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"workload": "api"}},
+			MaintenanceWindows: []noderotationv1alpha1.MaintenanceWindow{{
+				Timezone: "UTC",
+				Days:     []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"},
+				Start:    "00:00",
+				End:      "23:59",
+			}},
+		},
+	}
 }
 
 func offScopeNodePool(name string) *karpv1.NodePool {

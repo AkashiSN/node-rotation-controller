@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,35 +16,28 @@ import (
 	karpapis "sigs.k8s.io/karpenter/pkg/apis"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
+	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
 	"github.com/AkashiSN/node-rotation-controller/internal/controller"
-	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 	"github.com/AkashiSN/node-rotation-controller/internal/scheme"
-	"github.com/AkashiSN/node-rotation-controller/internal/window"
 )
 
-// smokePolicy is a minimal, valid policy whose selector matches the smoke-test
-// NodePool. The all-week window keeps the schedule well-formed; the smoke test
-// only proves the manager boots, watches, and reconciles.
-func smokePolicy(t *testing.T) (*policy.Policy, *window.Schedule) {
-	t.Helper()
-	p := &policy.Policy{
-		NodePoolSelectors: []policy.Selector{{MatchLabels: map[string]string{"workload": "api"}}},
-		MaintenanceWindows: []policy.MaintenanceWindow{{
-			Timezone: "UTC",
-			Days:     []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"},
-			Start:    "00:00",
-			End:      "23:59",
-		}},
+// smokeRotationPolicy is a minimal, valid RotationPolicy whose selector matches
+// the smoke-test NodePool. The all-week window keeps the schedule well-formed;
+// the smoke test only proves the manager boots, watches (NodePool and
+// RotationPolicy), and reconciles.
+func smokeRotationPolicy() *noderotationv1alpha1.RotationPolicy {
+	return &noderotationv1alpha1.RotationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "smoke"},
+		Spec: noderotationv1alpha1.RotationPolicySpec{
+			NodePoolSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"workload": "api"}},
+			MaintenanceWindows: []noderotationv1alpha1.MaintenanceWindow{{
+				Timezone: "UTC",
+				Days:     []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"},
+				Start:    "00:00",
+				End:      "23:59",
+			}},
+		},
 	}
-	p.ApplyDefaults()
-	if err := p.Validate(); err != nil {
-		t.Fatalf("smoke policy invalid: %v", err)
-	}
-	s, err := window.New(p.MaintenanceWindows)
-	if err != nil {
-		t.Fatalf("build schedule: %v", err)
-	}
-	return p, s
 }
 
 // TestManagerReconcilesNodePool boots a real API server (envtest) with
@@ -60,7 +54,12 @@ func TestManagerReconcilesNodePool(t *testing.T) {
 	}
 
 	testEnv := &envtest.Environment{
-		CRDInstallOptions: envtest.CRDInstallOptions{CRDs: karpapis.CRDs},
+		CRDInstallOptions: envtest.CRDInstallOptions{
+			CRDs: karpapis.CRDs,
+			// Install the noderotation.io RotationPolicy CRD alongside Karpenter's so
+			// the controller can resolve a NodePool's governing policy (spec §5.4).
+			Paths: []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		},
 	}
 	cfg, err := testEnv.Start()
 	if err != nil {
@@ -78,11 +77,8 @@ func TestManagerReconcilesNodePool(t *testing.T) {
 		t.Fatalf("failed to create manager: %v", err)
 	}
 
-	pol, sched := smokePolicy(t)
 	inner := &controller.RotationReconciler{
 		Client:            mgr.GetClient(),
-		Policy:            pol,
-		Schedule:          sched,
 		Namespace:         "node-rotation-system",
 		PlaceholderImage:  "registry.k8s.io/pause:3.10",
 		PriorityClassName: "noderotation-placeholder",
@@ -124,6 +120,12 @@ func TestManagerReconcilesNodePool(t *testing.T) {
 	defer syncCancel()
 	if !mgr.GetCache().WaitForCacheSync(syncCtx) {
 		t.Fatal("cache did not sync within 30s")
+	}
+
+	// Create the governing RotationPolicy before the NodePool so the first
+	// reconcile of np-smoke resolves a policy (spec §5.4) and exercises the read.
+	if err := mgr.GetClient().Create(ctx, smokeRotationPolicy()); err != nil {
+		t.Fatalf("failed to create RotationPolicy: %v", err)
 	}
 
 	np := &karpv1.NodePool{

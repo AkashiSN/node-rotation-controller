@@ -1,6 +1,6 @@
 // Package selection implements the read path of the reconcile loop (spec §5.2):
-// which NodePools are in scope, and which NodeClaim is the next rotation
-// candidate (spec §3.2). It has no side effects — pure predicates over Karpenter
+// which NodeClaim is the next rotation candidate (spec §3.2). NodePool targeting
+// (which pool a policy governs) lives in internal/resolve. It has no side effects — pure predicates over Karpenter
 // types and resolved durations — so the caller derives the per-NodePool inputs
 // (leadTime from the schedule, the ageThreshold override from policy) and passes
 // plain values, mirroring the layering of internal/schedule and internal/window.
@@ -15,46 +15,11 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
-	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 )
 
 // maxBackoffShift caps the escalated re-selection backoff at 8× the base
 // (2^3, spec §5.3).
 const maxBackoffShift = 3
-
-// InScopeNodePools returns the NodePools matched by the configured selectors.
-// Within one selector every matchLabels entry must match (AND); across selectors
-// any match qualifies (OR) — spec §3.2, §5.4.
-func InScopeNodePools(pools []karpv1.NodePool, selectors []policy.Selector) []karpv1.NodePool {
-	var out []karpv1.NodePool
-	for _, p := range pools {
-		if matchesAny(p.Labels, selectors) {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func matchesAny(labels map[string]string, selectors []policy.Selector) bool {
-	for _, s := range selectors {
-		if matchesAll(labels, s.MatchLabels) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchesAll reports whether labels contain every want entry. An empty want
-// matches vacuously; policy validation (internal/policy) guarantees non-empty
-// matchLabels per selector, so that case is unreachable in practice.
-func matchesAll(labels, want map[string]string) bool {
-	for k, v := range want {
-		if labels[k] != v {
-			return false
-		}
-	}
-	return true
-}
 
 // LeadTime resolves the per-NodeClaim rotation lead time K·P + t_rot, where
 // t_rot = readyTimeout + tGP + buffer (spec §3.2). Base is the tGP-independent

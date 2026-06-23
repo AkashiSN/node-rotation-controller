@@ -20,7 +20,9 @@ import (
 const (
 	actionEvaluateSchedule = "EvaluateSchedule"
 	actionCheckExpiry      = "CheckExpiry"
+	actionResolvePolicy    = "ResolvePolicy"
 	reasonShortLead        = "ShortLead"
+	reasonPolicyConflict   = "PolicyConflict"
 )
 
 // warningEmitter surfaces non-fatal schedule findings and per-node short-lead
@@ -42,6 +44,7 @@ type warningEmitter struct {
 type poolWarnState struct {
 	findingCodes map[string]bool // last-warned non-fatal finding codes
 	shortLead    map[string]bool // last-warned short-lead NodeClaim names
+	conflict     string          // last-warned policy-conflict detail ("" = none)
 }
 
 func newWarningEmitter(rec events.EventRecorder) *warningEmitter {
@@ -117,6 +120,35 @@ func (w *warningEmitter) EmitShortLead(ctx context.Context, pool *karpv1.NodePoo
 		}
 	}
 	s.shortLead = current
+}
+
+// EmitConflict logs and emits a Warning Event on the NodePool when it is blocked
+// from rotating by a RotationPolicy conflict (an equal-specificity tie or a
+// runtime-invalid policy, spec §5.4). Deduplicated on the detail string: the same
+// conflict warns once and stays silent until it changes or ClearConflict resets
+// it, so the once-per-reconcile re-evaluation does not spam.
+func (w *warningEmitter) EmitConflict(ctx context.Context, pool *karpv1.NodePool, detail string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.poolStateLocked(pool.Name)
+	if s.conflict == detail {
+		return // already warned for this exact conflict — no re-fire
+	}
+	s.conflict = detail
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation policy conflict", "detail", detail)
+	if w.events != nil {
+		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonPolicyConflict, actionResolvePolicy, "%s", detail)
+	}
+}
+
+// ClearConflict resets a NodePool's conflict dedup state once it is governed by a
+// single valid policy again, so a conflict that recurs later re-fires its Event.
+func (w *warningEmitter) ClearConflict(pool string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if s := w.state[pool]; s != nil {
+		s.conflict = ""
+	}
 }
 
 // Forget drops a NodePool's dedup state, called when the NodePool is deleted so a
