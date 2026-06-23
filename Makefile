@@ -59,7 +59,10 @@ build: aqua-tools fmt vet
 
 .PHONY: test
 test: aqua-tools $(LOCALBIN)
-	KUBEBUILDER_ASSETS="$(shell setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./... -coverprofile cover.out
+	set -e; \
+	assets="$$(setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)"; \
+	test -n "$$assets" || { echo "setup-envtest resolved empty KUBEBUILDER_ASSETS path" >&2; exit 1; }; \
+	KUBEBUILDER_ASSETS="$$assets" go test ./... -coverprofile cover.out
 
 .PHONY: lint
 lint: aqua-tools
