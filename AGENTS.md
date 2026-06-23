@@ -75,8 +75,8 @@ and spec in sync (see *Specification rules* below).
   `ageThreshold` is derived to stay below `expireAfter` (spec §3.2);
   validation fails when the schedule cannot guarantee that.
 - v1 is **surge-only and serial per NodePool** (`surge.maxUnavailable = 1`);
-  distinct NodePools may rotate concurrently. Pre-pull (v2) and warm-up (v3)
-  are reserved expansion points behind disabled config flags.
+  distinct NodePools may rotate concurrently. Pre-pull (v2) is a reserved
+  expansion point behind a disabled config flag.
 - All controller state lives on Kubernetes objects — durable state on
   `NodeClaim`/`NodePool` annotations, plus transient markers on Nodes and the
   placeholder Pod (spec §5.3) — **no external datastore**.

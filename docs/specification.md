@@ -34,7 +34,7 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 |---|----------|-----------|
 | N1 | Replace Karpenter Consolidation / Drift | Karpenter's autonomous optimization remains active and beneficial. Only the Expiration path is taken over |
 | N2 | Handle Spot interruption | Spot interruption is an AWS-side event with a 2-minute hard limit; use [AWS Node Termination Handler](https://github.com/aws/aws-node-termination-handler) |
-| N3 | Application-side warm-up | JVM warm-up, connection pool priming, and similar concerns belong to `readinessProbe` / `readinessGate` / ALB slow start. The controller orchestrates *node* placement; the application orchestrates its own readiness. A v3 hook for synthetic warm-up jobs is reserved for the future |
+| N3 | Application-side warm-up | JVM warm-up, connection pool priming, and similar concerns belong to `readinessProbe` / `readinessGate` / ALB slow start. The controller orchestrates *node* placement; the application orchestrates its own readiness |
 | N4 | Allow `expireAfter == 0` or removal of the 21-day hard cap | The Auto Mode cap cannot be bypassed. `expireAfter` is intentionally kept as a backstop in case the controller is unavailable |
 | N5 | OS-patch reboot orchestration | Out of scope; see [kured](https://github.com/kubereboot/kured) |
 
@@ -405,17 +405,18 @@ This only re-creates a **same-AZ landing zone**; it does **not** move storage. T
 
 > v1 processes one node per cycle. If the maintenance window is too short to accommodate all candidates, the unprocessed ones roll over to the next window. The `expireAfter` backstop ensures eventual rotation (in the forceful path) even in pathological cases.
 
-## 3.4 Future versions (v2 / v3)
+## 3.4 Future versions (v2)
 
-The v1 design intentionally stops short of application-level concerns. The following are reserved expansion points.
+The v1 design intentionally stops short of application-level concerns. The following is a reserved expansion point.
 
 | Version | Addition | Trigger for adoption |
 |---------|----------|----------------------|
 | v1 | Surge + sequential delete | Initial release |
 | v2 | Image pre-pull job pinned to the replacement node before deleting the old one | Observed image-pull latency on cold replacement nodes |
-| v3 | Synthetic-traffic warm-up job (e.g., JVM JIT priming) before deleting the old one | Observed 5xx spikes after replacement that `readinessGate` alone does not absorb |
 
-The configuration schema in §5.4 already includes placeholder fields for v2 and v3.
+The configuration schema in §5.4 already includes a placeholder field for v2.
+
+> Application-side warm-up (synthetic-traffic / JVM JIT priming before deleting the old node) is **not** a planned feature — it is an application-layer readiness concern owned by `readinessProbe` / `readinessGate` / ALB slow start (Non-Goal N3), and the controller has no means to observe its adoption trigger (post-replacement 5xx). A formerly reserved v3 hook was dropped from the roadmap.
 
 ## 3.5 Backstop Behavior
 
@@ -552,7 +553,7 @@ The placeholder's dedicated `PriorityClass` (§3.3) is installed **statically by
 
 v1 performs no direct cloud API calls. All operations route through Karpenter via the `NodeClaim` CRD.
 
-v2 (image pre-pull) and v3 (synthetic warm-up) Jobs run as pods on the new node and inherit that node's role; no extra controller-level cloud permissions are introduced.
+v2 (image pre-pull) Jobs run as pods on the new node and inherit that node's role; no extra controller-level cloud permissions are introduced.
 
 ## 4.4 Cost
 
@@ -896,9 +897,6 @@ data:
 
     prePull:                   # v2 (disabled in v1); only `enabled` is accepted in v1
       enabled: false
-
-    warmup:                    # v3 (disabled in v1); only `enabled` is accepted in v1
-      enabled: false
 ```
 
 ---
@@ -917,7 +915,6 @@ data:
 | v0.2 (skeleton) | Project layout, controller-runtime bootstrap, leader election, CI |
 | v0.3 (MVP, v1 surge) | Reconcile + surge + drain + metrics + Helm chart |
 | v0.4 | Pre-pull (v2 feature) |
-| v0.5 | Warm-up hook (v3 feature) |
 | v1.0 | Stable ConfigMap schema, documented production runbook, soak-tested on a real EKS Auto Mode cluster |
 
 ---

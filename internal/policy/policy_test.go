@@ -31,8 +31,6 @@ surge:
     preferred: []
 prePull:
   enabled: false
-warmup:
-  enabled: false
 `
 
 // minimalYAML carries only the structurally-required fields; everything else
@@ -300,13 +298,6 @@ maintenanceWindows:
 			name: "prePull enabled",
 			yaml: minimalYAML + `
 prePull:
-  enabled: true
-`,
-		},
-		{
-			name: "warmup enabled",
-			yaml: minimalYAML + `
-warmup:
   enabled: true
 `,
 		},
