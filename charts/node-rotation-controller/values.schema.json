@@ -71,6 +71,7 @@
         "policy": {
           "type": "object",
           "required": ["nodepoolSelectors", "maintenanceWindows"],
+          "additionalProperties": false,
           "properties": {
             "nodepoolSelectors": {
               "type": "array",
