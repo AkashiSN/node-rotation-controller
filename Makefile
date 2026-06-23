@@ -61,6 +61,11 @@ vet: aqua-tools
 # controller-gen (pinned in aqua.yaml via the local registry) reads the kubebuilder
 # markers under ./api to generate the CRD manifests and zz_generated deepcopy.
 CRD_DIR ?= config/crd/bases
+# The Helm chart installs the same CRD from its crds/ directory (Helm applies it
+# before the templated resources, so the manager's RotationPolicy informer can
+# start). Keep it a byte-for-byte copy of the generated manifest; manifests syncs
+# it so CI's `make manifests && git diff` check catches any drift.
+CHART_CRD_DIR ?= charts/node-rotation-controller/crds
 
 .PHONY: generate
 generate: aqua-tools
@@ -69,6 +74,7 @@ generate: aqua-tools
 .PHONY: manifests
 manifests: aqua-tools
 	controller-gen crd paths=./api/... output:crd:dir=$(CRD_DIR)
+	cp $(CRD_DIR)/noderotation.io_rotationpolicies.yaml $(CHART_CRD_DIR)/noderotation.io_rotationpolicies.yaml
 
 .PHONY: build
 build: aqua-tools fmt vet
