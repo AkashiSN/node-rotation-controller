@@ -21,18 +21,17 @@ func validPolicy() *Policy {
 	}
 }
 
-func intPtr(i int) *int                       { return &i }
 func durPtr(d time.Duration) *metav1.Duration { return &metav1.Duration{Duration: d} }
 
 func TestApplyDefaultsAndFields(t *testing.T) {
 	p := &Policy{
 		AgeThreshold:       "auto",
-		MinRotationChances: intPtr(2),
+		MinRotationChances: new(2),
 		MaintenanceWindows: []MaintenanceWindow{{
 			Timezone: "Asia/Tokyo", Days: []string{"Wed", "Sat"}, Start: "02:00", End: "06:00",
 		}},
 		Surge: Surge{
-			MaxUnavailable: intPtr(1),
+			MaxUnavailable: new(1),
 			ReadyTimeout:   durPtr(15 * time.Minute),
 			CooldownAfter:  durPtr(10 * time.Minute),
 			RetryBackoff:   durPtr(30 * time.Minute),
@@ -147,8 +146,8 @@ func TestValidateStructuralErrors(t *testing.T) {
 		name   string
 		mutate func(*Policy)
 	}{
-		{"maxUnavailable not 1", func(p *Policy) { p.Surge.MaxUnavailable = intPtr(2) }},
-		{"maxUnavailable explicit zero", func(p *Policy) { p.Surge.MaxUnavailable = intPtr(0) }},
+		{"maxUnavailable not 1", func(p *Policy) { p.Surge.MaxUnavailable = new(2) }},
+		{"maxUnavailable explicit zero", func(p *Policy) { p.Surge.MaxUnavailable = new(0) }},
 		{"no windows", func(p *Policy) { p.MaintenanceWindows = nil }},
 		{"bad timezone", func(p *Policy) { p.MaintenanceWindows[0].Timezone = "Asia/Nowhere" }},
 		{"bad weekday", func(p *Policy) { p.MaintenanceWindows[0].Days = []string{"Funday"} }},
@@ -163,7 +162,7 @@ func TestValidateStructuralErrors(t *testing.T) {
 			p.MaintenanceWindows[0].End = "02:00"
 		}},
 		{"prePull enabled", func(p *Policy) { p.PrePull.Enabled = true }},
-		{"K below 1", func(p *Policy) { p.MinRotationChances = intPtr(0) }},
+		{"K below 1", func(p *Policy) { p.MinRotationChances = new(0) }},
 		{"negative readyTimeout", func(p *Policy) { p.Surge.ReadyTimeout = durPtr(-1 * time.Minute) }},
 		{"negative cooldownAfter", func(p *Policy) { p.Surge.CooldownAfter = durPtr(-1 * time.Minute) }},
 		{"negative retryBackoff", func(p *Policy) { p.Surge.RetryBackoff = durPtr(-1 * time.Minute) }},
