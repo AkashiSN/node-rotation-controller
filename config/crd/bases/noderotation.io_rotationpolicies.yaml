@@ -52,12 +52,9 @@ spec:
             type: object
           spec:
             description: |-
-              RotationPolicySpec defines the rotation policy for the NodePools its selector
-              matches. The field shapes mirror the former policy.yaml ConfigMap one-to-one
-              (spec §5.4) — this is a carrier change (one ConfigMap → N CRD objects), not a
-              redefinition of the policy fields. The OpenAPI schema generated from the markers
-              below enforces the structural rules at admission time, closing the ConfigMap
-              weakness where a typo failed only at runtime.
+              spec is required: it carries the mandatory nodePoolSelector and
+              maintenanceWindows whose admission-time guarantees would be bypassed by an
+              empty object if spec itself were optional.
             properties:
               ageThreshold:
                 default: auto
@@ -173,8 +170,11 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               prePull:
-                description: prePull is the reserved v2 expansion point; only enabled:false
-                  is accepted in v1.
+                description: |-
+                  prePull is the reserved v2 expansion point; only enabled:false is accepted in v1.
+                  The CEL rule enforces the v1 reservation at admission time, mirroring the
+                  ConfigMap validator (internal/policy.Validate), so enabling it is rejected
+                  rather than silently honored by a controller that deletes nodes.
                 properties:
                   enabled:
                     default: false
@@ -182,6 +182,10 @@ spec:
                       stay false in v1.
                     type: boolean
                 type: object
+                x-kubernetes-validations:
+                - message: 'prePull is reserved for v2 and must be disabled (enabled:
+                    false) in v1'
+                  rule: '!self.enabled'
               surge:
                 description: surge holds the v1 surge-orchestration knobs (spec §3.3,
                   §5.4).
@@ -317,6 +321,8 @@ spec:
                 format: int64
                 type: integer
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true

@@ -43,6 +43,10 @@ type RotationPolicySpec struct {
 	Surge Surge `json:"surge,omitempty"`
 
 	// prePull is the reserved v2 expansion point; only enabled:false is accepted in v1.
+	// The CEL rule enforces the v1 reservation at admission time, mirroring the
+	// ConfigMap validator (internal/policy.Validate), so enabling it is rejected
+	// rather than silently honored by a controller that deletes nodes.
+	// +kubebuilder:validation:XValidation:rule="!self.enabled",message="prePull is reserved for v2 and must be disabled (enabled: false) in v1"
 	// +optional
 	PrePull FeatureToggle `json:"prePull,omitempty"`
 }
@@ -160,8 +164,11 @@ type RotationPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// +optional
-	Spec RotationPolicySpec `json:"spec,omitempty"`
+	// spec is required: it carries the mandatory nodePoolSelector and
+	// maintenanceWindows whose admission-time guarantees would be bypassed by an
+	// empty object if spec itself were optional.
+	// +kubebuilder:validation:Required
+	Spec RotationPolicySpec `json:"spec"`
 	// +optional
 	Status RotationPolicyStatus `json:"status,omitempty"`
 }
