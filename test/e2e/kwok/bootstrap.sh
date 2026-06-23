@@ -156,4 +156,11 @@ helm upgrade --install node-rotation "${REPO_ROOT}/charts/node-rotation-controll
   --set image.pullPolicy=Never \
   --wait --timeout 180s
 
+# ── 6. RotationPolicy (issue #119) ──────────────────────────────────────────
+# The controller resolves each NodePool's governing RotationPolicy at reconcile
+# time; the policy.yaml ConfigMap is no longer read. The chart's crds/ installed
+# the CRD during the Helm install above, so the object applies cleanly here.
+log "applying RotationPolicy"
+kubectl apply -f "${SCRIPT_DIR}/manifests/rotationpolicy.yaml"
+
 log "bootstrap complete: cluster=${CLUSTER_NAME} controllerNs=${CONTROLLER_NS}"
