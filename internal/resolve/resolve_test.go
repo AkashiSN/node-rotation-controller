@@ -87,6 +87,28 @@ func TestGoverningEqualSpecificityIsConflict(t *testing.T) {
 	}
 }
 
+func TestGoverningTopWinnerOverridesLowerTie(t *testing.T) {
+	// Two policies tie at specificity 1, but a third matches at specificity 2.
+	// The single most-specific winner governs — the lower-level tie must NOT
+	// surface as a Conflict. A regression here would falsely block a legitimately
+	// governed pool from rotating, which on a node-deleting controller stalls the
+	// make-before-break path that keeps it under expireAfter.
+	tieA := policyWith("tie-a", matchLabels("workload", "api"))
+	tieB := policyWith("tie-b", matchLabels("tier", "web"))
+	winner := policyWith("winner", matchLabels("workload", "api", "tier", "web"))
+	labels := map[string]string{"workload": "api", "tier": "web"}
+	got, outcome, tied := Governing(pool(labels), []nrv1.RotationPolicy{tieA, tieB, winner})
+	if outcome != Matched {
+		t.Fatalf("outcome = %v, want Matched (top winner overrides lower tie)", outcome)
+	}
+	if got.Name != "winner" {
+		t.Errorf("winner = %s, want winner", got.Name)
+	}
+	if len(tied) != 0 {
+		t.Errorf("tied = %v, want none (lower tie is overridden, not reported)", tied)
+	}
+}
+
 func TestGoverningCatchAllLosesToSpecific(t *testing.T) {
 	catchAll := policyWith("catch-all", &metav1.LabelSelector{})
 	specific := policyWith("specific", matchLabels("workload", "api"))

@@ -273,6 +273,36 @@ func TestSetupWithManagerWatches(t *testing.T) {
 		rec.waitEnqueuedAfter(t, watchPoolName, base)
 	})
 
+	// The RotationPolicy watch carries no predicate, so update and delete fire the
+	// same map-func as create. Spec §5.4 names all three: any create/update/delete
+	// re-enqueues every NodePool because it can change which policy wins (or
+	// whether a tie exists). These subtests run after the create above, so
+	// watch-policy already exists.
+	t.Run("RotationPolicy update enqueues the matched NodePool", func(t *testing.T) {
+		var pol noderotationv1alpha1.RotationPolicy
+		if err := api.Get(ctx, types.NamespacedName{Name: "watch-policy"}, &pol); err != nil {
+			t.Fatalf("get watch-policy: %v", err)
+		}
+		base := rec.waitQuiescent(t, watchPoolName)
+		pol.Spec.AgeThreshold = "240h"
+		if err := api.Update(ctx, &pol); err != nil {
+			t.Fatalf("update watch-policy: %v", err)
+		}
+		rec.waitEnqueuedAfter(t, watchPoolName, base)
+	})
+
+	t.Run("RotationPolicy delete enqueues the matched NodePool", func(t *testing.T) {
+		var pol noderotationv1alpha1.RotationPolicy
+		if err := api.Get(ctx, types.NamespacedName{Name: "watch-policy"}, &pol); err != nil {
+			t.Fatalf("get watch-policy: %v", err)
+		}
+		base := rec.waitQuiescent(t, watchPoolName)
+		if err := api.Delete(ctx, &pol); err != nil {
+			t.Fatalf("delete watch-policy: %v", err)
+		}
+		rec.waitEnqueuedAfter(t, watchPoolName, base)
+	})
+
 	// ── Negative cases ──────────────────────────────────────────────────────
 	// Each labels (or namespaces) an object so the watch's predicate/map-func
 	// drops it. The target key checked is offPoolName, whose reconcile must stay
