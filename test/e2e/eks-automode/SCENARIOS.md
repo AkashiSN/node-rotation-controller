@@ -703,12 +703,18 @@ noderotation_candidates{nodepool="nrc-poc"} 1   # second candidate still eligibl
 noderotation_in_progress{nodepool="nrc-poc"} 0  # but no new rotation starts
 ```
 
-**Cleanup.** Restore the open window (live patch) and halt:
+**Cleanup.** Drop the in-scope label **first**, *then* restore the open window —
+order matters here. Restoring the window while the pool is still in-scope re-opens
+a governed window and can start a second rotation; dropping the label immediately
+after would then take the pool out of governance mid-rotation. The controller now
+reaps that orphan (rolls the in-flight rotation back, issue #141), but the clean
+teardown is to take the pool out of scope before touching any other knob, so no
+governed window is ever re-opened during teardown:
 
 ```bash
+kubectl label nodepool nrc-poc noderotation-poc/in-scope-     # FIRST: out of scope before re-opening the window
 kubectl patch rotationpolicy nrc-poc --type merge \
   -p '{"spec":{"maintenanceWindows":[{"timezone":"UTC","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"start":"00:00","end":"23:59"}]}}'
-kubectl label nodepool nrc-poc noderotation-poc/in-scope-
 kubectl scale deploy poc-workload --replicas=1
 ```
 
@@ -882,6 +888,14 @@ kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/tem
 | Clear a manual freeze (Scenario E) | `kubectl annotate nodepool nrc-poc noderotation.io/freeze-` |
 | Remove a scenario's workload | `kubectl delete -f scenarios/<workload>.yaml` (`workload`, `statefulset-ebs`, `pdb-workload`, `workload-absorb`, `preemption`, `nodepool-b`) |
 | Revert a Scenario N drift label | `kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/template/metadata/labels/poc-drift"}]'` |
+
+> **Teardown order.** When a scenario tightened the window or another knob, **drop
+> the in-scope label first**, then restore the other knobs. Restoring an open
+> window while the pool is still in-scope can re-open a governed window and start a
+> fresh rotation; dropping the label right after would take the pool out of
+> governance mid-rotation. The controller now reaps such an orphan (rolls the
+> in-flight rotation back, issue #141), but out-of-scope-first avoids re-opening a
+> governed window during teardown entirely.
 
 ---
 

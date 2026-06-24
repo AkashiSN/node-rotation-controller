@@ -21,8 +21,10 @@ const (
 	actionEvaluateSchedule = "EvaluateSchedule"
 	actionCheckExpiry      = "CheckExpiry"
 	actionResolvePolicy    = "ResolvePolicy"
+	actionReapRotation     = "ReapRotation"
 	reasonShortLead        = "ShortLead"
 	reasonPolicyConflict   = "PolicyConflict"
+	reasonGovernanceLost   = "GovernanceLost"
 )
 
 // warningEmitter surfaces non-fatal schedule findings and per-node short-lead
