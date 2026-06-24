@@ -106,7 +106,8 @@ Set `rotationPolicy.create=false` to author your own `RotationPolicy` objects
 > `node-rotation-controller` and `charts/node-rotation-controller` public in the
 > GitHub *Packages* settings so unauthenticated `helm install` / image pulls
 > work, then **verify** with a logged-out client — e.g.
-> `helm pull oci://ghcr.io/akashisn/charts/node-rotation-controller --version <vX.Y.Z>`,
+> `helm pull oci://ghcr.io/akashisn/charts/node-rotation-controller --version <X.Y.Z>`
+> (the chart version has **no** leading `v` — the release guard strips it),
 > or fetch the image manifest anonymously and expect HTTP 200. (Querying or
 > changing package visibility via the GitHub API needs a token with
 > `read:packages` / `write:packages`; the *Packages* settings UI needs no token.)
