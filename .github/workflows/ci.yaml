@@ -158,3 +158,9 @@ jobs:
           # guards against a silent regression.
           assert_rejected "rotationPolicy.spec.<unknown> (additionalProperties:false)" \
             --set rotationPolicy.spec.unknownKey=1
+          # The pre-#119 policy ConfigMap block was removed in favor of the
+          # RotationPolicy CRD. A legacy `config.policy.*` value carried over by
+          # an upgrade MUST be rejected at render, not silently ignored — else the
+          # chart renders the default sample policy and rotates the wrong NodePools.
+          assert_rejected "config.* (removed pre-#119 policy block)" \
+            --set-json 'config.policy.nodepoolSelectors=[{"matchLabels":{"workload":"batch"}}]'

@@ -4,6 +4,10 @@
   "description": "Install-time validation of the chart values. The CRD's OpenAPI schema and the controller re-validate the rendered RotationPolicy at admission/reconcile time (spec §5.4) — this schema is a fast first line of defense, not the source of truth.",
   "type": "object",
   "properties": {
+    "config": {
+      "not": {},
+      "description": "Removed in #119: policy moved from the `config` ConfigMap block to the RotationPolicy CRD (see `rotationPolicy` below). Rejected so a pre-#119 upgrade carrying legacy `config.policy.*` values fails loudly at render instead of silently ignoring the user's policy."
+    },
     "replicaCount": {
       "type": "integer",
       "minimum": 1,
