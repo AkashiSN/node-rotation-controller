@@ -102,10 +102,16 @@ Set `rotationPolicy.create=false` to author your own `RotationPolicy` objects
 (one per divergent policy); a NodePool matched by none is simply not rotated.
 
 > **Maintainer note (first release only):** the ghcr.io image and chart
-> packages are created **private** on first publish. Make
+> packages may be created **private** on first publish. Make
 > `node-rotation-controller` and `charts/node-rotation-controller` public in the
 > GitHub *Packages* settings so unauthenticated `helm install` / image pulls
-> work. Releases are cut by pushing a `vX.Y.Z` tag (see the Release workflow).
+> work, then **verify** with a logged-out client — e.g.
+> `helm pull oci://ghcr.io/akashisn/charts/node-rotation-controller --version <X.Y.Z>`
+> (the chart version has **no** leading `v` — the release guard strips it),
+> or fetch the image manifest anonymously and expect HTTP 200. (Querying or
+> changing package visibility via the GitHub API needs a token with
+> `read:packages` / `write:packages`; the *Packages* settings UI needs no token.)
+> Releases are cut by pushing a `vX.Y.Z` tag (see the Release workflow).
 
 ### Upgrading from the ConfigMap (pre-#119)
 
