@@ -1,0 +1,22 @@
+{{- if .Values.rotationPolicy.create }}
+# A sample RotationPolicy (spec §5.4, issue #119). The controller resolves each
+# NodePool's governing RotationPolicy at reconcile time — it no longer reads the
+# former policy.yaml ConfigMap. Edit .Values.rotationPolicy.spec to point this at
+# your NodePools, or set rotationPolicy.create=false and author your own
+# RotationPolicy objects (one per divergent policy).
+#
+# The CRD ships in the chart's crds/ directory, which Helm applies before these
+# templated resources, so this object is admitted on first install.
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  # RotationPolicy is cluster-scoped (NodePools are cluster-scoped), so this is
+  # NOT release-namespaced. v1 assumes a single install per cluster; a second
+  # release would collide on this name — set rotationPolicy.create=false on the
+  # additional releases and manage the policy objects out-of-band.
+  name: {{ .Values.rotationPolicy.name | default (include "node-rotation-controller.fullname" .) }}
+  labels:
+    {{- include "node-rotation-controller.labels" . | nindent 4 }}
+spec:
+  {{- toYaml .Values.rotationPolicy.spec | nindent 2 }}
+{{- end }}

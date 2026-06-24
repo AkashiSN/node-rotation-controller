@@ -77,15 +77,30 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 ```sh
 helm install node-rotation-controller charts/node-rotation-controller \
   --namespace node-rotation-system --create-namespace \
-  --set-json 'config.policy.nodepoolSelectors=[{"matchLabels":{"workload":"api"}}]'
+  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
 ```
 
 chart はコントローラ（leader election 付き `replicas=2`）、その RBAC、
-`node-rotation-config` ConfigMap、surge placeholder Pod 用の専用の負優先度
+クラスタスコープの `RotationPolicy` CRD（chart の `crds/` ディレクトリから）と
+サンプルの `RotationPolicy` オブジェクト、surge placeholder Pod 用の専用の負優先度
 `PriorityClass`（仕様 §3.3・§4.3・§5.1）をインストールする。置換の設定は
-`config.policy`（仕様 §5.4 のスキーマ）を編集する —
+`rotationPolicy.spec`（仕様 §5.4 のスキーマ）を編集する —
 [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml)
-を参照。
+を参照。`rotationPolicy.create=false` にすれば自前の `RotationPolicy`
+オブジェクト（分岐するポリシーごとに 1 つ）を管理できる。どの `RotationPolicy`
+にもマッチしない NodePool は単に置換されない。
+
+### ConfigMap からの移行（#119 以前）
+
+[#119](https://github.com/AkashiSN/node-rotation-controller/issues/119) より前の
+リリースは、単一の `node-rotation-config` ConfigMap（`config.policy.*`）で
+ポリシーを保持していた。この ConfigMap は削除され、ポリシーはクラスタスコープの
+`RotationPolicy` オブジェクトに移行した。フィールド形状は 1:1 — 旧
+`config.policy.nodepoolSelectors[]` の各エントリをそれぞれ 1 つの
+`RotationPolicy` に移し、`matchLabels` を `spec.nodePoolSelector.matchLabels` に、
+それ以外のフィールド（`ageThreshold`・`minRotationChances`・`maintenanceWindows`・
+`surge`・`prePull`）は `spec` 配下へそのままコピーする。1.0 前なので、これは
+dual-support なしの全面置換である（仕様 §5.4）。
 
 ## 開発
 

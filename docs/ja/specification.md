@@ -857,7 +857,7 @@ sweep は **ちょうど 1 回、最初の reconcile が何らかの作業をす
 
 ## 5.4 設定スキーマ
 
-設定キャリアは cluster-scoped な `RotationPolicy` CRD であり、NodePool ごとに異なるポリシーを表現できる（issue #119）。コントローラは各 NodePool の統治ポリシーをクラスタの `RotationPolicy` オブジェクトから reconcile 時に解決する — もはや旧来の単一 `policy.yaml` ConfigMap は読まない。ConfigMap は本節末尾に歴史的参照のためにのみ記載する。もはや消費されず、後続で Helm chart からも削除される。
+設定キャリアは cluster-scoped な `RotationPolicy` CRD であり、NodePool ごとに異なるポリシーを表現できる（issue #119）。コントローラは各 NodePool の統治ポリシーをクラスタの `RotationPolicy` オブジェクトから reconcile 時に解決する — もはや旧来の単一 `policy.yaml` ConfigMap は読まない。ConfigMap は本節末尾に歴史的参照のためにのみ記載する。もはや消費されず、Helm chart からも削除済みで、chart は代わりに CRD とサンプルの `RotationPolicy` を同梱する。
 
 ### RotationPolicy CRD (`noderotation.io/v1alpha1`)
 
@@ -919,7 +919,7 @@ status:                           # 観測／導出のみ — 権威ある実行
 
 ### ConfigMap（legacy — コントローラはもはや読まない）
 
-以下の単一 `policy.yaml` ConfigMap は v0.x のキャリアであった。コントローラはもはやこれを読まない。`RotationPolicy` への 1:1 のフィールドマッピング（`nodepoolSelectors[].matchLabels` → `spec.nodePoolSelector.matchLabels`、その他のフィールドは不変）を文書化するためにのみ残す。Helm chart は後続で ConfigMap を削除する。
+以下の単一 `policy.yaml` ConfigMap は v0.x のキャリアであった。コントローラはもはやこれを読まない。`RotationPolicy` への 1:1 のフィールドマッピング（`nodepoolSelectors[].matchLabels` → `spec.nodePoolSelector.matchLabels`、その他のフィールドは不変）を文書化するためにのみ残す。Helm chart はもはや ConfigMap を同梱せず、代わりに CRD とサンプルの `RotationPolicy` をインストールする。
 
 ```yaml
 apiVersion: v1

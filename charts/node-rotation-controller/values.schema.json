@@ -1,9 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "node-rotation-controller values",
-  "description": "Install-time validation of the chart values. The controller re-validates the rendered policy.yaml at startup (spec §5.4) — this schema is a fast first line of defense, not the source of truth.",
+  "description": "Install-time validation of the chart values. The CRD's OpenAPI schema and the controller re-validate the rendered RotationPolicy at admission/reconcile time (spec §5.4) — this schema is a fast first line of defense, not the source of truth.",
   "type": "object",
   "properties": {
+    "config": {
+      "not": {},
+      "description": "Removed in #119: policy moved from the `config` ConfigMap block to the RotationPolicy CRD (see `rotationPolicy` below). Rejected so a pre-#119 upgrade carrying legacy `config.policy.*` values fails loudly at render instead of silently ignoring the user's policy."
+    },
     "replicaCount": {
       "type": "integer",
       "minimum": 1,
@@ -65,25 +69,40 @@
         "minAvailable": { "type": ["integer", "string"] }
       }
     },
-    "config": {
+    "rotationPolicy": {
       "type": "object",
       "properties": {
-        "policy": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "spec": {
           "type": "object",
-          "required": ["nodepoolSelectors", "maintenanceWindows"],
+          "required": ["nodePoolSelector", "maintenanceWindows"],
           "additionalProperties": false,
           "properties": {
-            "nodepoolSelectors": {
-              "type": "array",
-              "minItems": 1,
-              "items": {
-                "type": "object",
-                "required": ["matchLabels"],
-                "properties": {
-                  "matchLabels": {
+            "nodePoolSelector": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": false,
+              "properties": {
+                "matchLabels": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": { "type": "string" }
+                },
+                "matchExpressions": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
                     "type": "object",
-                    "minProperties": 1,
-                    "additionalProperties": { "type": "string" }
+                    "required": ["key", "operator"],
+                    "properties": {
+                      "key": { "type": "string", "minLength": 1 },
+                      "operator": {
+                        "type": "string",
+                        "enum": ["In", "NotIn", "Exists", "DoesNotExist"]
+                      },
+                      "values": { "type": "array", "items": { "type": "string" } }
+                    }
                   }
                 }
               }

@@ -27,72 +27,11 @@ podDisruptionBudget:
 logging:
   development: true
 
-# NOTE (issue #119): the controller no longer reads this config.policy ConfigMap —
-# it resolves each NodePool's governing RotationPolicy at reconcile time. The live
-# policy for the e2e is manifests/rotationpolicy.yaml (applied by bootstrap.sh);
-# the block below is retained only because the chart still renders the (ignored)
-# ConfigMap until the chart migration (#125), and MUST be kept in sync with the
-# RotationPolicy manifest.
-config:
-  policy:
-    # Match only nodepool-a by its in-scope marker. nodepool-b deliberately stays
-    # out of scope so it can hold spare capacity for confinement assertions.
-    nodepoolSelectors:
-      - matchLabels:
-          noderotation-e2e/in-scope: "true"
-
-    # Drive rotation by age, not by the per-claim expireAfter backstop. The
-    # threshold is 4m (NOT a few seconds) on purpose: the capacity-absorb path
-    # (§3.3) requires the absorb-target spare node to NOT be in the placeholder's
-    # near-deadline hostname-exclusion set, i.e. the spare must stay BELOW the
-    # threshold for the whole rotation. The Go driver provisions the candidate,
-    # ages it to ~threshold, then provisions a FRESH spare — so the candidate
-    # crosses first (sole eligible) while the spare stays young. See e2e_test.go
-    # testCapacityAbsorb for the timing rationale. Keep this in sync with the
-    # ageThreshold constant used by the Go driver.
-    ageThreshold: 4m
-    minRotationChances: 2
-
-    # The effective window is the UNION of every entry (spec §3.1). Cover all
-    # seven days 00:00–23:59 so the window is effectively always open and the
-    # test never has to wait for a window edge. (A 1-minute gap at midnight is
-    # irrelevant — the suite runs in well under a minute of in-window work.)
-    maintenanceWindows:
-      - timezone: UTC
-        days: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
-        start: "00:00"
-        end: "23:59"
-
-    surge:
-      maxUnavailable: 1
-      # readyTimeout is generous enough for KWOK to bind/drain. cooldownAfter is
-      # tiny so back-to-back subtests are not gated by a prior success's cooldown.
-      #
-      # retryBackoff is SHORT here on purpose. The pending handler stamps
-      # started-at and immediately re-reads the candidate through the controller's
-      # informer cache (advancePending); under KWOK that cached read can briefly
-      # lag the write, so a freshly selected candidate occasionally mis-fires the
-      # readyTimeout rollback and lands in `failed`. A long backoff would strand it
-      # there for the whole subtest. A short backoff lets the state machine re-enter
-      # `pending` within the window and converge, exercising the exact same
-      # absorb→drain→complete path. (The capacity-absorb spare never ages into the
-      # placeholder's hostname exclusion across retries: that set is keyed on
-      # expireAfter/leadTime, set far out here, not on ageThreshold — so retries do
-      # not erode determinism.) See test/e2e/kwok/README.md.
-      readyTimeout: 2m
-      cooldownAfter: 1s
-      # Short on purpose (see the note above): EscalatedBackoff caps at 8x the
-      # base, so a smaller base means a lower ceiling and more retry attempts
-      # inside a subtest window — important on loaded CI runners where the
-      # started-at cache lag fires more often, so a surge-completing subtest gets
-      # enough attempts to converge.
-      retryBackoff: 5s
-      matchNodeRequirements:
-        required:
-          - topology.kubernetes.io/zone
-          - kubernetes.io/arch
-          - karpenter.sh/capacity-type
-        preferred: []
-
-    prePull:
-      enabled: false
+# The controller resolves each NodePool's governing RotationPolicy at reconcile
+# time (issue #119); it no longer reads a policy.yaml ConfigMap. The live policy
+# for the e2e is manifests/rotationpolicy.yaml (applied by bootstrap.sh after the
+# Helm install) — it carries the ageThreshold/surge timings the Go driver depends
+# on. Disable the chart's bundled sample RotationPolicy so that manifest is the
+# only policy object in the cluster.
+rotationPolicy:
+  create: false
