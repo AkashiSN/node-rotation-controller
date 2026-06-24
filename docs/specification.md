@@ -983,6 +983,13 @@ data:
 - Semantic versioning (`vMAJOR.MINOR.PATCH`)
 - Pre-1.0 releases (`v0.x.y`) until v1 scope and CRD shape are stable
 - API compatibility surface: the `RotationPolicy` CRD schema (stabilizing `v1alpha1` → `v1`), Prometheus metric names, annotation keys
+- **Distribution.** A `vX.Y.Z` git tag publishes, to GitHub Container Registry
+  (ghcr.io) as OCI artifacts at the same version: the multi-arch controller image
+  (`ghcr.io/akashisn/node-rotation-controller`, `linux/amd64,linux/arm64`) and the
+  Helm chart (`oci://ghcr.io/akashisn/charts/node-rotation-controller`). The
+  release pipeline guards that the tag matches `Chart.yaml` `version`==`appVersion`
+  before publishing; the tag is the source of truth.
+- Install: `helm install ... oci://ghcr.io/akashisn/charts/node-rotation-controller --version X.Y.Z`.
 
 ## 6.2 Roadmap
 
