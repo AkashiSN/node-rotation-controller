@@ -77,14 +77,29 @@ See the [compatibility policy](docs/specification.md#21-scope-and-compatibility)
 ```sh
 helm install node-rotation-controller charts/node-rotation-controller \
   --namespace node-rotation-system --create-namespace \
-  --set-json 'config.policy.nodepoolSelectors=[{"matchLabels":{"workload":"api"}}]'
+  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
 ```
 
 The chart installs the controller (`replicas=2` with leader election), its RBAC,
-the `node-rotation-config` ConfigMap, and the dedicated negative-priority
+the cluster-scoped `RotationPolicy` CRD (from the chart's `crds/` directory) plus
+a sample `RotationPolicy` object, and the dedicated negative-priority
 `PriorityClass` for the surge placeholder Pod (spec §3.3, §4.3, §5.1). Configure
-rotation by editing `config.policy` (the spec §5.4 schema) — see
+rotation by editing `rotationPolicy.spec` (the spec §5.4 schema) — see
 [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml).
+Set `rotationPolicy.create=false` to author your own `RotationPolicy` objects
+(one per divergent policy); a NodePool matched by none is simply not rotated.
+
+### Upgrading from the ConfigMap (pre-#119)
+
+Releases before [#119](https://github.com/AkashiSN/node-rotation-controller/issues/119)
+carried policy in a single `node-rotation-config` ConfigMap (`config.policy.*`).
+That ConfigMap is removed; policy now lives in cluster-scoped `RotationPolicy`
+objects. The field shapes are 1:1 — lift each entry of the old
+`config.policy.nodepoolSelectors[]` into its own `RotationPolicy`, with
+`matchLabels` moving to `spec.nodePoolSelector.matchLabels` and every other field
+(`ageThreshold`, `minRotationChances`, `maintenanceWindows`, `surge`, `prePull`)
+copied verbatim under `spec`. Pre-1.0, this is an outright replacement with no
+dual-support path (spec §5.4).
 
 ## Getting involved
 

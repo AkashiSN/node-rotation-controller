@@ -168,16 +168,28 @@ logging:
   # -- Enable development-mode (human-readable) logging. Production uses JSON.
   development: false
 
-# The policy.yaml document (spec §5.4) rendered verbatim into the
-# node-rotation-config ConfigMap via toYaml. Edit these structured values rather
-# than a YAML blob so --set works and the controller validates the result.
-config:
-  policy:
-    # NodePools in scope, matched by label (spec §3.2). MUST be non-empty.
-    nodepoolSelectors:
-      - matchLabels:
-          # example; adjust to your NodePool labels
-          workload: api
+# A sample cluster-scoped RotationPolicy (spec §5.4, issue #119). The controller
+# resolves each NodePool's governing RotationPolicy at reconcile time — it no
+# longer reads the former policy.yaml ConfigMap. Everything under `spec` is the
+# RotationPolicy spec rendered verbatim via toYaml, so --set works on any field
+# and the values schema validates the result. Set create=false to manage your own
+# RotationPolicy objects out-of-band (one per divergent policy).
+rotationPolicy:
+  # -- Install the sample RotationPolicy below. Disable to author your own.
+  create: true
+  # -- RotationPolicy object name. Cluster-scoped (not release-namespaced);
+  # defaults to the chart fullname when empty. A second release in the same
+  # cluster must set create=false to avoid colliding on this name.
+  name: ""
+  spec:
+    # NodePools this policy governs, matched by label (spec §3.2, §5.4). A
+    # standard label selector (matchLabels and/or matchExpressions). A NodePool
+    # matched by no RotationPolicy is not rotated (its expireAfter backstop still
+    # applies); an equal-specificity tie between policies is a hard error.
+    nodePoolSelector:
+      matchLabels:
+        # example; adjust to your NodePool labels
+        workload: api
 
     # Derived per NodePool (spec §3.2). An explicit Go duration override is
     # allowed but still validated (recomputed G < 1 is fatal, G < K warns).
@@ -185,7 +197,7 @@ config:
     # K; floor 1, values < 2 only warn (spec §3.2).
     minRotationChances: 2
 
-    # The effective window is the UNION of all entries (spec §3.1).
+    # The effective window is the UNION of all entries (spec §3.1), per policy.
     maintenanceWindows:
       - timezone: Asia/Tokyo
         days: [Wed, Sat]

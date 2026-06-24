@@ -867,7 +867,7 @@ The sweep runs **exactly once, gated before the first reconcile does any work** 
 
 ## 5.4 Configuration Schema
 
-The configuration carrier is the cluster-scoped `RotationPolicy` CRD, so distinct NodePools can carry divergent policy (issue #119). The controller resolves each NodePool's governing policy from the cluster's `RotationPolicy` objects at reconcile time — it no longer reads the former single `policy.yaml` ConfigMap. The ConfigMap is documented at the end of this section for historical reference only; it is no longer consumed and is removed from the Helm chart in a follow-up.
+The configuration carrier is the cluster-scoped `RotationPolicy` CRD, so distinct NodePools can carry divergent policy (issue #119). The controller resolves each NodePool's governing policy from the cluster's `RotationPolicy` objects at reconcile time — it no longer reads the former single `policy.yaml` ConfigMap. The ConfigMap is documented at the end of this section for historical reference only; it is no longer consumed and has been removed from the Helm chart, which now ships the CRD and a sample `RotationPolicy`.
 
 ### RotationPolicy CRD (`noderotation.io/v1alpha1`)
 
@@ -929,7 +929,7 @@ Because a single `RotationPolicy` change can alter which policy wins — or whet
 
 ### ConfigMap (legacy — no longer read by the controller)
 
-The single `policy.yaml` ConfigMap below was the v0.x carrier. The controller no longer reads it; it is retained here only to document the one-to-one field mapping into a `RotationPolicy` (`nodepoolSelectors[].matchLabels` → `spec.nodePoolSelector.matchLabels`, every other field unchanged). The Helm chart drops the ConfigMap in a follow-up.
+The single `policy.yaml` ConfigMap below was the v0.x carrier. The controller no longer reads it; it is retained here only to document the one-to-one field mapping into a `RotationPolicy` (`nodepoolSelectors[].matchLabels` → `spec.nodePoolSelector.matchLabels`, every other field unchanged). The Helm chart no longer ships it — it installs the CRD and a sample `RotationPolicy` instead.
 
 ```yaml
 apiVersion: v1

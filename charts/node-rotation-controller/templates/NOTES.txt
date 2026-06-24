@@ -3,25 +3,56 @@ node-rotation-controller {{ .Chart.AppVersion }} is installed in namespace {{ .R
 It rotates Karpenter-managed nodes make-before-break within your maintenance
 window, before Karpenter's forceful expireAfter fires (spec §3).
 
+Rotation policy is now a cluster-scoped RotationPolicy CRD (spec §5.4) — one
+object per divergent policy. The former policy.yaml ConfigMap has been removed.
+
 Next steps:
 
-1. Point it at your NodePools. Edit config.policy.nodepoolSelectors so the
-   matchLabels select the NodePools you want rotated:
+{{- if .Values.rotationPolicy.create }}
+
+1. A sample RotationPolicy named "{{ .Values.rotationPolicy.name | default (include "node-rotation-controller.fullname" .) }}" was installed. Point it at your
+   NodePools by editing rotationPolicy.spec.nodePoolSelector so the matchLabels
+   select the NodePools you want rotated:
 
      helm upgrade {{ .Release.Name }} <chart> \
        --namespace {{ .Release.Namespace }} \
-       --set-json 'config.policy.nodepoolSelectors=[{"matchLabels":{"workload":"api"}}]'
+       --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
 
-2. Set your maintenance window (config.policy.maintenanceWindows). The current
-   window is:
-{{- range .Values.config.policy.maintenanceWindows }}
+2. Set your maintenance window (rotationPolicy.spec.maintenanceWindows). The
+   current window is:
+{{- range .Values.rotationPolicy.spec.maintenanceWindows }}
      - {{ .timezone }} {{ .days }} {{ .start }}-{{ .end }}
+{{- end }}
+{{- else }}
+
+1. rotationPolicy.create is false — no RotationPolicy was installed. Author one
+   per NodePool group you want rotated (spec §5.4):
+
+     kubectl apply -f - <<'EOF'
+     apiVersion: noderotation.io/v1alpha1
+     kind: RotationPolicy
+     metadata:
+       name: api
+     spec:
+       nodePoolSelector:
+         matchLabels:
+           workload: api
+       maintenanceWindows:
+         - timezone: Asia/Tokyo
+           days: [Wed, Sat]
+           start: "02:00"
+           end: "06:00"
+     EOF
+
+   A NodePool matched by no RotationPolicy is not rotated (its expireAfter
+   backstop still applies).
 {{- end }}
 
 3. Confirm the controller is healthy and which replica holds the leader Lease:
 
      kubectl -n {{ .Release.Namespace }} get deploy {{ include "node-rotation-controller.fullname" . }}
      kubectl -n {{ .Release.Namespace }} get lease node-rotation-controller.noderotation.io
+     kubectl get rotationpolicies
 
 {{- if .Values.metrics.service.enabled }}
 

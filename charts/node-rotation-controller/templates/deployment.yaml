@@ -12,13 +12,10 @@ spec:
       {{- include "node-rotation-controller.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      {{- with .Values.podAnnotations }}
       annotations:
-        # Roll the Deployment when the policy changes so the new config is picked
-        # up (the controller reads policy.yaml once at startup, spec §5.4).
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
+      {{- end }}
       labels:
         {{- include "node-rotation-controller.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
@@ -38,7 +35,6 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect
-            - --config-path=/etc/node-rotation/policy.yaml
             # Placeholder Pods are created in the controller's own namespace.
             - --namespace={{ .Release.Namespace }}
             - --metrics-bind-address=:{{ .Values.metrics.service.port }}
@@ -71,14 +67,6 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          volumeMounts:
-            - name: config
-              mountPath: /etc/node-rotation
-              readOnly: true
-      volumes:
-        - name: config
-          configMap:
-            name: node-rotation-config
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

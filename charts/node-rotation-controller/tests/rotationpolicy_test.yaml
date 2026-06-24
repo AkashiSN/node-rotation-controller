@@ -1,0 +1,55 @@
+suite: RotationPolicy sample (spec §5.4, issue #119)
+# Asserts the chart ships a cluster-scoped RotationPolicy carrying the sample
+# policy, gated by rotationPolicy.create. The CRD itself lives in crds/ (applied
+# by Helm before templates); this suite covers only the sample CR object.
+templates:
+  - templates/rotationpolicy.yaml
+tests:
+  - it: renders a cluster-scoped RotationPolicy with the sample spec by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: apiVersion
+          value: noderotation.io/v1alpha1
+      - equal:
+          path: kind
+          value: RotationPolicy
+      # cluster-scoped: never release-namespaced
+      - isNull:
+          path: metadata.namespace
+      # name defaults to the chart fullname
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-node-rotation-controller
+      - equal:
+          path: spec.nodePoolSelector.matchLabels.workload
+          value: api
+      - equal:
+          path: spec.ageThreshold
+          value: auto
+      - equal:
+          path: spec.minRotationChances
+          value: 2
+      # v1 is surge-only and serial
+      - equal:
+          path: spec.surge.maxUnavailable
+          value: 1
+      - equal:
+          path: spec.prePull.enabled
+          value: false
+
+  - it: is not rendered when rotationPolicy.create is false
+    set:
+      rotationPolicy.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: honors an explicit rotationPolicy.name
+    set:
+      rotationPolicy.name: api
+    asserts:
+      - equal:
+          path: metadata.name
+          value: api
