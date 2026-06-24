@@ -56,8 +56,8 @@ Versions this was last validated on (2026-06-22): **EKS Auto Mode, K8s 1.33,
 
 The controller rotates a NodePool when **all** of these hold (spec §3.2, §5.2):
 
-- the NodePool carries a label matched by the controller's `nodepoolSelectors`
-  (here `noderotation-poc/in-scope: "true"`);
+- the NodePool carries a label matched by a RotationPolicy's `nodePoolSelector`
+  (here `noderotation-poc/in-scope: "true"`, set in `scenarios/rotationpolicy.yaml`);
 - a maintenance window is open (here a 24×7 window — always open);
 - a candidate NodeClaim is older than `ageThreshold` (here **5m**);
 - the start gates pass (no freeze, cooldown elapsed) and the surge fits the
@@ -128,6 +128,12 @@ helm install node-rotation-controller ../../../charts/node-rotation-controller \
   -f scenarios/controller-values.yaml \
   --set image.repository="$REPO" --set image.tag=poc \
   --wait --timeout 8m
+
+# Apply the live RotationPolicy (issue #119). The chart's crds/ installed the CRD
+# first, and controller-values.yaml set rotationPolicy.create=false, so this is
+# the only policy object. The controller WATCHES it, so later scenarios change
+# knobs with `kubectl patch rotationpolicy nrc-poc …` — no restart.
+kubectl apply -f scenarios/rotationpolicy.yaml
 ```
 
 Installing onto a zero-node cluster makes Auto Mode launch a node in the
@@ -140,11 +146,13 @@ kubectl -n node-rotation-system get lease node-rotation-controller.noderotation.
 kubectl -n node-rotation-system logs deploy/node-rotation-controller | grep -i "Starting workers"
 ```
 
-`scenarios/controller-values.yaml` sets the test knobs (rationale in the file):
-`ageThreshold: 5m`, always-open window, `surge.readyTimeout: 15m`,
-`cooldownAfter: 1m`, `retryBackoff: 30m`, single replica. **The `config.policy`
-block is read once at startup** — changing it later needs
-`helm upgrade … && kubectl rollout restart` (used in Scenario C).
+`scenarios/controller-values.yaml` sets the controller knobs (single replica,
+off-pool affinity); the rotation policy lives in `scenarios/rotationpolicy.yaml`
+(rationale in the files): `ageThreshold: 5m`, always-open window,
+`surge.readyTimeout: 15m`, `cooldownAfter: 1m`, `retryBackoff: 30m`. **The
+RotationPolicy is watched live** (issue #119) — changing a knob is a
+`kubectl patch rotationpolicy nrc-poc …` that takes effect without a controller
+restart (used in Scenarios C, L, M).
 
 ---
 
@@ -309,18 +317,13 @@ scenario left it — see [Gotchas](#6-gotchas--troubleshooting)). The pool must 
 headroom (`limits.cpu: 16`, restored after Scenario B).
 
 **Run.** Shorten `readyTimeout` below the real node-ready time (~30s) so even a
-normal surge times out, then restart the controller to load it and trigger:
+normal surge times out, then trigger. The RotationPolicy is watched live, so the
+patch applies without a restart:
 
 ```bash
-# render a values file with readyTimeout: 15s (keep the long retryBackoff)
-sed 's/      readyTimeout: 15m/      readyTimeout: 15s/' \
-  scenarios/controller-values.yaml > /tmp/scenario-c-values.yaml
-
-helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
-  --namespace node-rotation-system -f /tmp/scenario-c-values.yaml \
-  --set image.repository="$REPO" --set image.tag=poc
-kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
-kubectl rollout status  deploy/node-rotation-controller -n node-rotation-system --timeout=120s
+# patch readyTimeout 15m -> 15s live (keep the long retryBackoff)
+kubectl patch rotationpolicy nrc-poc --type merge \
+  -p '{"spec":{"surge":{"readyTimeout":"15s"}}}'
 
 kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
 ```
@@ -347,15 +350,13 @@ noderotation_in_progress{nodepool="nrc-poc"} 0
 Remove the label promptly — `retryBackoff` (30m) keeps it from retrying while you
 inspect, but the label off is the definitive halt.
 
-**Cleanup.** Restore the normal `readyTimeout` and clear the failed marker so the
-candidate is reusable:
+**Cleanup.** Restore the normal `readyTimeout` (live patch) and clear the failed
+marker so the candidate is reusable:
 
 ```bash
 kubectl label nodepool nrc-poc noderotation-poc/in-scope-
-helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
-  --namespace node-rotation-system -f scenarios/controller-values.yaml \
-  --set image.repository="$REPO" --set image.tag=poc
-kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
+kubectl patch rotationpolicy nrc-poc --type merge \
+  -p '{"spec":{"surge":{"readyTimeout":"15m"}}}'
 # make the candidate fresh again (see Gotchas):
 C=$(kubectl get nodeclaims -l karpenter.sh/nodepool=nrc-poc -o jsonpath='{.items[0].metadata.name}')
 kubectl annotate nodeclaim "$C" noderotation.io/state- noderotation.io/failed-at- noderotation.io/retry-count-
@@ -679,24 +680,22 @@ candidate (§3.1).
 **two** replicas so two `nrc-poc` nodes exist (`kubectl scale deploy poc-workload
 --replicas=2`), both `>ageThreshold`.
 
-**Run.** `maintenanceWindows` is read at startup, so the boundary is made
-deterministic by closing the window while a rotation is in-flight (rather than
-racing a wall-clock minute):
+**Run.** The boundary is made deterministic by closing the window *live* while a
+rotation is in-flight (rather than racing a wall-clock minute). The RotationPolicy
+is watched, so the patch closes the window with no restart, and the in-flight
+rotation (its state on annotations) keeps going:
 
 ```bash
 kubectl label nodepool nrc-poc noderotation-poc/in-scope=true --overwrite
 # wait until the oldest candidate is state=pending (rotation 1 in-flight)
-# close the window: end 23:59 -> 00:01 (now is outside [00:00,00:01]) and restart
-sed 's/end: "23:59"/end: "00:01"/' scenarios/controller-values.yaml > /tmp/win-closed.yaml
-helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
-  --namespace node-rotation-system -f /tmp/win-closed.yaml \
-  --set image.repository="$REPO" --set image.tag=poc
-kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
+# close the window live: end 23:59 -> 00:01 (now is outside [00:00,00:01])
+kubectl patch rotationpolicy nrc-poc --type merge \
+  -p '{"spec":{"maintenanceWindows":[{"timezone":"UTC","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"start":"00:00","end":"00:01"}]}}'
 ```
 
-**Expected.** Despite the window now being **closed** (and the controller having
-restarted), rotation 1 **still completes** — the in-flight rotation finishes past
-the boundary. Rotation 2 (the second candidate) does **not** start:
+**Expected.** Despite the window now being **closed**, rotation 1 **still
+completes** — the in-flight rotation finishes past the boundary. Rotation 2 (the
+second candidate) does **not** start:
 
 ```text
 noderotation_window_active 0            # window closed
@@ -704,13 +703,11 @@ noderotation_candidates{nodepool="nrc-poc"} 1   # second candidate still eligibl
 noderotation_in_progress{nodepool="nrc-poc"} 0  # but no new rotation starts
 ```
 
-**Cleanup.** Restore the open window and halt:
+**Cleanup.** Restore the open window (live patch) and halt:
 
 ```bash
-helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
-  --namespace node-rotation-system -f scenarios/controller-values.yaml \
-  --set image.repository="$REPO" --set image.tag=poc
-kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
+kubectl patch rotationpolicy nrc-poc --type merge \
+  -p '{"spec":{"maintenanceWindows":[{"timezone":"UTC","days":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"start":"00:00","end":"23:59"}]}}'
 kubectl label nodepool nrc-poc noderotation-poc/in-scope-
 kubectl scale deploy poc-workload --replicas=1
 ```
@@ -791,12 +788,9 @@ blocked by `limits`, and a short `readyTimeout`:
 
 ```bash
 kubectl apply -f scenarios/workload-absorb.yaml -l app=poc-absorb-cand   # candidate (250m), >ageThreshold
-# shorten readyTimeout so the rollback is quick (e.g. 120s) and restart
-sed 's/      readyTimeout: 15m/      readyTimeout: 120s/' scenarios/controller-values.yaml > /tmp/rt-short.yaml
-helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
-  --namespace node-rotation-system -f /tmp/rt-short.yaml \
-  --set image.repository="$REPO" --set image.tag=poc
-kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
+# shorten readyTimeout so the rollback is quick (e.g. 120s) — live patch, no restart
+kubectl patch rotationpolicy nrc-poc --type merge \
+  -p '{"spec":{"surge":{"readyTimeout":"120s"}}}'
 # blocker (high priority, anti-affinity to the candidate) claims the only spare 4-vCPU node
 kubectl apply -f scenarios/preemption.yaml -l app=poc-blocker
 kubectl wait --for=condition=Ready pod poc-blocker --timeout=5m
@@ -827,11 +821,9 @@ kubectl label nodepool nrc-poc noderotation-poc/in-scope-
 kubectl delete -f scenarios/preemption.yaml --ignore-not-found
 kubectl delete -f scenarios/workload-absorb.yaml --ignore-not-found
 kubectl patch nodepool nrc-poc --type merge -p '{"spec":{"limits":{"cpu":"16"}}}'
-# restore readyTimeout and clear the failed marker (see Gotchas)
-helm upgrade node-rotation-controller ../../../charts/node-rotation-controller \
-  --namespace node-rotation-system -f scenarios/controller-values.yaml \
-  --set image.repository="$REPO" --set image.tag=poc
-kubectl rollout restart deploy/node-rotation-controller -n node-rotation-system
+# restore readyTimeout (live patch) and clear the failed marker (see Gotchas)
+kubectl patch rotationpolicy nrc-poc --type merge \
+  -p '{"spec":{"surge":{"readyTimeout":"15m"}}}'
 ```
 
 ---
@@ -926,9 +918,11 @@ kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/tem
   the test. Recreate the pool cleanly instead. `spec.limits` and
   `spec.disruption.*` are NOT in the template — patch them live (Scenario B).
 
-- **`config.policy` changes need a restart.** The controller reads `policy.yaml`
-  once at startup; `helm upgrade` alone won't apply a `readyTimeout`/`ageThreshold`
-  change — follow it with `kubectl rollout restart deploy/node-rotation-controller`.
+- **Policy changes are applied live (no restart).** The controller watches the
+  RotationPolicy CRD (issue #119), so a `readyTimeout`/`ageThreshold`/window change
+  is a `kubectl patch rotationpolicy nrc-poc …` that takes effect at the next
+  reconcile — no `helm upgrade` and no `kubectl rollout restart`. (Pre-#119 the
+  policy lived in a `policy.yaml` ConfigMap read once at startup; that path is gone.)
 
 - **Metrics reset on restart.** The `completed_total` counters are in-memory; a
   controller restart zeroes them. Capture a baseline after each restart.
