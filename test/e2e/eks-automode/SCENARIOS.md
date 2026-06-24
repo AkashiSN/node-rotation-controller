@@ -12,6 +12,11 @@ Every manifest referenced lives in [`scenarios/`](scenarios/). All commands are
 copy-pasteable; cluster-specific values come from `terraform output`, so nothing
 account-specific is hard-coded.
 
+For the **recorded outcomes** of actually running this runbook (per-scenario
+verdicts and the concrete evidence observed on a given release), see
+[`VALIDATION.md`](VALIDATION.md). This file is the *how*; that file is the *what
+happened*.
+
 > **Cost.** Each scenario launches real EC2 (and Scenario A an EBS volume).
 > Follow the cleanup at the end of each scenario and the final
 > [Teardown](#teardown). The whole suite is a handful of `c6a.large`-class nodes
@@ -46,9 +51,10 @@ export REPO=$(terraform output -raw ecr_repository_url)
 export REGION=$(terraform output -raw region)
 ```
 
-Versions this was last validated on (2026-06-22): **EKS Auto Mode, K8s 1.33,
-`karpenter.sh/v1`**, controller image tag `poc`, region `us-west-2` (2 AZs:
-`us-west-2a`, `us-west-2b`).
+Reference environment: **EKS Auto Mode, K8s 1.33, `karpenter.sh/v1`**,
+controller image tag `poc`, region `us-west-2` (2 AZs: `us-west-2a`,
+`us-west-2b`). For the dated record of which release was validated on what, see
+[`VALIDATION.md`](VALIDATION.md).
 
 ---
 
@@ -159,8 +165,10 @@ restart (used in Scenarios C, L, M).
 ## 4. Scenarios
 
 Each scenario: **Goal → Preconditions → Run → Expected → Cleanup.** "Expected"
-quotes the values actually observed on 2026-06-22; node/claim IDs and exact
-seconds will differ, the shape will not.
+is the run-independent shape a correct run produces — the per-step pass
+criteria. The illustrative values are drawn from real runs; node/claim IDs and
+exact seconds will differ, the shape will not. For dated per-release run records
+see [`VALIDATION.md`](VALIDATION.md).
 
 ### Scenario 0 — core make-before-break surge
 
