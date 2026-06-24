@@ -1,0 +1,101 @@
+# .github/workflows/release.yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# contents: write -> create the GitHub Release; packages: write -> push to ghcr.
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/akashisn/node-rotation-controller
+  CHART_DIR: charts/node-rotation-controller
+  CHART_OCI: oci://ghcr.io/akashisn/charts
+
+jobs:
+  # Fail fast if the tag disagrees with Chart.yaml. The git tag is the source of
+  # truth; Chart.yaml is the human-readable record and must match it.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: check
+        run: |
+          out="$(.github/scripts/check-chart-version.sh "${GITHUB_REF_NAME}")"
+          echo "$out"
+          echo "${out}" >> "$GITHUB_OUTPUT"   # script prints version=<x.y.z>
+
+  image:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # semver from the git tag, plus latest (skipped for prerelease tags
+          # that contain a hyphen, e.g. v0.4.0-rc1).
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+      - name: Build and push (multi-arch)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  chart:
+    needs: [guard, image]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aquaproj/aqua-installer@v4.0.4
+        with:
+          aqua_version: v2.60.1
+          policy_allow: "true"
+      - name: Package chart
+        run: helm package "${CHART_DIR}" --destination dist
+      - name: Log in to ghcr.io (Helm OCI)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Push chart to OCI registry
+        run: |
+          helm push "dist/node-rotation-controller-${{ needs.guard.outputs.version }}.tgz" "${CHART_OCI}"
+      - name: Upload packaged chart artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chart-tgz
+          path: dist/*.tgz
+
+  release:
+    needs: [guard, chart]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: chart-tgz
+          path: dist
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*.tgz
