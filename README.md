@@ -74,6 +74,18 @@ See the [compatibility policy](docs/specification.md#21-scope-and-compatibility)
 > Karpenter or its CRDs — it only operates the `NodeClaim`/`NodePool` resources
 > Karpenter owns.
 
+Install the published chart from the GitHub Container Registry (OCI):
+
+```sh
+helm install node-rotation-controller \
+  oci://ghcr.io/akashisn/charts/node-rotation-controller \
+  --version 0.3.0 \
+  --namespace node-rotation-system --create-namespace \
+  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
+```
+
+Or install from a local checkout of this repository:
+
 ```sh
 helm install node-rotation-controller charts/node-rotation-controller \
   --namespace node-rotation-system --create-namespace \
@@ -88,6 +100,12 @@ rotation by editing `rotationPolicy.spec` (the spec §5.4 schema) — see
 [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml).
 Set `rotationPolicy.create=false` to author your own `RotationPolicy` objects
 (one per divergent policy); a NodePool matched by none is simply not rotated.
+
+> **Maintainer note (first release only):** the ghcr.io image and chart
+> packages are created **private** on first publish. Make
+> `node-rotation-controller` and `charts/node-rotation-controller` public in the
+> GitHub *Packages* settings so unauthenticated `helm install` / image pulls
+> work. Releases are cut by pushing a `vX.Y.Z` tag (see the Release workflow).
 
 ### Upgrading from the ConfigMap (pre-#119)
 
