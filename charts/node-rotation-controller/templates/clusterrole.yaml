@@ -47,5 +47,11 @@ rules:
     resources: ["rotationpolicies"]
     # The controller resolves each NodePool's governing RotationPolicy at reconcile
     # time and watches them for changes (spec §5.4, issue #119). Read-only here;
-    # status writes (rotationpolicies/status) are granted when #124 populates them.
+    # status writes are granted on the rotationpolicies/status subresource below.
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["noderotation.io"]
+    resources: ["rotationpolicies/status"]
+    # The status subresource is an observational, derived view (#119 deliverable
+    # 3, §5.3); the controller recomputes and writes it but never reads it back as
+    # authoritative state.
+    verbs: ["get", "update", "patch"]

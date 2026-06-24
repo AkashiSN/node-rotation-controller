@@ -140,6 +140,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.RotationPolicyStatusReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to set up RotationPolicy status reconciler")
+		os.Exit(1)
+	}
+
 	// The spec §5.3 startup sweep is gated into the reconciler's first Reconcile
 	// (see RotationReconciler.sweepOnce), so it completes before any NodePool can
 	// start or resume a rotation. A separate manager Runnable would not be ordered
