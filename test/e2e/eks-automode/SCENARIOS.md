@@ -953,6 +953,10 @@ Remove the scenario objects, the controller, then the whole stack:
 kubectl delete -f scenarios/statefulset-ebs.yaml --ignore-not-found
 kubectl delete -f scenarios/workload.yaml --ignore-not-found
 kubectl delete -f scenarios/nodepool.yaml --ignore-not-found
+# The RotationPolicy is applied with kubectl (rotationPolicy.create=false), so it
+# is NOT owned by the release — `helm uninstall` won't remove it. Delete it
+# explicitly so reruns start from a clean, policy-free cluster.
+kubectl delete -f scenarios/rotationpolicy.yaml --ignore-not-found
 helm uninstall node-rotation-controller -n node-rotation-system
 
 # then the ephemeral cluster + all AWS resources:
