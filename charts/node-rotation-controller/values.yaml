@@ -197,6 +197,14 @@ logging:
 #           - { timezone: Asia/Tokyo, days: [Sun], start: "03:00", end: "05:00" }
 rotationPolicies: []
 
+# DEPRECATED (issue #153): the singular `rotationPolicy` is superseded by the
+# `rotationPolicies` list above and is slated for removal at the 1.0 milestone.
+# It still works and stays the default for now; prefer `rotationPolicies` for new
+# installs — a single-entry list is the one-to-one replacement:
+#   rotationPolicies:
+#     - name: <fullname-or-your-name>
+#       spec: { ...this spec... }
+#
 # A sample cluster-scoped RotationPolicy (spec §5.4, issue #119). The controller
 # resolves each NodePool's governing RotationPolicy at reconcile time — it no
 # longer reads the former policy.yaml ConfigMap. Everything under `spec` is the

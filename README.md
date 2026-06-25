@@ -97,13 +97,16 @@ The chart installs the controller (`replicas=2` with leader election), its RBAC,
 the cluster-scoped `RotationPolicy` CRD (from the chart's `crds/` directory) plus
 a sample `RotationPolicy` object, and the dedicated negative-priority
 `PriorityClass` for the surge placeholder Pod (spec §3.3, §4.3, §5.1). Configure
-rotation by editing `rotationPolicy.spec` (the spec §5.4 schema) — see
+rotation by listing policies under `rotationPolicies` (the spec §5.4 schema) — the
+chart renders one `RotationPolicy` per entry, so you can give each NodePool a
+different window / `ageThreshold` / surge. See
 [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml).
-For per-NodePool differentiation, list several policies under `rotationPolicies`
-and the chart renders one `RotationPolicy` per entry (it supersedes the singular
-sample when non-empty). Set `rotationPolicy.create=false` to author your own
-`RotationPolicy` objects out-of-band instead (one per divergent policy); a
-NodePool matched by none is simply not rotated. See
+The singular `rotationPolicy.spec` shown in the quickstart above still works and
+stays the default for now, but is **deprecated** (issue #153) and slated for
+removal at 1.0 — a one-entry `rotationPolicies` list is the one-to-one
+replacement. Set `rotationPolicy.create=false` with `rotationPolicies: []` to
+author your own `RotationPolicy` objects out-of-band instead (one per divergent
+policy); a NodePool matched by none is simply not rotated. See
 [`examples/`](examples/) for ready-to-adapt policies — a single catch-all,
 divergent per-NodePool policies, specificity resolution, and maintenance-window
 composition.

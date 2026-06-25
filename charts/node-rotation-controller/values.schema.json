@@ -92,6 +92,8 @@
     },
     "rotationPolicy": {
       "type": "object",
+      "deprecated": true,
+      "description": "DEPRECATED (issue #153): superseded by `rotationPolicies` and slated for removal at the 1.0 milestone. Still rendered (and the default) while `rotationPolicies` is empty; a single-entry `rotationPolicies` list is the one-to-one replacement.",
       "properties": {
         "create": { "type": "boolean" },
         "name": { "type": "string" },

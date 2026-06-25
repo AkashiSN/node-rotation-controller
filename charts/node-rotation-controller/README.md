@@ -78,6 +78,11 @@ policy at reconcile time. The chart can install one sample policy for you
 (`rotationPolicy.create=true`), rendered verbatim from `rotationPolicy.spec`, so
 `--set`/`--set-json` works on any field and the values schema validates it.
 
+> **The singular `rotationPolicy` is deprecated** (issue #153) and slated for
+> removal at the 1.0 milestone. It still works and remains the default, but for
+> new installs prefer the [`rotationPolicies` list](#multiple-policies-per-nodepool)
+> below — even for a single policy, a one-entry list is the one-to-one replacement.
+
 A complete `RotationPolicy`:
 
 ```yaml
@@ -229,9 +234,9 @@ for how to read each metric and respond.
 | `placeholder.priorityClass.value` | `-10` | Priority value. Negative so the placeholder is the deliberate preemption victim (spec §3.3). |
 | `logging.development` | `false` | Development-mode (human-readable) logging. Production uses JSON. |
 | `rotationPolicies` | `[]` | List of RotationPolicy objects, one per entry (`{name, spec, [create]}`), for per-NodePool differentiation. Supersedes the singular `rotationPolicy` when non-empty (see [Multiple policies](#multiple-policies-per-nodepool)). |
-| `rotationPolicy.create` | `true` | Install the sample RotationPolicy. Disable to author your own. Ignored when `rotationPolicies` is non-empty. |
-| `rotationPolicy.name` | `""` | RotationPolicy object name. Cluster-scoped; defaults to the chart fullname when empty. |
-| `rotationPolicy.spec` | see `values.yaml` | The RotationPolicy spec, rendered verbatim (see [Configuring rotation](#configuring-rotation-rotationpolicy)). |
+| `rotationPolicy.create` | `true` | **Deprecated** (see `rotationPolicies`). Install the sample RotationPolicy. Disable to author your own. Ignored when `rotationPolicies` is non-empty. |
+| `rotationPolicy.name` | `""` | **Deprecated.** RotationPolicy object name. Cluster-scoped; defaults to the chart fullname when empty. |
+| `rotationPolicy.spec` | see `values.yaml` | **Deprecated.** The RotationPolicy spec, rendered verbatim (see [Configuring rotation](#configuring-rotation-rotationpolicy)). |
 
 The chart ships a [`values.schema.json`](values.schema.json) that validates
 values at install time as a fast first line of defense; the CRD and controller

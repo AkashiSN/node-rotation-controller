@@ -21,6 +21,10 @@ Next steps:
    equal-specificity tie between policies is a hard PolicyConflict (spec §5.4).
 {{- else if .Values.rotationPolicy.create }}
 
+NOTE: the singular `rotationPolicy` is deprecated (issue #153) and will be
+removed at 1.0 — prefer the `rotationPolicies` list (a one-entry list is the
+one-to-one replacement).
+
 1. A sample RotationPolicy named "{{ .Values.rotationPolicy.name | default (include "node-rotation-controller.fullname" .) }}" was installed. Point it at your
    NodePools by editing rotationPolicy.spec.nodePoolSelector so the matchLabels
    select the NodePools you want rotated:
