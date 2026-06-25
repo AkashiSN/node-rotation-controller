@@ -150,6 +150,24 @@ func TestWindowActiveGauge(t *testing.T) {
 	}
 }
 
+// policy_conflict is a recomputed 0/1 gauge like window_active: it must rise when
+// a pool is blocked by a RotationPolicy tie / runtime-invalid policy and fall back
+// to 0 once a single governing policy resolves, so the conflict alert clears
+// (spec §4.2/§5.4).
+func TestPolicyConflictGauge(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	rec := metrics.New(reg)
+
+	rec.ObservePolicyConflict("api", true)
+	if got := metricValue(t, reg, "noderotation_policy_conflict", map[string]string{"nodepool": "api"}); got != 1 {
+		t.Errorf("policy_conflict = %v, want 1", got)
+	}
+	rec.ObservePolicyConflict("api", false)
+	if got := metricValue(t, reg, "noderotation_policy_conflict", map[string]string{"nodepool": "api"}); got != 0 {
+		t.Errorf("policy_conflict = %v, want 0", got)
+	}
+}
+
 func TestDurationHistogramRecordsObservation(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	rec := metrics.New(reg)
@@ -226,6 +244,7 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 	rec.Success("api")
 	rec.ObserveDuration("api", controller.PhaseSurgeWait, time.Minute)
 	rec.ObserveWindow("api", true)
+	rec.ObservePolicyConflict("api", true)
 	rec.ObservePool("web", controller.PoolObservation{Candidates: 5}) // unrelated pool stays
 	rec.ObserveWindow("web", true)
 
@@ -236,7 +255,7 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 		"noderotation_candidates", "noderotation_in_progress", "noderotation_drain_stuck",
 		"noderotation_retry_count", "noderotation_short_lead_nodes", "noderotation_freeze_until_timestamp",
 		"noderotation_age_threshold_seconds", "noderotation_rotation_chances", "noderotation_window_period_seconds",
-		"noderotation_window_active",
+		"noderotation_window_active", "noderotation_policy_conflict",
 	} {
 		if metricPresent(t, reg, name, api) {
 			t.Errorf("%s{nodepool=api} still present after ForgetPool", name)
