@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/AkashiSN/node-rotation-controller/security/advisories/new
+    about: Report vulnerabilities privately — do not open a public issue. See SECURITY.md.
   - name: Design discussion
     url: https://github.com/AkashiSN/node-rotation-controller/discussions
     about: For open-ended design questions and Q&A, prefer Discussions over Issues.
