@@ -46,8 +46,8 @@ in the same PR.
 
 - Semantic Versioning (`vMAJOR.MINOR.PATCH`).
 - Pre-1.0 (`v0.x.y`) while the configuration schema and CRD shape stabilize.
-- The compatibility surface is: the ConfigMap schema, Prometheus metric names,
-  and annotation keys.
+- The compatibility surface is: the `RotationPolicy` CRD schema, Prometheus
+  metric names, and annotation keys.
 
 ## Scope reminder
 
