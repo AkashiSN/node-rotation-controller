@@ -145,11 +145,22 @@ func (r *RotationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		r.recorder().ForgetPool(pool.Name)
 		r.recorder().ObservePolicyConflict(pool.Name, true)
 		r.warn().EmitConflict(ctx, &pool, conflict)
+		// A contested pool stops being advanced, so an in-flight rotation anchored on
+		// it would be orphaned; roll it back while still surfacing the conflict (#141).
+		if err := r.reapUngovernedRotation(ctx, &pool); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	case pol == nil:
 		// No governing policy: not rotated (the expireAfter backstop still applies,
-		// spec §4). Drop any series left by a policy that used to govern it; a future
+		// spec §4). An in-flight rotation anchored before governance was lost is
+		// reaped first — no future reconcile would touch the now-ungoverned pool, so
+		// leaving its placeholder and do-not-disrupt marker would leak them (#141).
+		// Then drop any series left by a policy that used to govern it; a future
 		// RotationPolicy create/update re-enqueues the pool via the watch.
+		if err := r.reapUngovernedRotation(ctx, &pool); err != nil {
+			return ctrl.Result{}, err
+		}
 		r.recorder().ForgetPool(pool.Name)
 		r.warn().Forget(pool.Name)
 		return ctrl.Result{}, nil
@@ -1229,6 +1240,42 @@ func (r *RotationReconciler) anchorRotation(ctx context.Context, pool *karpv1.No
 	}
 	pool.Annotations[annotations.ActiveRotation] = name
 	return r.Update(ctx, pool)
+}
+
+// reapUngovernedRotation drives an in-flight rotation to a clean terminal state
+// when the controller has ceased to govern the pool — no RotationPolicy matches
+// it any longer, or it is contested by an unresolved tie (spec §5.4). In either
+// case Reconcile stops advancing the pool, so without this reap the anchored
+// rotation's artifacts would be orphaned: the placeholder Pod keeps holding
+// capacity and the candidate node keeps its controller-owned do-not-disrupt
+// marker, silently blocking Karpenter's voluntary disruption on that node
+// indefinitely, with no future reconcile to clean either up (issue #141).
+//
+// It rolls the rotation back to the same clean state advanceExpired leaves:
+// delete the placeholder, unfreeze every node carrying this rotation's surge-for
+// marker (lifting the controller's do-not-disrupt and cordon while preserving an
+// operator's own protections, spec §3.3/§5.3), and clear the anchor. It is a
+// no-op when the pool carries no anchor, so the common ungoverned-idle-pool path
+// is untouched.
+func (r *RotationReconciler) reapUngovernedRotation(ctx context.Context, pool *karpv1.NodePool) error {
+	claim := pool.Annotations[annotations.ActiveRotation]
+	if claim == "" {
+		return nil
+	}
+	log.FromContext(ctx).WithValues("nodepool", pool.Name, "claim", claim).
+		Info("ceased to govern a pool mid-rotation; reaping orphaned rotation artifacts")
+	if r.Events != nil {
+		r.Events.Eventf(pool, nil, corev1.EventTypeWarning, reasonGovernanceLost, actionReapRotation,
+			"NodePool left RotationPolicy governance with an in-flight rotation on %s; rolled it back (deleted placeholder, removed freeze markers and cordon, cleared anchor) so no do-not-disrupt marker or placeholder is orphaned",
+			claim)
+	}
+	if err := r.deletePlaceholder(ctx, claim); err != nil {
+		return err
+	}
+	if err := r.unfreezeNodes(ctx, claim); err != nil {
+		return err
+	}
+	return r.clearAnchor(ctx, pool)
 }
 
 func (r *RotationReconciler) clearAnchor(ctx context.Context, pool *karpv1.NodePool) error {

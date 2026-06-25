@@ -25,13 +25,14 @@ func sweep(t *testing.T, r *RotationReconciler) {
 	}
 }
 
-// frozenNode builds a controller-frozen node for the named rotation: the
-// do-not-disrupt + do-not-disrupt-owned + surge-for markers applyFreeze writes.
-func frozenNode(name, claimName string) *corev1.Node {
-	return testK8sNode(name, true, map[string]string{
+// frozenNode builds the controller-frozen surge node for the canonical rotation
+// (claim nc-old, as throughout this package's tests): the do-not-disrupt +
+// do-not-disrupt-owned + surge-for markers applyFreeze writes.
+func frozenNode() *corev1.Node {
+	return testK8sNode(surgeNode, true, map[string]string{
 		karpv1.DoNotDisruptAnnotationKey: "true",
 		annotations.DoNotDisruptOwned:    "true",
-		annotations.SurgeFor:             claimName,
+		annotations.SurgeFor:             "nc-old",
 	}, false)
 }
 
@@ -68,7 +69,7 @@ func TestSweepKeepsAnchoredPlaceholder(t *testing.T) {
 func TestSweepUnfreezesOrphanedNode(t *testing.T) {
 	r := newReconciler(t, testNow, nil,
 		testNodePool(nil),
-		frozenNode(surgeNode, "nc-old"),
+		frozenNode(),
 	)
 	sweep(t, r)
 	n := getNodeObj(t, r, surgeNode)
@@ -83,7 +84,7 @@ func TestSweepUnfreezesOrphanedNode(t *testing.T) {
 func TestSweepKeepsAnchoredNodeFrozen(t *testing.T) {
 	r := newReconciler(t, testNow, nil,
 		testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}),
-		frozenNode(surgeNode, "nc-old"),
+		frozenNode(),
 	)
 	sweep(t, r)
 	n := getNodeObj(t, r, surgeNode)

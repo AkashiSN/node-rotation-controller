@@ -88,6 +88,9 @@ func TestKWOKSurge(t *testing.T) {
 	t.Run("PlaceholderPreemptionVictim", func(t *testing.T) {
 		testPreemption(ctx, t, cl)
 	})
+	t.Run("GovernanceLossReapsRotation", func(t *testing.T) {
+		testGovernanceLossReap(ctx, t, cl)
+	})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -795,6 +798,142 @@ func testPreemption(ctx context.Context, t *testing.T, cl client.Client) {
 		}
 		return nil
 	})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Governance loss reaps an in-flight rotation (§5.4, issue #141). When a NodePool
+// leaves RotationPolicy governance WHILE a rotation is anchored, the controller
+// stops advancing it (governingPolicy yields NoMatch) — so it must reap the
+// artifacts it owns (placeholder, freeze markers, anchor) rather than orphan them.
+// A left-behind karpenter.sh/do-not-disrupt marker would otherwise silently block
+// Karpenter's voluntary Consolidation/Drift on that node indefinitely, with no
+// future reconcile to clear it (the startup sweep treats an anchored claim as live).
+//
+// Determinism: drive a normal absorb rotation and park it in `draining` with a
+// blocking PDB (the same hold testDoNotDisrupt/testPreemption use), so the surge
+// pair is stably frozen and the anchor is set. THEN drop nodepool-a's in-scope
+// label so the governing RotationPolicy no longer selects it (NoMatch). The next
+// reconcile must reap: anchor cleared, placeholder deleted, and both surge-pair
+// nodes unfrozen. The in-scope label is restored on teardown so later runs (and a
+// re-run of the suite against the shared cluster) still govern pool-a.
+func testGovernanceLossReap(ctx context.Context, t *testing.T, cl client.Client) {
+	defer resetCluster(ctx, t, cl)
+	// Re-govern pool-a before resetCluster runs (defers are LIFO) and before the
+	// next suite run, so dropping the label here does not leak past this subtest.
+	defer restoreInScope(ctx, t, cl)
+	// Keep the controller reconciling promptly through the static-KWOK quiet
+	// periods so the aged candidate is picked AND the post-label-drop reap fires
+	// without waiting on the 30s self-requeue (see startNudger).
+	defer startNudger(ctx, cl, poolA, poolB)()
+
+	const ageThreshold = 4 * time.Minute
+
+	applyDeployment(ctx, t, cl, deployment("cand", poolA, 300, ""))
+	candClaim := waitClaimProvisioned(ctx, t, cl, poolA)
+	candClaimObj, _ := getClaim(ctx, cl, candClaim)
+	candNode := candClaimObj.Status.NodeName
+
+	// Hold the candidate drain so the rotation parks in `draining` with the surge
+	// pair frozen and the anchor set — a stable in-flight snapshot to drop
+	// governance against. resetCluster removes the PDB on teardown.
+	pdb := blockingPDB("govloss-hold", map[string]string{"app": "cand"})
+	if err := cl.Create(ctx, pdb); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create govloss-hold PDB: %v", err)
+	}
+
+	time.Sleep(ageThreshold - 30*time.Second)
+	applyDeployment(ctx, t, cl, deployment("spare", poolA, 300, "cand"))
+	waitSpareRegistered(ctx, t, cl, candClaim)
+
+	// Confirm the rotation is in-flight: anchor set, the surge target frozen, and
+	// the candidate node carrying the controller-owned do-not-disrupt — the marker
+	// that would leak if governance were lost without a reap.
+	var surgeNode string
+	eventually(t, surgeBindBudget, "the rotation to be in-flight with the surge pair frozen", func() error {
+		pool, err := getNodePool(ctx, cl, poolA)
+		if err != nil {
+			return err
+		}
+		if poolAnno(pool, annotations.ActiveRotation) == "" {
+			return fmt.Errorf("no active-rotation anchor yet")
+		}
+		nodes, err := poolNodes(ctx, cl, poolA)
+		if err != nil {
+			return err
+		}
+		surgeNode = ""
+		for i := range nodes {
+			if nodes[i].Annotations[annotations.SurgeFor] == candClaim && nodes[i].Name != candNode {
+				surgeNode = nodes[i].Name
+			}
+		}
+		if surgeNode == "" {
+			return fmt.Errorf("surge target not frozen yet")
+		}
+		cn, err := getNode(ctx, cl, candNode)
+		if err != nil {
+			return fmt.Errorf("candidate node gone (rotation advanced too fast to observe in-flight): %v", err)
+		}
+		if !controllerOwnedDoNotDisrupt(cn) {
+			return fmt.Errorf("candidate node %s not yet carrying controller-owned do-not-disrupt", candNode)
+		}
+		return nil
+	})
+	ph, err := getPlaceholder(ctx, cl, candClaim)
+	if err != nil || ph == nil {
+		t.Fatalf("expected a placeholder Pod for the in-flight rotation (err=%v)", err)
+	}
+	t.Logf("rotation in-flight: anchor set, placeholder %s present, candidate node %s and surge target %s frozen",
+		ph.Name, candNode, surgeNode)
+
+	// Take pool-a OUT of governance mid-rotation: drop the in-scope label the
+	// RotationPolicy selects on, so the governing policy now NoMatches the pool.
+	dropInScope(ctx, t, cl)
+	t.Logf("dropped %s label from %s — pool is now ungoverned mid-rotation", inScopeLabelKey, poolA)
+
+	// The controller must REAP rather than orphan: the anchor is cleared, the
+	// placeholder deleted, and every surge-pair node unfrozen (no surge-for and no
+	// controller-owned do-not-disrupt left behind — issue #141).
+	eventually(t, surgeBindBudget, "the controller to clear the anchor after losing governance", func() error {
+		pool, err := getNodePool(ctx, cl, poolA)
+		if err != nil {
+			return err
+		}
+		if a := poolAnno(pool, annotations.ActiveRotation); a != "" {
+			return fmt.Errorf("anchor still held %q — pool ungoverned but rotation not reaped", a)
+		}
+		return nil
+	})
+	assertPlaceholderGone(ctx, t, cl, candClaim)
+	assertNoLingeringFreeze(ctx, t, cl, candClaim)
+	t.Logf("governance-loss reap complete: anchor cleared, placeholder gone, surge pair unfrozen — no orphaned do-not-disrupt")
+}
+
+// inScopeLabelKey is the NodePool label the KWOK RotationPolicy (manifests/
+// rotationpolicy.yaml) selects on; dropping it takes a pool out of governance.
+const inScopeLabelKey = "noderotation-e2e/in-scope"
+
+// dropInScope removes the in-scope label from nodepool-a via a merge patch (so it
+// never races the nudger's annotation patches on resourceVersion), taking the pool
+// out of the governing RotationPolicy's selector.
+func dropInScope(ctx context.Context, t *testing.T, cl client.Client) {
+	t.Helper()
+	patch := []byte(fmt.Sprintf(`{"metadata":{"labels":{%q:null}}}`, inScopeLabelKey))
+	if err := cl.Patch(ctx, &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: poolA}},
+		client.RawPatch(types.MergePatchType, patch)); err != nil {
+		t.Fatalf("drop in-scope label from %s: %v", poolA, err)
+	}
+}
+
+// restoreInScope re-adds the in-scope label so pool-a is governed again, leaving
+// the shared cluster as the manifests intend for any later subtest or suite re-run.
+func restoreInScope(ctx context.Context, t *testing.T, cl client.Client) {
+	t.Helper()
+	patch := []byte(fmt.Sprintf(`{"metadata":{"labels":{%q:"true"}}}`, inScopeLabelKey))
+	if err := cl.Patch(ctx, &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: poolA}},
+		client.RawPatch(types.MergePatchType, patch)); err != nil {
+		t.Logf("warning: restore in-scope label on %s: %v", poolA, err)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
