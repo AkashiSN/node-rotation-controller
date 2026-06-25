@@ -196,13 +196,13 @@ Rather than hand-tuning `ageThreshold` (which is error-prone — a too-loose val
 
 ```mermaid
 timeline
-    title One node's life - finish a graceful rotation before expireAfter (3.2 worked example, E=14d, P=4d, K=2)
-    Day 0 : NodeClaim created (creationTimestamp)
-    Age below ageThreshold : not yet a candidate
-    Age reaches ageThreshold (~5.9d) : becomes a rotation candidate
-    1st maintenance window in range : chance 1 to complete a surge
-    2nd maintenance window in range : chance 2 (K=2 keeps a retry in hand)
-    Day 14 deadline : expireAfter fires - Karpenter forceful expiry (backstop)
+    title One node's life — rotate before expireAfter (3.2 worked example)
+    Day 0 : NodeClaim created<br>(creationTimestamp)
+    Age below<br>ageThreshold : not yet<br>a candidate
+    Age reaches<br>ageThreshold (~5.9d) : becomes a<br>rotation candidate
+    1st window<br>in range : chance 1 to<br>complete a surge
+    2nd window<br>in range : chance 2 (K=2<br>keeps a retry)
+    Day 14<br>deadline : expireAfter fires —<br>Karpenter forceful<br>expiry (backstop)
 ```
 
 **Symbols**

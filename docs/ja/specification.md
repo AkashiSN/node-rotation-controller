@@ -196,13 +196,13 @@ maintenanceWindows:        # リスト。実効ウィンドウは全エントリ
 
 ```mermaid
 timeline
-    title 1 ノードの生涯 - expireAfter より前に graceful なローテーションを完了する（3.2 計算例 E=14d P=4d K=2）
-    Day 0 : NodeClaim 作成（creationTimestamp）
-    age が ageThreshold 未満 : まだ候補ではない
-    age が ageThreshold に到達（約 5.9d） : ローテーション候補になる
-    範囲内の 1 回目のウィンドウ : surge を完了する 1 回目の機会
-    範囲内の 2 回目のウィンドウ : 2 回目の機会（K=2 でリトライを手元に残す）
-    Day 14 deadline : expireAfter 発火 - Karpenter の強制失効（バックストップ）
+    title 1 ノードの生涯 — expireAfter より前にローテーションを完了（3.2 計算例）
+    Day 0 : NodeClaim 作成<br>（creationTimestamp）
+    age が<br>ageThreshold 未満 : まだ<br>候補ではない
+    age が ageThreshold<br>に到達（約 5.9d） : ローテーション<br>候補になる
+    1 回目の<br>ウィンドウ : surge を完了する<br>1 回目の機会
+    2 回目の<br>ウィンドウ : 2 回目の機会（K=2<br>でリトライを残す）
+    Day 14<br>deadline : expireAfter 発火 —<br>Karpenter の強制失効<br>（バックストップ）
 ```
 
 **記号**
