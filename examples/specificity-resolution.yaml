@@ -1,0 +1,63 @@
+# specificity-resolution.yaml — when more than one RotationPolicy matches a
+# NodePool, the controller picks a SINGLE governing policy by selector
+# specificity. It never merges policies.
+#
+# Specificity = the number of label-key constraints a selector carries
+# (matchLabels entries + matchExpressions entries). The most specific match wins;
+# an empty (catch-all) selector scores 0, so it loses to any keyed selector
+# (spec §5.4). That is the intended way to write a broad default that narrower
+# policies override.
+#
+# Below, `base` matches every pool (specificity 0) and `api-override` matches
+# only workload=api pools (specificity 1), so api-override WINS for those pools
+# while base governs all others.
+#
+# ┌─────────────────────────────┬──────────────┬───────────────────────────┐
+# │ NodePool                     │ Governed by  │ Why                       │
+# ├─────────────────────────────┼──────────────┼───────────────────────────┤
+# │ workload=api                 │ api-override │ specificity 1 > 0         │
+# │ any other (e.g. workload=db) │ base         │ only base matches         │
+# └─────────────────────────────┴──────────────┴───────────────────────────┘
+#
+# IMPORTANT — an equal-specificity TIE is a hard error, not a coin flip. If two
+# policies match a pool at the same top specificity, the controller REFUSES to
+# rotate that pool (noderotation_policy_conflict=1 plus a PolicyConflict Warning
+# event) rather than guess which applies — guessing wrong deletes the wrong nodes
+# (spec §5.4). To resolve a tie, make one selector strictly more specific. For
+# example, two policies that each select `{workload: api}` tie and conflict; add
+# a second key (e.g. `tier: gold`) to the one that should win.
+---
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: base                  # catch-all default (specificity 0)
+spec:
+  nodePoolSelector:
+    matchLabels: {}
+  ageThreshold: auto
+  minRotationChances: 2
+  maintenanceWindows:
+    - timezone: UTC
+      days: [Sat]
+      start: "02:00"
+      end: "06:00"
+  surge:
+    maxUnavailable: 1
+---
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: api-override          # strictly more specific (specificity 1) → wins for workload=api
+spec:
+  nodePoolSelector:
+    matchLabels:
+      workload: api
+  ageThreshold: auto
+  minRotationChances: 3
+  maintenanceWindows:
+    - timezone: Asia/Tokyo
+      days: [Tue, Fri]
+      start: "01:00"
+      end: "04:00"
+  surge:
+    maxUnavailable: 1

@@ -1,0 +1,43 @@
+# single-policy.yaml — the simplest setup: one catch-all RotationPolicy that
+# governs every NodePool in the cluster.
+#
+# A NodePool matched by NO RotationPolicy is never rotated (its expireAfter
+# backstop still applies). To cover every pool with a single policy, use a broad
+# selector: an empty matchLabels ({}) matches all NodePools and scores the lowest
+# specificity, so any narrower policy you add later overrides it (see
+# specificity-resolution.yaml).
+#
+#   kubectl apply -f single-policy.yaml
+#   kubectl get rotationpolicies        # short name: rotpol
+#
+# Schema: spec §5.4. Field reference: charts/node-rotation-controller/README.md.
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: default               # RotationPolicy is cluster-scoped — no namespace
+spec:
+  # Empty selector → matches every NodePool (blanket coverage).
+  nodePoolSelector:
+    matchLabels: {}
+
+  # "auto" derives the candidate-age threshold from the window cadence so K
+  # rotation chances stay below expireAfter (spec §3.2). Recommended over a hand
+  # -picked duration, which is still validated (recomputed G < 1 is fatal).
+  ageThreshold: auto
+  # K: maintenance windows a node should be eligible for before its backstop
+  # fires. Floor 1; values < 2 only warn.
+  minRotationChances: 2
+
+  # The effective window is the UNION of all entries (spec §3.1). See
+  # maintenance-windows.yaml for multi-entry / multi-timezone composition.
+  maintenanceWindows:
+    - timezone: Asia/Tokyo    # IANA tz name
+      days: [Wed, Sat]        # ISO weekdays: Mon..Sun
+      start: "02:00"          # "HH:MM", 24-hour, in this entry's timezone
+      end: "06:00"            # must be after start (no overnight wrap)
+
+  surge:
+    maxUnavailable: 1         # v1 is fixed at 1 (serial per NodePool)
+    readyTimeout: 15m         # surge node must reach Ready within this, else fail
+    cooldownAfter: 10m        # settle pause between rotations; also post-failure
+    retryBackoff: 30m         # base wait before re-selecting a failed NodeClaim

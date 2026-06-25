@@ -62,6 +62,7 @@ See the [compatibility policy](docs/specification.md#21-scope-and-compatibility)
 │   ├── ja/specification.md    Japanese translation
 │   └── ja/runbook.md          Production runbook (Japanese)
 ├── charts/                    Helm chart (node-rotation-controller)
+├── examples/                  Ready-to-adapt RotationPolicy manifests
 ├── cmd/                       Controller entry point (manager bootstrap + startup preflight)
 └── internal/                  Reconciler and supporting packages: rotation state machine
                                (controller), schedule/selection, surge placeholder, window,
@@ -99,7 +100,10 @@ a sample `RotationPolicy` object, and the dedicated negative-priority
 rotation by editing `rotationPolicy.spec` (the spec §5.4 schema) — see
 [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml).
 Set `rotationPolicy.create=false` to author your own `RotationPolicy` objects
-(one per divergent policy); a NodePool matched by none is simply not rotated.
+(one per divergent policy); a NodePool matched by none is simply not rotated. See
+[`examples/`](examples/) for ready-to-adapt policies — a single catch-all,
+divergent per-NodePool policies, specificity resolution, and maintenance-window
+composition.
 
 > **Maintainer note (first release only):** the ghcr.io image and chart
 > packages may be created **private** on first publish. Make

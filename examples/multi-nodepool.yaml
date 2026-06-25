@@ -1,0 +1,56 @@
+# multi-nodepool.yaml — divergent policy per NodePool. This is the headline
+# capability of the RotationPolicy CRD (issue #119): two policies select two
+# disjoint sets of NodePools by label and apply different cadences and timeouts.
+#
+# Label your NodePools so the selectors match, e.g.:
+#   kubectl label nodepool api-pool   workload=api
+#   kubectl label nodepool batch-pool workload=batch
+#
+#   kubectl apply -f multi-nodepool.yaml
+#   kubectl get rotpol -o wide
+#
+# Schema: spec §5.4.
+---
+# Latency-sensitive API nodes: rotate often, in short twice-/thrice-weekly windows.
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: api
+spec:
+  nodePoolSelector:
+    matchLabels:
+      workload: api
+  ageThreshold: auto
+  minRotationChances: 3       # more chances ⇒ a younger ageThreshold ⇒ rotate sooner
+  maintenanceWindows:
+    - timezone: Asia/Tokyo
+      days: [Tue, Thu, Sat]
+      start: "02:00"
+      end: "05:00"
+  surge:
+    maxUnavailable: 1
+    readyTimeout: 15m
+    cooldownAfter: 10m
+    retryBackoff: 30m
+---
+# Batch nodes: a single long weekly window, looser timeouts for slow drains.
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: batch
+spec:
+  nodePoolSelector:
+    matchLabels:
+      workload: batch
+  ageThreshold: auto
+  minRotationChances: 2
+  maintenanceWindows:
+    - timezone: UTC
+      days: [Sun]
+      start: "03:00"
+      end: "09:00"            # a wide window absorbs longer batch-drain times
+  surge:
+    maxUnavailable: 1
+    readyTimeout: 30m         # batch instance shapes can take longer to reach Ready
+    cooldownAfter: 20m
+    retryBackoff: 1h
