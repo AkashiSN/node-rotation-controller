@@ -62,6 +62,19 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 | **age threshold** | The `creationTimestamp` age beyond which a `NodeClaim` becomes a rotation candidate. **Derived** per NodePool from the schedule and the target rotation chances (`minRotationChances`), not set directly (§3.2). The actual per-node trigger anchors on each NodeClaim's own `spec.expireAfter` deadline; `ageThreshold` is its age-equivalent representative (§3.2) |
 | **backstop** | Karpenter's native `expireAfter` (Forceful Expiration), which still fires if the controller is unavailable. Intentionally retained as a safety net |
 
+**Symbols** — used throughout §3–§5. See §3.2 for the full derivation and the authoritative per-node vs NodePool-template distinction (the **Source** column there).
+
+| Symbol | Meaning |
+|--------|---------|
+| `E` | `expireAfter` — a NodeClaim's lifetime before Forceful Expiration (per-node, authoritative: `NodeClaim.spec.expireAfter`) |
+| `tGP` | `terminationGracePeriod` — the bound Karpenter can hold a drain to |
+| `P` | worst-case window period — the largest gap between consecutive maintenance-window occurrences (§3.1) |
+| `t_rot` | upper bound on one node's rotation time = `readyTimeout + tGP + buffer` |
+| `K` | `minRotationChances` — desired guaranteed rotation chances before expiry (floor 1) |
+| `leadTime` | how early a node is selected before its deadline = `K·P + t_rot` |
+| `A` | `ageThreshold` — the age at which a node becomes a candidate; derived `A = E − (K·P + t_rot)` |
+| `G` | rotation chances the schedule actually guarantees; `G = K` under auto-derivation, recomputed for an explicit `ageThreshold` override |
+
 ## 1.5 Position in the Karpenter Ecosystem
 
 This controller is intentionally aligned with upstream Karpenter's design direction. It does not attempt to alter Karpenter's behavior; instead it operates in a layer above.
@@ -205,7 +218,7 @@ timeline
     Day 14<br>deadline : expireAfter fires —<br>Karpenter forceful<br>expiry (backstop)
 ```
 
-**Symbols**
+**Symbols** (a quick glossary of these is in §1.4; the **Source** column below is the authoritative per-node vs NodePool-template distinction)
 
 | Symbol | Meaning | Source |
 |--------|---------|--------|
