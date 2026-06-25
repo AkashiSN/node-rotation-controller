@@ -823,7 +823,7 @@ stateDiagram-v2
     failed --> pending: backoff elapsed + start gates pass (retry)
     failed --> expired: deletionTimestamp observed (backstop)
     expired --> [*]: terminal cleanup, release gate
-    draining --> draining: drain exceeds tGP+buffer (stuck; gate held)
+    draining --> draining: drain exceeds tGP+buffer (stuck, gate held)
     note right of expired
         terminal: nothing was rotated,
         no cooldown

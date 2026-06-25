@@ -812,7 +812,7 @@ stateDiagram-v2
     failed --> pending: backoff 経過 + 開始ゲート通過（リトライ）
     failed --> expired: deletionTimestamp 観測（バックストップ）
     expired --> [*]: 終端クリーンアップ、ゲート解放
-    draining --> draining: drain が tGP+buffer 超過（stuck; ゲート保持）
+    draining --> draining: drain が tGP+buffer 超過（stuck、ゲート保持）
     note right of expired
         終端: 何も回転していない、
         cooldown なし
