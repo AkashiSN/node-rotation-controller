@@ -30,7 +30,7 @@ Install the published chart from the GitHub Container Registry (OCI):
 ```sh
 helm install node-rotation-controller \
   oci://ghcr.io/akashisn/charts/node-rotation-controller \
-  --version 0.3.0 \
+  --version 0.4.0 \
   --namespace node-rotation-system --create-namespace \
   --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
 ```
@@ -178,7 +178,7 @@ Prometheus Operator installed you can let the chart wire scraping and alerting:
 
 ```sh
 helm upgrade --install node-rotation-controller \
-  oci://ghcr.io/akashisn/charts/node-rotation-controller --version 0.3.0 \
+  oci://ghcr.io/akashisn/charts/node-rotation-controller --version 0.4.0 \
   --namespace node-rotation-system \
   --set metrics.serviceMonitor.enabled=true \
   --set prometheusRule.enabled=true
