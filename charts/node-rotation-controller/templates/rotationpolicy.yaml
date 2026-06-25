@@ -1,22 +1,45 @@
-{{- if .Values.rotationPolicy.create }}
-# A sample RotationPolicy (spec §5.4, issue #119). The controller resolves each
-# NodePool's governing RotationPolicy at reconcile time — it no longer reads the
-# former policy.yaml ConfigMap. Edit .Values.rotationPolicy.spec to point this at
-# your NodePools, or set rotationPolicy.create=false and author your own
-# RotationPolicy objects (one per divergent policy).
-#
-# The CRD ships in the chart's crds/ directory, which Helm applies before these
-# templated resources, so this object is admitted on first install.
+{{- /*
+RotationPolicy objects (spec §5.4, issues #119 and #153). The controller resolves
+each NodePool's governing RotationPolicy at reconcile time — it no longer reads
+the former policy.yaml ConfigMap.
+
+Two ways to define policies, mutually exclusive:
+  - rotationPolicies (LIST): one RotationPolicy per entry, for per-NodePool
+    differentiation (a different maintenance window / ageThreshold / surge per
+    pool). Each entry is {name, spec, [create]}; an explicit `create: false`
+    skips just that entry.
+  - rotationPolicy (SINGULAR): the sample object. Used ONLY when rotationPolicies
+    is empty, so existing values keep working unchanged.
+The list wins when non-empty; the singular sample is then ignored.
+
+These objects are cluster-scoped (NodePools are cluster-scoped), so they are NOT
+release-namespaced. The CRD ships in the chart's crds/ directory, which Helm
+applies before these templated resources, so they are admitted on first install.
+Overlap between selectors needs no chart-side guard: the controller resolves a
+single governing policy per NodePool by selector specificity and treats an
+equal-specificity tie as a hard PolicyConflict (spec §5.4).
+*/ -}}
+{{- $policies := list -}}
+{{- if .Values.rotationPolicies -}}
+  {{- range .Values.rotationPolicies -}}
+    {{- if or (not (hasKey . "create")) .create -}}
+      {{- $policies = append $policies . -}}
+    {{- end -}}
+  {{- end -}}
+{{- else if .Values.rotationPolicy.create -}}
+  {{- $policies = append $policies .Values.rotationPolicy -}}
+{{- end -}}
+{{- range $policies }}
+---
 apiVersion: noderotation.io/v1alpha1
 kind: RotationPolicy
 metadata:
-  # RotationPolicy is cluster-scoped (NodePools are cluster-scoped), so this is
-  # NOT release-namespaced. v1 assumes a single install per cluster; a second
-  # release would collide on this name — set rotationPolicy.create=false on the
-  # additional releases and manage the policy objects out-of-band.
-  name: {{ .Values.rotationPolicy.name | default (include "node-rotation-controller.fullname" .) }}
+  # v1 assumes a single install per cluster; a second release would collide on
+  # these cluster-scoped names. The singular falls back to the chart fullname;
+  # list entries must each carry a unique `name`.
+  name: {{ .name | default (include "node-rotation-controller.fullname" $) }}
   labels:
-    {{- include "node-rotation-controller.labels" . | nindent 4 }}
+    {{- include "node-rotation-controller.labels" $ | nindent 4 }}
 spec:
-  {{- toYaml .Values.rotationPolicy.spec | nindent 2 }}
+  {{- toYaml .spec | nindent 2 }}
 {{- end }}

@@ -53,3 +53,100 @@ tests:
       - equal:
           path: metadata.name
           value: api
+
+  # Issue #153: a list of policies in `rotationPolicies` renders one
+  # cluster-scoped RotationPolicy per entry (per-NodePool differentiation).
+  - it: renders one RotationPolicy per rotationPolicies entry
+    set:
+      rotationPolicies:
+        - name: api
+          spec:
+            nodePoolSelector:
+              matchLabels: { mise: non_batch }
+            ageThreshold: 240h
+            maintenanceWindows:
+              - { timezone: Asia/Tokyo, days: [Sat], start: "02:00", end: "06:00" }
+            surge: { maxUnavailable: 1 }
+        - name: batch
+          spec:
+            nodePoolSelector:
+              matchLabels: { mise: batch_only }
+            ageThreshold: 168h
+            maintenanceWindows:
+              - { timezone: Asia/Tokyo, days: [Sun], start: "03:00", end: "05:00" }
+            surge: { maxUnavailable: 1 }
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: api
+        documentIndex: 0
+      - isNull:
+          path: metadata.namespace
+        documentIndex: 0
+      - equal:
+          path: spec.nodePoolSelector.matchLabels.mise
+          value: non_batch
+        documentIndex: 0
+      - equal:
+          path: spec.ageThreshold
+          value: 240h
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: batch
+        documentIndex: 1
+      - equal:
+          path: spec.nodePoolSelector.matchLabels.mise
+          value: batch_only
+        documentIndex: 1
+      - equal:
+          path: spec.ageThreshold
+          value: 168h
+        documentIndex: 1
+
+  # rotationPolicies (plural) wins when both are set; the singular sample is
+  # ignored so existing values keep working only when the list is empty.
+  - it: rotationPolicies takes precedence over the singular rotationPolicy
+    set:
+      rotationPolicy:
+        create: true
+        name: legacy
+      rotationPolicies:
+        - name: only
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - { timezone: Asia/Tokyo, days: [Sat], start: "02:00", end: "06:00" }
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: only
+
+  # A per-entry create:false skips just that entry (parity with the singular).
+  - it: skips a rotationPolicies entry with create false
+    set:
+      rotationPolicies:
+        - name: kept
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - { timezone: Asia/Tokyo, days: [Sat], start: "02:00", end: "06:00" }
+        - name: dropped
+          create: false
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: batch }
+            maintenanceWindows:
+              - { timezone: Asia/Tokyo, days: [Sun], start: "03:00", end: "05:00" }
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kept

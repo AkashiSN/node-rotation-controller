@@ -69,16 +69,44 @@
         "minAvailable": { "type": ["integer", "string"] }
       }
     },
+    "rotationPolicies": {
+      "type": "array",
+      "description": "Multiple RotationPolicy objects (issue #153), one per entry. When non-empty it supersedes the singular `rotationPolicy` below. Each entry's `spec` is the same shape as `rotationPolicy.spec`.",
+      "items": {
+        "type": "object",
+        "required": ["name", "spec"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Cluster-scoped RotationPolicy name; required and must be unique across entries."
+          },
+          "create": {
+            "type": "boolean",
+            "description": "Set false to skip just this entry (defaults true)."
+          },
+          "spec": { "$ref": "#/definitions/rotationPolicySpec" }
+        }
+      }
+    },
     "rotationPolicy": {
       "type": "object",
+      "deprecated": true,
+      "description": "DEPRECATED (issue #153): superseded by `rotationPolicies` and slated for removal at the 1.0 milestone. Still rendered (and the default) while `rotationPolicies` is empty; a single-entry `rotationPolicies` list is the one-to-one replacement.",
       "properties": {
         "create": { "type": "boolean" },
         "name": { "type": "string" },
-        "spec": {
-          "type": "object",
-          "required": ["nodePoolSelector", "maintenanceWindows"],
-          "additionalProperties": false,
-          "properties": {
+        "spec": { "$ref": "#/definitions/rotationPolicySpec" }
+      }
+    }
+  },
+  "definitions": {
+    "rotationPolicySpec": {
+      "type": "object",
+      "required": ["nodePoolSelector", "maintenanceWindows"],
+      "additionalProperties": false,
+      "properties": {
             "nodePoolSelector": {
               "type": "object",
               "minProperties": 1,
@@ -162,11 +190,7 @@
               }
             }
           }
-        }
-      }
-    }
-  },
-  "definitions": {
+    },
     "promDuration": {
       "type": "string",
       "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",

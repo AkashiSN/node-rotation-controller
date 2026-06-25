@@ -168,12 +168,50 @@ logging:
   # -- Enable development-mode (human-readable) logging. Production uses JSON.
   development: false
 
+# Multiple cluster-scoped RotationPolicy objects (spec §5.4, issue #153). Use
+# this when different NodePools need different rotation behavior — a different
+# maintenance window, ageThreshold, or surge per pool — without installing the
+# chart (and the controller Deployment) more than once. Each entry renders one
+# RotationPolicy; `spec` is the same shape as `rotationPolicy.spec` below. When
+# this list is non-empty it WINS and the singular `rotationPolicy` sample below
+# is ignored; leave it empty (the default) to keep using the singular sample.
+# Selector overlap needs no chart-side guard: the controller picks a single
+# governing policy per NodePool by selector specificity and treats an
+# equal-specificity tie as a hard PolicyConflict (spec §5.4).
+# -- List of RotationPolicy objects, one per entry. Each is
+# `{name, spec, [create]}`; an explicit `create: false` skips that entry. `name`
+# is required and must be unique (these objects are cluster-scoped). Example:
+#   rotationPolicies:
+#     - name: api
+#       spec:
+#         nodePoolSelector:
+#           matchLabels: { workload: api }
+#         maintenanceWindows:
+#           - { timezone: Asia/Tokyo, days: [Sat], start: "02:00", end: "06:00" }
+#     - name: batch
+#       spec:
+#         nodePoolSelector:
+#           matchLabels: { workload: batch }
+#         ageThreshold: 168h
+#         maintenanceWindows:
+#           - { timezone: Asia/Tokyo, days: [Sun], start: "03:00", end: "05:00" }
+rotationPolicies: []
+
+# DEPRECATED (issue #153): the singular `rotationPolicy` is superseded by the
+# `rotationPolicies` list above and is slated for removal at the 1.0 milestone.
+# It still works and stays the default for now; prefer `rotationPolicies` for new
+# installs — a single-entry list is the one-to-one replacement:
+#   rotationPolicies:
+#     - name: <fullname-or-your-name>
+#       spec: { ...this spec... }
+#
 # A sample cluster-scoped RotationPolicy (spec §5.4, issue #119). The controller
 # resolves each NodePool's governing RotationPolicy at reconcile time — it no
 # longer reads the former policy.yaml ConfigMap. Everything under `spec` is the
 # RotationPolicy spec rendered verbatim via toYaml, so --set works on any field
 # and the values schema validates the result. Set create=false to manage your own
-# RotationPolicy objects out-of-band (one per divergent policy).
+# RotationPolicy objects out-of-band (one per divergent policy). Ignored entirely
+# when `rotationPolicies` above is non-empty.
 rotationPolicy:
   # -- Install the sample RotationPolicy below. Disable to author your own.
   create: true
