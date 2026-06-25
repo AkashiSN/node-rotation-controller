@@ -8,7 +8,18 @@ object per divergent policy. The former policy.yaml ConfigMap has been removed.
 
 Next steps:
 
-{{- if .Values.rotationPolicy.create }}
+{{- if .Values.rotationPolicies }}
+
+1. RotationPolicy objects were installed from rotationPolicies:
+{{- range .Values.rotationPolicies }}
+{{- if or (not (hasKey . "create")) .create }}
+     - {{ .name }} -> nodePoolSelector {{ .spec.nodePoolSelector }}
+{{- end }}
+{{- end }}
+   Each governs the NodePools its nodePoolSelector matches. A NodePool matched by
+   no RotationPolicy is not rotated (its expireAfter backstop still applies); an
+   equal-specificity tie between policies is a hard PolicyConflict (spec §5.4).
+{{- else if .Values.rotationPolicy.create }}
 
 1. A sample RotationPolicy named "{{ .Values.rotationPolicy.name | default (include "node-rotation-controller.fullname" .) }}" was installed. Point it at your
    NodePools by editing rotationPolicy.spec.nodePoolSelector so the matchLabels

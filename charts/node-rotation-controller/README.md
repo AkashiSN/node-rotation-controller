@@ -57,7 +57,7 @@ controller is healthy and which replica holds the leader Lease.
 | `Deployment` | The controller (`replicaCount=2` with leader election) | — |
 | `ServiceAccount` + `ClusterRole`/`ClusterRoleBinding` + namespaced `Role`/`RoleBinding` | RBAC for the controller (spec §4.3) | `serviceAccount.create` |
 | `RotationPolicy` CRD | Cluster-scoped policy schema (`noderotation.io/v1alpha1`), from the chart's `crds/` directory | always |
-| `RotationPolicy` (sample) | A sample governing policy you point at your NodePools | `rotationPolicy.create` |
+| `RotationPolicy` (sample, or one per `rotationPolicies` entry) | Governing policies you point at your NodePools | `rotationPolicy.create` / `rotationPolicies` |
 | `PriorityClass` | Dedicated negative-priority class for the surge placeholder Pod (spec §3.3) | `placeholder.priorityClass.create` |
 | `PodDisruptionBudget` | Keeps a leader replica alive during a node drain (R1, spec §7.1) | `podDisruptionBudget.enabled` |
 | `Service` (`/metrics`) | Exposes the controller metrics (spec §4.2) | `metrics.service.enabled` |
@@ -128,9 +128,42 @@ spec:
     enabled: false          # v2 (disabled in v1)
 ```
 
-To manage your own policies instead of the sample, set `rotationPolicy.create=false`
-and `kubectl apply` one `RotationPolicy` per divergent policy. The full schema,
-conflict resolution, and the `status` subresource are documented in
+### Multiple policies (per-NodePool)
+
+When different NodePools need different rotation behavior — a different window,
+`ageThreshold`, or surge per pool — list them under `rotationPolicies` and the
+chart renders one `RotationPolicy` per entry (no need to install the chart, and
+the controller Deployment, more than once). Each entry is `{name, spec, [create]}`
+and its `spec` is the same shape as `rotationPolicy.spec` above; `name` is
+required and must be unique. When `rotationPolicies` is non-empty it **supersedes**
+the singular `rotationPolicy` sample, so existing single-policy values keep working
+unchanged when the list is left empty.
+
+```yaml
+rotationPolicies:
+  - name: api
+    spec:
+      nodePoolSelector:
+        matchLabels: { workload: api }
+      maintenanceWindows:
+        - { timezone: Asia/Tokyo, days: [Sat], start: "02:00", end: "06:00" }
+  - name: batch
+    spec:
+      nodePoolSelector:
+        matchLabels: { workload: batch }
+      ageThreshold: 168h
+      maintenanceWindows:
+        - { timezone: Asia/Tokyo, days: [Sun], start: "03:00", end: "05:00" }
+```
+
+Selector overlap needs no chart-side guard: the controller resolves a single
+governing policy per NodePool by selector specificity and treats an
+equal-specificity tie as a hard `PolicyConflict` (spec §5.4).
+
+To manage your own policies outside the chart instead, set `rotationPolicy.create=false`
+(and leave `rotationPolicies` empty) and `kubectl apply` one `RotationPolicy` per
+divergent policy. The full schema, conflict resolution, and the `status`
+subresource are documented in
 [specification §5.4](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/specification.md#54-configuration-schema).
 
 ## Metrics and alerts
@@ -195,7 +228,8 @@ for how to read each metric and respond.
 | `placeholder.priorityClass.name` | `noderotation-placeholder` | PriorityClass name. Must match the controller's `--priority-class` flag. |
 | `placeholder.priorityClass.value` | `-10` | Priority value. Negative so the placeholder is the deliberate preemption victim (spec §3.3). |
 | `logging.development` | `false` | Development-mode (human-readable) logging. Production uses JSON. |
-| `rotationPolicy.create` | `true` | Install the sample RotationPolicy. Disable to author your own. |
+| `rotationPolicies` | `[]` | List of RotationPolicy objects, one per entry (`{name, spec, [create]}`), for per-NodePool differentiation. Supersedes the singular `rotationPolicy` when non-empty (see [Multiple policies](#multiple-policies-per-nodepool)). |
+| `rotationPolicy.create` | `true` | Install the sample RotationPolicy. Disable to author your own. Ignored when `rotationPolicies` is non-empty. |
 | `rotationPolicy.name` | `""` | RotationPolicy object name. Cluster-scoped; defaults to the chart fullname when empty. |
 | `rotationPolicy.spec` | see `values.yaml` | The RotationPolicy spec, rendered verbatim (see [Configuring rotation](#configuring-rotation-rotationpolicy)). |
 
@@ -209,7 +243,8 @@ v1 assumes a **single install per cluster**. The `PriorityClass` and the sample
 `RotationPolicy` are **cluster-scoped objects with fixed names**, so a second
 release would collide on them. To run an additional release, set
 `placeholder.priorityClass.create=false` (share the one PriorityClass) and
-`rotationPolicy.create=false` (manage your own policies).
+`rotationPolicy.create=false` with `rotationPolicies: []` (so the release renders
+no `RotationPolicy` objects — manage them on the primary release or out-of-band).
 
 ## Upgrading
 
