@@ -1,0 +1,49 @@
+# maintenance-windows.yaml — how maintenanceWindows compose.
+#
+# The effective window is the UNION of all entries (spec §3.1). Each entry's
+# times are "HH:MM" 24-hour in that entry's own timezone. There is NO overnight
+# wrap: a period crossing midnight must be split into two entries, because the
+# schema requires end to be after start.
+#
+#   kubectl apply -f maintenance-windows.yaml
+#
+# Schema: spec §5.4. Window semantics: spec §3.1.
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: windows-demo
+spec:
+  nodePoolSelector:
+    matchLabels:
+      workload: web
+  ageThreshold: auto
+  minRotationChances: 2
+  maintenanceWindows:
+    # 1) A normal same-day window.
+    - timezone: Asia/Tokyo
+      days: [Wed]
+      start: "02:00"
+      end: "06:00"
+
+    # 2) An overnight Sat 23:00 → Sun 01:00 (JST) period. end must be after
+    #    start, so split it at midnight into two entries:
+    - timezone: Asia/Tokyo
+      days: [Sat]
+      start: "23:00"
+      end: "23:59"
+    - timezone: Asia/Tokyo
+      days: [Sun]
+      start: "00:00"
+      end: "01:00"
+
+    # 3) A second region in another timezone — the union covers all of them, so
+    #    a multi-region fleet can drain in each region's local off-hours.
+    - timezone: America/New_York
+      days: [Sun]
+      start: "02:00"
+      end: "05:00"
+  surge:
+    maxUnavailable: 1
+    readyTimeout: 15m
+    cooldownAfter: 10m
+    retryBackoff: 30m

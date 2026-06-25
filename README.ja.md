@@ -62,6 +62,7 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 │   ├── ja/specification.md    日本語訳
 │   └── ja/runbook.md          運用ランブック（日本語）
 ├── charts/                    Helm chart（node-rotation-controller）
+├── examples/                  すぐ流用できる RotationPolicy マニフェスト
 ├── cmd/                       Controller エントリポイント（manager bootstrap + 起動時プリフライト）
 └── internal/                  Reconciler と関連パッケージ: 置換ステートマシン
                                （controller）、schedule/selection、surge placeholder、
@@ -100,7 +101,9 @@ chart はコントローラ（leader election 付き `replicas=2`）、その RB
 [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml)
 を参照。`rotationPolicy.create=false` にすれば自前の `RotationPolicy`
 オブジェクト（分岐するポリシーごとに 1 つ）を管理できる。どの `RotationPolicy`
-にもマッチしない NodePool は単に置換されない。
+にもマッチしない NodePool は単に置換されない。すぐ流用できるポリシー —
+単一の catch-all、NodePool ごとに分岐するポリシー、specificity 解決、
+メンテナンスウィンドウの合成 — は [`examples/`](examples/) を参照。
 
 > **メンテナー向けメモ（初回リリース時のみ）:** ghcr.io のイメージと chart の
 > パッケージは初回公開時に **private** で作成されることがある。未認証の
