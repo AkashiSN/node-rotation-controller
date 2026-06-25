@@ -74,6 +74,18 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 > やその CRD をインストールしない — Karpenter が所有する `NodeClaim`/`NodePool`
 > リソースを操作するだけである。
 
+GitHub Container Registry（OCI）から公開済みの chart をインストールする:
+
+```sh
+helm install node-rotation-controller \
+  oci://ghcr.io/akashisn/charts/node-rotation-controller \
+  --version 0.3.0 \
+  --namespace node-rotation-system --create-namespace \
+  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
+```
+
+またはこのリポジトリのローカルチェックアウトからインストールする:
+
 ```sh
 helm install node-rotation-controller charts/node-rotation-controller \
   --namespace node-rotation-system --create-namespace \
@@ -90,6 +102,18 @@ chart はコントローラ（leader election 付き `replicas=2`）、その RB
 オブジェクト（分岐するポリシーごとに 1 つ）を管理できる。どの `RotationPolicy`
 にもマッチしない NodePool は単に置換されない。
 
+> **メンテナー向けメモ（初回リリース時のみ）:** ghcr.io のイメージと chart の
+> パッケージは初回公開時に **private** で作成されることがある。未認証の
+> `helm install` / イメージ pull が動くよう、GitHub の *Packages* 設定で
+> `node-rotation-controller` と `charts/node-rotation-controller` を public に
+> してから、ログアウトしたクライアントで **検証** する — 例:
+> `helm pull oci://ghcr.io/akashisn/charts/node-rotation-controller --version <X.Y.Z>`
+> （chart バージョンには先頭の `v` を **付けない** — release guard が除去する）、
+> またはイメージ manifest を匿名で取得して HTTP 200 を期待する。（GitHub API 経由
+> でパッケージ可視性を照会・変更するには `read:packages` / `write:packages` 権限の
+> トークンが必要だが、*Packages* 設定 UI はトークン不要。）リリースは `vX.Y.Z`
+> タグを push して切る（Release workflow を参照）。
+
 ### ConfigMap からの移行（#119 以前）
 
 [#119](https://github.com/AkashiSN/node-rotation-controller/issues/119) より前の
@@ -101,6 +125,12 @@ chart はコントローラ（leader election 付き `replicas=2`）、その RB
 それ以外のフィールド（`ageThreshold`・`minRotationChances`・`maintenanceWindows`・
 `surge`・`prePull`）は `spec` 配下へそのままコピーする。1.0 前なので、これは
 dual-support なしの全面置換である（仕様 §5.4）。
+
+## 参加するには
+
+本プロジェクトは pre-1.0 で活発に開発中であり、v1 のスコープは仕様書に記載の surge MVP である。設計へのフィードバックも実装の貢献も、GitHub の Issue と PR の両方で歓迎する。
+
+開発ワークフローは [CONTRIBUTING.md](CONTRIBUTING.md)、コミュニティ規範は [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) を参照。
 
 ## 開発
 
