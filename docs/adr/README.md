@@ -12,4 +12,4 @@ The ADR records the decision; the canonical behavior lives in [`docs/specificati
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [0001](0001-window-bounded-forceful-fallback.md) | Window-bounded forceful fallback (relax the surge-only invariant) | Proposed |
+| [0001](0001-window-bounded-forceful-fallback.md) | Window-bounded forceful fallback (relax the surge-only invariant) | Accepted |

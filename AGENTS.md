@@ -74,7 +74,7 @@ and spec in sync (see *Specification rules* below).
 - `expireAfter` is **retained as a backstop**, not removed. The controller's
   `ageThreshold` is derived to stay below `expireAfter` (spec §3.2);
   validation fails when the schedule cannot guarantee that.
-- v1 is **surge-only and serial per NodePool** (`surge.maxUnavailable = 1`);
+- v1 is **surge-only by default and serial per NodePool** (`surge.maxUnavailable = 1`); an opt-in **window-bounded forceful fallback** (`surge.forcefulFallback`, default off; ADR-0001) may delete a NodeClaim in-window without the surge, still via the voluntary path (PDBs apply);
   distinct NodePools may rotate concurrently. Pre-pull (v2) is a reserved
   expansion point behind a disabled config flag.
 - All controller state lives on Kubernetes objects — durable state on

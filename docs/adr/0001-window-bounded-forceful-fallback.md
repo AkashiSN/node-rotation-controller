@@ -1,6 +1,6 @@
 # 1. Window-bounded forceful fallback (relax the surge-only invariant)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-30
 - Issue: [#156](https://github.com/AkashiSN/node-rotation-controller/issues/156)
 

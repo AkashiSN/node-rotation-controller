@@ -259,6 +259,8 @@ This holds because the usable interval `[A, E − t_rot]` then spans at least `K
 
 - **warn**: widen windows (larger `D`), add occurrences (smaller `P`), or raise `maxUnavailable` (reserved for a later version).
 
+The steady-state condition above assumes node ages are uniformly distributed. A **synchronized batch** — `N` nodes created together (initial bring-up, scale-up, NodePool migration, post-consolidation re-packing) — shares one `creationTimestamp` and therefore one deadline, and contends for the same windows. The `leadTime` before that common deadline guarantees `K` window occurrences, each rotating at most `C`, so a synchronized batch completes gracefully only when `K · C ≥ N`. When `N > K · C` the surplus nodes miss every window and reach Forceful Expiration at the (uncontrolled) deadline — a case the steady-state average does **not** detect. This is surfaced as a separate **warn** (`ThroughputBurstShortfall`).
+
 **Validation** (layer 3 — per-node, runtime) — the two layers above use the NodePool **template** `E`/`tGP` as representatives, but the actual trigger is per-NodeClaim (*Authoritative expiry source* above), so a passing template does not prove every *existing* claim is satisfiable — e.g. after the template `E` was raised to clear a fatal, the already-stamped claims still carry the short value. On each reconcile the controller therefore also checks every in-scope NodeClaim against its **own** `spec.expireAfter`: a claim with `E_node ≤ K·P + t_rot` (per-node `A ≤ 0`) can no longer be guaranteed `K` chances — it is counted in `noderotation_short_lead_nodes` (§4.2), warned via a `ShortLead` Warning Event on the NodeClaim (§4.2), and rotated **best-effort at the earliest opportunity** (by the trigger above it is already a candidate) — until Karpenter's forceful path actually begins: once its `deletionTimestamp` is set, it is excluded from selection (the table above) and only the §5.2 abort path applies.
 
 > **Worked example.** Auto Mode with the NodePool's `terminationGracePeriod` **lowered from its `24h` default to `1h`** (see the calibration note below), `E = 14d`, union `{Wed, Sat} 02:00–06:00` → `P = 4d`, `t_rot ≈ 1.5h` (`readyTimeout 15m + tGP 1h + buffer`), `K = 2`. Then `A = 14d − (2·4d + 1.5h) ≈ 5.9d`: nodes become candidates at ~5.9d and are guaranteed 2 windows before 14d. Throughput `C = floor(4h / (1.5h + 10m)) = 2` per occurrence (conservative — a third rotation can still *start* before the window closes and complete past it, §3.1).
@@ -356,6 +358,10 @@ The surge node's role is therefore to **pre-stage a landing zone** so that PDB-g
 
 In short: the controller guarantees a node-level surge; **Pod-level make-before-break is achieved by PDB + replica headroom, which the surge node's capacity enables — not by the controller itself** (consistent with G4).
 
+### Window-bounded forceful fallback (opt-in)
+
+When `surge.forcefulFallback.enabled: true` and a candidate cannot complete a graceful surge before its own deadline (it is in the last window before the deadline, or the backlog will not clear it in time), the controller deletes the old `NodeClaim` **inside the maintenance window without the make-before-break surge** (break-before-make). The drain still follows the voluntary path through Karpenter's termination controller, so **PDBs are respected up to `terminationGracePeriod`** — this relaxes only the node-level make-before-break ("surge-only") property, not "never bypasses Karpenter" or G4. It pulls the otherwise-uncontrolled `expireAfter` expiration into the window and, by dropping `readyTimeout` and the provisioning wait, raises throughput. Bypassing a blocking PDB is explicitly out of scope. The fallback is disabled by default; when off, behavior is unchanged (surplus nodes degrade to the native `expireAfter` baseline, §3.5).
+
 ### Stateful and zonal workloads — matching the replacement node's requirements
 
 Because surge only **adds capacity** and never pins Pods to the new node (above), the rescheduled Pods land wherever the scheduler can place them. A Pod bound to a **zonal** PersistentVolume — EBS `gp3`/`io2`, or any volume whose PV carries a `topology.kubernetes.io/zone` `nodeAffinity` — can only reschedule onto a node in the **same AZ** as its volume. If the surge node is provisioned in a *different* AZ, that Pod has nowhere to land and stays `Pending` after the old node drains — defeating make-before-break for exactly the stateful workloads that need it most.
@@ -405,6 +411,8 @@ If the controller is unavailable, the following safety net engages in order:
 > **Important**: backstop paths 2–4 are forceful — PDBs are respected only until `terminationGracePeriod` expires. Extended controller downtime restores the original risk profile. A **stale `karpenter.sh/do-not-disrupt`** left on a node by a controller that crashed mid-surge does **not** change this: node-level `do-not-disrupt` suppresses only voluntary disruption (path 1), **not** `expireAfter` (path 2), so path 2 still fires on schedule and the node cannot outlive its `deadline`. The startup sweep clears the stale marker, but the marker was never extending the node's life in the first place.
 
 > **Graceful degradation — never worse than the status quo.** Every failure mode degrades onto Karpenter's native Forceful Expiration (path 2). If a rotation fails, a maintenance window is missed, or the controller is absent entirely, the node is still expired and drained by `expireAfter` **exactly as it would be without this controller** — including the residual risk in §3.3 where a deadline reached mid-surge force-expires the old node before the replacement is `Ready` (forceful, but identical to the no-controller baseline). The controller only ever moves rotation *earlier* and makes it *graceful*; by design it never removes the safety net and — because node-level `do-not-disrupt` has no effect on `expireAfter` — it can never extend a node's life beyond `expireAfter` either. So the **worst case equals today's baseline** — forceful, but bounded — which is precisely why the design is safe to adopt incrementally and why the §3.2 lead time is sized to win the race in the *normal* case rather than depended on for safety in the *failure* case.
+
+Once capacity is below demand (`C · A < N · P`, or a synchronized batch with `N > K·C`), a purely-graceful guarantee is impossible and a forceful disruption is unavoidable. The default behavior lets that happen at the native, **uncontrolled** `expireAfter` deadline. With `surge.forcefulFallback.enabled`, the controller instead performs a **controlled** surge-less rotation inside the maintenance window (§3.3) for at-risk candidates. `NodeClaim.spec` is immutable, so the controller cannot retime the `expireAfter` backstop; the only lever is replacement.
 
 ---
 
@@ -901,6 +909,8 @@ spec:
         - kubernetes.io/arch
         - karpenter.sh/capacity-type
       preferred: []
+    forcefulFallback:             # opt-in window-bounded surge-less forceful fallback (§3.3)
+      enabled: false              # boolean, default false. When true, enables the §3.3 behavior; false (default) keeps surge-only
   prePull:                        # v2 (disabled in v1); only `enabled` is accepted
     enabled: false
 status:                           # observational/derived only — never authoritative runtime state (§5.3)
@@ -974,6 +984,8 @@ data:
           - kubernetes.io/arch
           - karpenter.sh/capacity-type
         preferred: []          # soft nodeAffinity; relaxed under capacity pressure. e.g. node.kubernetes.io/instance-type
+      forcefulFallback:        # opt-in window-bounded surge-less forceful fallback (§3.3)
+        enabled: false         # boolean, default false. When true, enables the §3.3 behavior; false (default) keeps surge-only
 
     prePull:                   # v2 (disabled in v1); only `enabled` is accepted in v1
       enabled: false
