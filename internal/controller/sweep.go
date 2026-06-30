@@ -71,6 +71,7 @@ func (r *RotationReconciler) anchoredClaims(ctx context.Context) (map[string]boo
 			if err := r.patchPool(ctx, pool, func(m map[string]string) {
 				delete(m, annotations.ActiveRotationState)
 				delete(m, annotations.DrainingAt)
+				delete(m, annotations.RotationMode)
 			}); err != nil {
 				return nil, err
 			}

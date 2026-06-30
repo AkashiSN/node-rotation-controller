@@ -901,6 +901,7 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 		delete(m, annotations.ActiveRotation)
 		delete(m, annotations.ActiveRotationState)
 		delete(m, annotations.DrainingAt)
+		delete(m, annotations.RotationMode)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
