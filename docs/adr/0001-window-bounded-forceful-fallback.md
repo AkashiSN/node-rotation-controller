@@ -18,14 +18,14 @@ Introduce an **opt-in, window-bounded forceful fallback**. When a candidate cann
 
 This **relaxes only the "surge-only" invariant**, and only on the opt-in fallback path. It does **not** relax the other invariants: the drain still follows the voluntary path through Karpenter's termination controller, so **PDBs are respected up to `terminationGracePeriod`** — "never bypasses Karpenter" and G4 ("compose with PDB") both hold. Bypassing the Eviction API to force past a blocking PDB ("3b-2") is explicitly **out of scope**.
 
-The fallback is **disabled by default** (working name `surge.forcefulFallback.enabled`, default `false`). With it disabled, behavior is exactly today's: graceful surge only, and surplus nodes degrade to the native `expireAfter` baseline. Because relaxing surge-only is a v1 invariant change, this is a **post-v1 (v1.x) feature**, not part of the v0.3 MVP; v1's default stays surge-only and serial per NodePool.
+The fallback is **disabled by default** (working name `surge.forcefulFallback.enabled`, default `false`). With it disabled, behavior is exactly today's: graceful surge only, and surplus nodes degrade to the native `expireAfter` baseline. This change is **targeted for the v1.0 release** (#156). Because the fallback is opt-in and off by default, surge-only remains v1's *default* behavior; accepting this ADR therefore amends the surge-only invariant in `CLAUDE.md` and `docs/specification.md` to read "surge-only **by default**, with an opt-in window-bounded forceful fallback", and that wording change lands with the implementation rather than deferring the feature to a later v1.x.
 
 ## Consequences
 
 **Positive**
 
 - The forceful disruption that was otherwise inevitable (`C·A < N·P`) happens at a **controlled time inside the maintenance window** instead of at the random `expireAfter` deadline, restoring the spirit of G1 (predictable, low-traffic disruption) even when a graceful guarantee is unreachable.
-- It **relieves the capacity deficit**: dropping the surge removes `readyTimeout` and the provisioning wait from `t_rot` (it collapses to roughly `tGP + Buffer`) and removes the surge-capacity constraint, so `C` rises sharply and the deletes can be parallelized — making `K·C ≥ N` achievable where a serial graceful surge cannot.
+- It **relieves the capacity deficit**: dropping the surge removes `readyTimeout` and the provisioning wait from `t_rot` (it collapses to roughly `tGP + Buffer`) and removes the surge-capacity constraint, so `C` rises sharply (and, combined with the reserved surge-parallelism work, the surge-less deletes could later run concurrently) — making `K·C ≥ N` achievable where a serial graceful surge cannot.
 - The "never bypass Karpenter" and PDB-respect (G4) invariants are **preserved**; the change is narrowly scoped to one of the four invariants and to an opt-in path.
 
 **Negative / trade-offs**
@@ -43,4 +43,4 @@ The fallback is **disabled by default** (working name `surge.forcefulFallback.en
 
 ## Follow-up
 
-On agreement, this ADR moves to `Accepted` and the spec (§3.2 layer-2 burst condition, §3.3 surge-less path, §3.5 backstop semantics), the `RotationPolicy` CRD schema, and metrics are updated in the implementation PRs tracked under #156. Candidate ordering under heterogeneous `expireAfter` (edge case E4) is handled separately in #157.
+On agreement, this ADR moves to `Accepted` and the spec (§3.2 layer-2 burst condition, §3.3 surge-less path, §3.5 backstop semantics), the surge-only invariant wording in `CLAUDE.md` / `docs/specification.md`, the `RotationPolicy` CRD schema, and metrics are updated in the implementation PRs tracked under #156. This work is targeted for the **v1.0** milestone. Candidate ordering under heterogeneous `expireAfter` (edge case E4) is handled separately in #157.
