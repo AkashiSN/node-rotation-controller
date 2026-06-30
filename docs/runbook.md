@@ -177,6 +177,8 @@ claim count, in-window, findings count). This is additive debug visibility only 
 it does not change the dedup of the `INFO` log or the Warning Events, nor any
 metric.
 
+**Surge-less forceful fallback.** When `surge.forcefulFallback.enabled` is set on the governing RotationPolicy, a candidate that cannot complete a graceful surge before its own deadline (`deadline − now < t_rot`) is rotated **surge-less**: the controller deletes the old `NodeClaim` in-window without provisioning a surge node, draining it via Karpenter's voluntary path so PDBs still apply (spec §3.3). Each such rotation increments `noderotation_forceful_fallback_total{nodepool}` and emits a `ForcefulFallback` Warning Event on the NodePool (`kubectl describe nodepool <name>`); the in-flight rotation also carries the `noderotation.io/rotation-mode=forceful-fallback` annotation on the NodePool. A rising `noderotation_forceful_fallback_total` means graceful surges are repeatedly losing the race to the deadline — widen the maintenance window, lower `tGP`, or reduce the synchronized node count flagged by `ThroughputBurstShortfall`.
+
 ---
 
 ## 4. The freeze workflow
