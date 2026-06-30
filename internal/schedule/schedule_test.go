@@ -231,6 +231,15 @@ func TestDeriveThroughputBelowArrival(t *testing.T) {
 	absent(t, Derive(in), "ThroughputBelowArrival")
 }
 
+func TestDeriveThroughputBurstShortfall(t *testing.T) {
+	in := baseAuto() // C=2, K=2 → K·C=4
+	in.NodeCount = 5 // a synchronized batch of 5 exceeds K·C=4
+	has(t, Derive(in), "ThroughputBurstShortfall", Warn)
+
+	in.NodeCount = 4 // 4 == K·C: fits within the K guaranteed windows
+	absent(t, Derive(in), "ThroughputBurstShortfall")
+}
+
 // TestDeriveOverrideNonPositive locks the defensive guard: Derive is pure and
 // must surface a non-positive override (which policy normally rejects upstream)
 // rather than silently echo it back.

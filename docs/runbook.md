@@ -151,7 +151,7 @@ that stops reconciling does not latch its last value forever.
 ([§4.2](specification.md#42-observability)), so `kubectl describe nodepool <name>`
 shows them without a metrics stack. Reasons include `KBelowTwo`,
 `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `ThroughputZero`,
-`ThroughputBelowArrival`, `OverrideGBelowK`, and `ShortLead`.
+`ThroughputBelowArrival`, `ThroughputBurstShortfall`, `OverrideGBelowK`, and `ShortLead`.
 
 **Judging reconcile liveness — use the metrics, not the warning log.** Both the
 Warning Events *and* the `INFO`-level warning **log** lines are deduplicated on

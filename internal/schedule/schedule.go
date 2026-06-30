@@ -208,6 +208,17 @@ func layer2(in Inputs, r Result) []Finding {
 		}
 	}
 
+	// spec §3.2 layer-2 (synchronized batch): the steady-state arrival check above
+	// assumes a uniform age distribution. A batch of N nodes created together shares
+	// one deadline and contends for the same windows; its leadTime guarantees K
+	// window occurrences of capacity C each, so it is fully rotated only when
+	// K·C ≥ N. N > K·C leaves a surplus that misses every window and reaches
+	// Forceful Expiration — a case the average above does not detect.
+	if in.NodeCount > 0 && in.K > 0 && in.NodeCount > in.K*r.C {
+		fs = append(fs, Finding{Severity: Warn, Code: "ThroughputBurstShortfall",
+			Message: fmt.Sprintf("a synchronized batch of N=%d nodes exceeds K·C=%d (K=%d windows × C=%d per window): the surplus cannot rotate gracefully before a shared deadline and may reach Forceful Expiration", in.NodeCount, in.K*r.C, in.K, r.C)})
+	}
+
 	return fs
 }
 
