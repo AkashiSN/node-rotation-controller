@@ -123,10 +123,11 @@ type Surge struct {
 	MatchNodeRequirements MatchNodeRequirements `json:"matchNodeRequirements,omitempty"`
 
 	// forcefulFallback is the opt-in window-bounded surge-less forceful fallback
-	// (spec §3.3). RESERVED until its controller implementation lands (#156): the
-	// CEL rule rejects enabled:true at admission, mirroring internal/policy.Validate,
-	// so the flag cannot be set on a controller that does not yet honor it.
-	// +kubebuilder:validation:XValidation:rule="!self.enabled",message="surge.forcefulFallback is not yet implemented and must be disabled (enabled: false) until #156 lands"
+	// (spec §3.3, ADR-0001). When enabled, a candidate that cannot complete a
+	// graceful surge before its own deadline is rotated surge-less: the controller
+	// deletes the old NodeClaim in-window without the surge, still via the
+	// voluntary path (PDBs apply), instead of letting expireAfter fire at an
+	// uncontrolled time. Default off keeps the surge-only behavior.
 	// +optional
 	ForcefulFallback FeatureToggle `json:"forcefulFallback,omitempty"`
 }

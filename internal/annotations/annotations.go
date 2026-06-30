@@ -70,6 +70,10 @@ const (
 	// Freeze is an RFC3339 freeze-until timestamp that suppresses rotation starts
 	// and holds escalation of an in-flight pending rotation (spec §3.1).
 	Freeze = Prefix + "freeze"
+	// RotationMode records how the in-flight rotation is being performed, stamped
+	// on the NodePool anchor so it survives the candidate NodeClaim's deletion on
+	// success. Absent = the default surge (make-before-break) rotation.
+	RotationMode = Prefix + "rotation-mode"
 )
 
 // Cordoned marks a node's cordon (spec.unschedulable) as controller-applied, so
@@ -98,4 +102,13 @@ const (
 	StateFailed = "failed"
 	// StateExpired: terminal — caught force-expiring mid-rotation; never re-selected.
 	StateExpired = "expired"
+)
+
+// RotationMode annotation values (spec §5.3). An absent RotationMode means the
+// default surge (make-before-break) rotation.
+const (
+	// RotationModeForcefulFallback marks a surge-less, window-bounded forceful
+	// fallback rotation (spec §3.3): the NodeClaim is deleted in-window without a
+	// surge, draining via the voluntary path (PDBs apply).
+	RotationModeForcefulFallback = "forceful-fallback"
 )

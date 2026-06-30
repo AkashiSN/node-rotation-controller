@@ -216,7 +216,7 @@ func TestToPolicyRejectsPrePullEnabled(t *testing.T) {
 	}
 }
 
-func TestToPolicyRejectsForcefulFallbackEnabled(t *testing.T) {
+func TestToPolicyAcceptsForcefulFallbackEnabled(t *testing.T) {
 	spec := nrv1.RotationPolicySpec{
 		NodePoolSelector: matchLabels("workload", "api"),
 		MaintenanceWindows: []nrv1.MaintenanceWindow{{
@@ -224,7 +224,11 @@ func TestToPolicyRejectsForcefulFallbackEnabled(t *testing.T) {
 		}},
 		Surge: nrv1.Surge{ForcefulFallback: nrv1.FeatureToggle{Enabled: true}},
 	}
-	if _, err := ToPolicy(spec); err == nil {
-		t.Fatal("ToPolicy accepted surge.forcefulFallback.enabled, want error")
+	pol, err := ToPolicy(spec)
+	if err != nil {
+		t.Fatalf("ToPolicy rejected surge.forcefulFallback.enabled, want accept: %v", err)
+	}
+	if !pol.Surge.ForcefulFallback.Enabled {
+		t.Fatal("ToPolicy dropped surge.forcefulFallback.enabled=true")
 	}
 }

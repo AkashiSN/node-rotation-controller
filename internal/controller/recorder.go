@@ -25,6 +25,10 @@ type Recorder interface {
 	Expired(nodePool, nodeClaim string)
 	// Failure records a surge attempt that timed out and rolled back.
 	Failure(nodePool, nodeClaim string)
+	// ForcefulFallback records a surge-less, window-bounded forceful fallback
+	// rotation that was initiated (spec §3.3): a candidate that could not complete
+	// a graceful surge before its deadline, deleted in-window via the voluntary path.
+	ForcefulFallback(nodePool, nodeClaim string)
 	// ObservePool sets the §4.2 reconcile-time gauges for one NodePool.
 	ObservePool(nodePool string, o PoolObservation)
 	// ObserveWindow sets the per-NodePool window-active gauge (§4.2): whether the
@@ -87,6 +91,7 @@ type noopRecorder struct{}
 func (noopRecorder) Success(string)                                {}
 func (noopRecorder) Expired(string, string)                        {}
 func (noopRecorder) Failure(string, string)                        {}
+func (noopRecorder) ForcefulFallback(string, string)               {}
 func (noopRecorder) ObservePool(string, PoolObservation)           {}
 func (noopRecorder) ObserveWindow(string, bool)                    {}
 func (noopRecorder) ObservePolicyConflict(string, bool)            {}

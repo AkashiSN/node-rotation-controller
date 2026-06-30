@@ -22,9 +22,11 @@ const (
 	actionCheckExpiry      = "CheckExpiry"
 	actionResolvePolicy    = "ResolvePolicy"
 	actionReapRotation     = "ReapRotation"
+	actionForcefulFallback = "RotateSurgeless"
 	reasonShortLead        = "ShortLead"
 	reasonPolicyConflict   = "PolicyConflict"
 	reasonGovernanceLost   = "GovernanceLost"
+	reasonForcefulFallback = "ForcefulFallback"
 )
 
 // warningEmitter surfaces non-fatal schedule findings and per-node short-lead
