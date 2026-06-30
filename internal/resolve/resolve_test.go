@@ -215,3 +215,16 @@ func TestToPolicyRejectsPrePullEnabled(t *testing.T) {
 		t.Fatal("ToPolicy accepted prePull.enabled, want error")
 	}
 }
+
+func TestToPolicyRejectsForcefulFallbackEnabled(t *testing.T) {
+	spec := nrv1.RotationPolicySpec{
+		NodePoolSelector: matchLabels("workload", "api"),
+		MaintenanceWindows: []nrv1.MaintenanceWindow{{
+			Timezone: "UTC", Days: []string{"Mon"}, Start: "02:00", End: "06:00",
+		}},
+		Surge: nrv1.Surge{ForcefulFallback: nrv1.FeatureToggle{Enabled: true}},
+	}
+	if _, err := ToPolicy(spec); err == nil {
+		t.Fatal("ToPolicy accepted surge.forcefulFallback.enabled, want error")
+	}
+}

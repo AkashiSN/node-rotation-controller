@@ -200,6 +200,23 @@ spec:
                       also reused as the pool-level inter-attempt pause after a failed attempt
                       (spec §5.2); must be positive (validated at runtime).
                     type: string
+                  forcefulFallback:
+                    description: |-
+                      forcefulFallback is the opt-in window-bounded surge-less forceful fallback
+                      (spec §3.3). RESERVED until its controller implementation lands (#156): the
+                      CEL rule rejects enabled:true at admission, mirroring internal/policy.Validate,
+                      so the flag cannot be set on a controller that does not yet honor it.
+                    properties:
+                      enabled:
+                        default: false
+                        description: enabled turns the feature on. Reserved features
+                          must stay false in v1.
+                        type: boolean
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'surge.forcefulFallback is not yet implemented and
+                        must be disabled (enabled: false) until #156 lands'
+                      rule: '!self.enabled'
                   matchNodeRequirements:
                     description: |-
                       matchNodeRequirements selects which candidate-node requirements the
