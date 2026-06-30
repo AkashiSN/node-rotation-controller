@@ -900,6 +900,8 @@ spec:
         - kubernetes.io/arch
         - karpenter.sh/capacity-type
       preferred: []
+    forcefulFallback:             # #156 の実装がマージされるまで予約済み。enabled:true は拒否される
+      enabled: false
   prePull:                        # v2（v1 では無効）。`enabled` のみ受理
     enabled: false
 status:                           # 観測／導出のみ — 権威ある実行時状態ではない（§5.3）
@@ -913,7 +915,7 @@ status:                           # 観測／導出のみ — 権威ある実行
       message: "policy is valid and governs 2 NodePool(s)"
 ```
 
-**予定（v1.0、[#156]）。** `surge.forcefulFallback.enabled`（boolean、既定 `false`）— opt-in ウィンドウ拘束型 surge-less forceful フォールバック（§3.3）。§3.2/§3.3/§3.5 を含め合意済み設計（ADR-0001）として文書化されているが、**まだ CRD には含まれていない**。実装 PR がマージされるまで設定しても効果はない。上記のサンプルマニフェストからは意図的に省いている。
+**予約済み（v1.0、[#156]）。** `surge.forcefulFallback.enabled`（boolean、既定 `false`）— opt-in ウィンドウ拘束型 surge-less forceful フォールバック（§3.3）。このフィールドは CRD に存在するが**予約済み・無効状態**である: ローテーション動作が実装されるまでの間、`enabled: true` はアドミッション時（およびコントローラのポリシー検証時）に拒否される。§3.2/§3.3/§3.5 を含め合意済み設計（ADR-0001）として文書化されている。
 
 専用のステータス専用 reconciler（`RotationPolicyStatusReconciler`）が、`RotationPolicy` または `NodePool` の変更があるたびにこのビューを生成する — ローテーション状態機械・annotation・マーカーには一切触れない。`matchedNodePools` は spec の有効性に関わらず、セレクタの specificity でこのポリシーが勝っている NodePool 数を反映する。`rotatingNodePools` は、そのうち `noderotation.io/active-rotation` アンカー（in-flight なローテーション）を持つ NodePool 数を導出する。単一の `Ready` 条件がポリシーの有効性を要約する: reason が `Accepted` ならポリシーは有効かつ競合なし、`Invalid` なら OpenAPI スキーマでは弾けない reconcile 時検証の失敗（例: 日をまたぐウィンドウ）、`Conflict` なら少なくとも 1 つの NodePool で同一 specificity の競合が発生中であることを示す。`Invalid` は `Conflict` より優先される — 固有の欠陥が先に報告される。ステータスは観測用のみであり、ローテーション判断の source of truth にはならない。永続的な状態は `NodeClaim`/`NodePool` の annotation に置く（§5.3）。
 

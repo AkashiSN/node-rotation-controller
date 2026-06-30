@@ -105,6 +105,26 @@ func TestCRDFixesMaxUnavailableAtOne(t *testing.T) {
 	}
 }
 
+// TestCRDRejectsForcefulFallbackEnabled guards that surge.forcefulFallback is
+// reserved-disabled at admission until its controller implementation lands
+// (#156): it must carry a CEL rule forbidding enabled:true, mirroring
+// internal/policy.Validate and the prePull reservation.
+func TestCRDRejectsForcefulFallbackEnabled(t *testing.T) {
+	schema := loadCRDSchema(t)
+	surge := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)["surge"].(map[string]any)
+	ff := surge["properties"].(map[string]any)["forcefulFallback"].(map[string]any)
+	rules, ok := ff["x-kubernetes-validations"].([]any)
+	if !ok || len(rules) == 0 {
+		t.Fatalf("surge.forcefulFallback has no x-kubernetes-validations; enabled:true would be accepted")
+	}
+	for _, r := range rules {
+		if rule, _ := r.(map[string]any)["rule"].(string); rule == "!self.enabled" {
+			return
+		}
+	}
+	t.Errorf("surge.forcefulFallback validations %v do not forbid enabled:true", rules)
+}
+
 // TestCRDHasStatusSubresource guards that the observational status subresource
 // (spec §5.4 / §6) is served, so a status write never mutates spec and the
 // RotationPolicyStatusReconciler's Status().Update path exists at the API level.

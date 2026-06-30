@@ -911,6 +911,8 @@ spec:
         - kubernetes.io/arch
         - karpenter.sh/capacity-type
       preferred: []
+    forcefulFallback:             # reserved until #156 behavior lands; enabled:true is rejected
+      enabled: false
   prePull:                        # v2 (disabled in v1); only `enabled` is accepted
     enabled: false
 status:                           # observational/derived only — never authoritative runtime state (§5.3)
@@ -924,7 +926,7 @@ status:                           # observational/derived only — never authori
       message: "policy is valid and governs 2 NodePool(s)"
 ```
 
-**Planned (v1.0, [#156]).** `surge.forcefulFallback.enabled` (boolean, default `false`) — opt-in window-bounded surge-less forceful fallback (§3.3). It is documented here and in §3.2/§3.3/§3.5 as the agreed design (ADR-0001) but is **not yet part of the CRD**; setting it has no effect until the implementation PR lands. It is intentionally omitted from the example manifests above.
+**Reserved (v1.0, [#156]).** `surge.forcefulFallback.enabled` (boolean, default `false`) — opt-in window-bounded surge-less forceful fallback (§3.3). The field is present in the CRD but **reserved-disabled**: `enabled: true` is rejected at admission (and by the controller's policy validation) until the rotation behavior lands. It is documented in §3.2/§3.3/§3.5 as the agreed design (ADR-0001).
 
 A dedicated status-only reconciler (`RotationPolicyStatusReconciler`) populates this view after every `RotationPolicy` or `NodePool` change — it never touches the rotation state machine, annotations, or markers. `matchedNodePools` counts the pools this policy wins by selector specificity, independent of whether the spec is valid. `rotatingNodePools` counts those won pools that currently carry the `noderotation.io/active-rotation` anchor (an in-flight rotation). The single `Ready` condition summarises the policy's effectiveness: reason `Accepted` means the policy is valid and uncontested; `Invalid` means the spec failed reconcile-time validation (e.g. an overnight window the OpenAPI schema cannot reject); `Conflict` means the policy ties with one or more equally-specific policies for at least one NodePool. `Invalid` takes precedence over `Conflict` — the intrinsic fault is reported first. Status is observational only and is never the source of truth for rotation decisions; durable state lives on `NodeClaim`/`NodePool` annotations (§5.3).
 

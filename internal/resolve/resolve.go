@@ -141,6 +141,7 @@ func toSurge(in nrv1.Surge) policy.Surge {
 			Required:  append([]string(nil), in.MatchNodeRequirements.Required...),
 			Preferred: append([]string(nil), in.MatchNodeRequirements.Preferred...),
 		},
+		ForcefulFallback: policy.FeatureToggle{Enabled: in.ForcefulFallback.Enabled},
 	}
 	if in.MaxUnavailable != nil {
 		mu := int(*in.MaxUnavailable)

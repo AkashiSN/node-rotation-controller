@@ -121,6 +121,14 @@ type Surge struct {
 	// placeholder Pod replicates (spec §3.3).
 	// +optional
 	MatchNodeRequirements MatchNodeRequirements `json:"matchNodeRequirements,omitempty"`
+
+	// forcefulFallback is the opt-in window-bounded surge-less forceful fallback
+	// (spec §3.3). RESERVED until its controller implementation lands (#156): the
+	// CEL rule rejects enabled:true at admission, mirroring internal/policy.Validate,
+	// so the flag cannot be set on a controller that does not yet honor it.
+	// +kubebuilder:validation:XValidation:rule="!self.enabled",message="surge.forcefulFallback is not yet implemented and must be disabled (enabled: false) until #156 lands"
+	// +optional
+	ForcefulFallback FeatureToggle `json:"forcefulFallback,omitempty"`
 }
 
 // MatchNodeRequirements selects which candidate-node requirements the placeholder
