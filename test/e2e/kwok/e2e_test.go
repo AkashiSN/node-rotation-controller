@@ -91,6 +91,9 @@ func TestKWOKSurge(t *testing.T) {
 	t.Run("GovernanceLossReapsRotation", func(t *testing.T) {
 		testGovernanceLossReap(ctx, t, cl)
 	})
+	t.Run("ForcefulFallbackSurgeless", func(t *testing.T) {
+		testForcefulFallback(ctx, t, cl)
+	})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -909,6 +912,92 @@ func testGovernanceLossReap(ctx context.Context, t *testing.T, cl client.Client)
 	t.Logf("governance-loss reap complete: anchor cleared, placeholder gone, surge pair unfrozen — no orphaned do-not-disrupt")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Forceful-fallback surge-less rotation (spec §3.3, ADR-0001; issue #156 D4/D5).
+//
+// Exercises the opt-in window-bounded surge-less forceful fallback end-to-end on
+// nodepool-c, which is governed by a dedicated RotationPolicy with
+// surge.forcefulFallback.enabled=true and carries a short 30m expireAfter.
+// terminationGracePeriod is unset on the pool, so drainBound = DrainFallback (1h)
+// and t_rot ≈ 62m. Once the single candidate ages past the 2m ageThreshold it is
+// eligible AND within t_rot of its deadline (deadline-now ≈ 28m < t_rot ≈ 62m),
+// so the controller rotates it SURGE-LESS: it deletes the old NodeClaim without
+// ever provisioning a placeholder/surge node, drains via the voluntary path, and
+// increments noderotation_forceful_fallback_total.
+//
+// This is the scheduled-candidate gate proof the D4 envtest's disabled case could
+// only approximate (review Minor M1); the graceful pool-a subtests (which DO stage
+// a placeholder) are the contrast. nodepool-c is isolated by the ff-scope selector
+// so rotationpolicy-a never matches it.
+func testForcefulFallback(ctx context.Context, t *testing.T, cl client.Client) {
+	defer resetCluster(ctx, t, cl)
+	// Keep the controller reconciling promptly through the static-KWOK quiet periods
+	// so the aged candidate is picked within the (always-open) window.
+	defer startNudger(ctx, cl, poolC)()
+
+	const ageThreshold = 2 * time.Minute
+
+	// 1. A single candidate on pool-c (governed by rotationpolicy-c, forcefulFallback
+	//    enabled, 30m expireAfter).
+	applyDeployment(ctx, t, cl, deployment("ffcand", poolC, 300, ""))
+	candClaim := waitClaimProvisioned(ctx, t, cl, poolC)
+	t.Logf("candidate NodeClaim %s present on pool-c; aging it past the %s threshold", candClaim, ageThreshold)
+
+	// 2. Age it past the threshold so it is the sole eligible candidate; because its
+	//    30m deadline is within t_rot, the pick resolves to the surge-less path.
+	time.Sleep(ageThreshold - 30*time.Second)
+
+	// 3. No placeholder Pod is ever created while the candidate exists — the
+	//    load-bearing surge-less signal is that a surge is NEVER staged. Assert it
+	//    holds from just after eligibility across the rotation window; the metric
+	//    below is the durable proof, this rules out a graceful surge having run.
+	consistently(t, 45*time.Second, "no placeholder Pod is staged for the surge-less candidate", func() error {
+		ph, err := getPlaceholder(ctx, cl, candClaim)
+		if err != nil {
+			return err
+		}
+		if ph != nil {
+			return fmt.Errorf("placeholder Pod %s exists — the rotation used a surge, not the surge-less path", ph.Name)
+		}
+		return nil
+	})
+
+	// 4. The forceful-fallback counter incremented for pool-c — proof (only
+	//    startForcefulFallback sets it) that the surge-less path executed.
+	assertForcefulFallbackMetric(ctx, t, poolC)
+
+	// 5. The old candidate NodeClaim is deleted (drained away via the voluntary path).
+	eventually(t, surgeCompleteBudget, "the candidate NodeClaim to be deleted surge-less", func() error {
+		if _, err := getClaim(ctx, cl, candClaim); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("candidate %s not yet deleted (err=%v)", candClaim, err)
+		}
+		return nil
+	})
+
+	// 6. The rotation reaches complete: last-rotation stamped, anchor cleared, and
+	//    the rotation-mode marker cleared (spec §5.3 cleanup on completion).
+	eventually(t, surgeCompleteBudget, "the surge-less rotation to reach complete", func() error {
+		pool, err := getNodePool(ctx, cl, poolC)
+		if err != nil {
+			return err
+		}
+		if poolAnno(pool, annotations.LastRotationAt) == "" {
+			return fmt.Errorf("last-rotation-at not yet stamped (anchor=%q)", poolAnno(pool, annotations.ActiveRotation))
+		}
+		if poolAnno(pool, annotations.ActiveRotation) != "" {
+			return fmt.Errorf("anchor still held: %q", poolAnno(pool, annotations.ActiveRotation))
+		}
+		if poolAnno(pool, annotations.RotationMode) != "" {
+			return fmt.Errorf("rotation-mode marker not cleared on completion: %q", poolAnno(pool, annotations.RotationMode))
+		}
+		return nil
+	})
+
+	// 7. Completion side effects: success + drain-duration metrics (surge-less still
+	//    counts a Success and observes the drain phase from DrainingAt).
+	assertSuccessAndDrainMetrics(ctx, t, poolC)
+}
+
 // inScopeLabelKey is the NodePool label the KWOK RotationPolicy (manifests/
 // rotationpolicy.yaml) selects on; dropping it takes a pool out of governance.
 const inScopeLabelKey = "noderotation-e2e/in-scope"
@@ -1059,11 +1148,11 @@ func keys(m map[string]bool) []string {
 // placeholder), then delete the placeholder Pods, then the workloads/claims.
 func resetCluster(ctx context.Context, t *testing.T, cl client.Client) {
 	t.Helper()
-	for _, pool := range []string{poolA, poolB} {
+	for _, pool := range []string{poolA, poolB, poolC} {
 		clearPoolRotationState(ctx, cl, pool)
 	}
 	deletePlaceholders(ctx, cl)
-	for _, name := range []string{"cand", "spare", "poolb", "preemptor"} {
+	for _, name := range []string{"cand", "spare", "poolb", "preemptor", "ffcand"} {
 		deleteDeployment(ctx, cl, name)
 	}
 	_ = cl.DeleteAllOf(ctx, &policyv1.PodDisruptionBudget{}, client.InNamespace(workloadNamespace))
@@ -1072,7 +1161,7 @@ func resetCluster(ctx context.Context, t *testing.T, cl client.Client) {
 		// Re-clear residue every pass: a slow in-flight reconcile can re-anchor or
 		// recreate a placeholder between the initial sweep and now.
 		deletePlaceholders(ctx, cl)
-		for _, pool := range []string{poolA, poolB} {
+		for _, pool := range []string{poolA, poolB, poolC} {
 			clearPoolRotationState(ctx, cl, pool)
 			claims, err := listClaims(ctx, cl, pool)
 			if err != nil {

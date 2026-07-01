@@ -60,9 +60,11 @@ components + chart), then `go test -tags e2e ./test/e2e/kwok/...`.
 ## Layout
 
 - `kind.yaml` — single-node kind cluster (digest-pinned node image).
-- `manifests/` — NodePools + KWOKNodeClass (`nodepools.yaml`), the deterministic
-  instance-types file (`instance-types.json`, single zone `test-zone-a`), and the
-  controller Helm values overlay (`controller-values.yaml`).
+- `manifests/` — NodePools + KWOKNodeClass (`nodepools.yaml`, three pools: nodepool-a
+  the in-scope graceful-surge pool, nodepool-b the out-of-scope confinement pool, and
+  nodepool-c the forceful-fallback pool with 30m expireAfter / ff-scope label),
+  the deterministic instance-types file (`instance-types.json`, single zone
+  `test-zone-a`), and the controller Helm values overlay (`controller-values.yaml`).
 - `bootstrap.sh` — provisions the cluster and installs everything (idempotent).
 - `build-kwok-image.sh` — builds the pinned KWOK provider image in isolation.
 - `*_test.go` (`e2e` tag) — the Go driver + assertions.
@@ -80,6 +82,7 @@ components + chart), then `go test -tags e2e ./test/e2e/kwok/...`.
 | Voluntary drain honors a blocking PDB; loosening lets it finish | ✅ proven | `testPDB` |
 | `karpenter.sh/do-not-disrupt` present + controller-owned on **both** surge-pair nodes | ✅ proven (annotation-set form) | `testDoNotDisrupt` |
 | Bare-placeholder preemption: a competing workload preempts the negative-priority placeholder (it is the victim), the real workload is **not** evicted in its place, and it does **not** re-pend | ✅ proven | `testPreemption` |
+| Opt-in surge-less forceful fallback (`surge.forcefulFallback.enabled=true`, spec §3.3, ADR-0001): no placeholder ever staged, `noderotation_forceful_fallback_total` incremented, drain via voluntary path, `rotation-mode` marker cleared on completion (issue #156 D5) | ✅ proven | `testForcefulFallback` |
 
 `testDoNotDisrupt` parks the surge in flight with a blocking PDB on the candidate
 workload, so both surge-pair nodes stay frozen for a deterministic window rather

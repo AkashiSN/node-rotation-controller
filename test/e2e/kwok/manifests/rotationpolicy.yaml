@@ -45,3 +45,39 @@ spec:
       preferred: []
   prePull:
     enabled: false
+---
+# RotationPolicy for nodepool-c (issue #156 D5): the opt-in window-bounded
+# surge-less forceful fallback under test. Matches ONLY nodepool-c (ff-scope), so
+# it never contends with the nodepool-a policy above. ageThreshold 2m + the pool's
+# 30m expireAfter make every eligible candidate satisfy deadline-now < t_rot, so
+# the controller takes the surge-less path (spec §3.3) rather than a graceful surge.
+apiVersion: noderotation.io/v1alpha1
+kind: RotationPolicy
+metadata:
+  name: nodepool-c
+spec:
+  nodePoolSelector:
+    matchLabels:
+      noderotation-e2e/ff-scope: "true"
+  ageThreshold: 2m
+  minRotationChances: 2
+  maintenanceWindows:
+    - timezone: UTC
+      days: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+      start: "00:00"
+      end: "23:59"
+  surge:
+    maxUnavailable: 1
+    readyTimeout: 2m
+    cooldownAfter: 1s
+    retryBackoff: 5s
+    forcefulFallback:
+      enabled: true # the D4 opt-in under test (spec §3.3, ADR-0001)
+    matchNodeRequirements:
+      required:
+        - topology.kubernetes.io/zone
+        - kubernetes.io/arch
+        - karpenter.sh/capacity-type
+      preferred: []
+  prePull:
+    enabled: false
