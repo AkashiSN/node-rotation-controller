@@ -118,6 +118,8 @@ func poolSuffix(pool string) string {
 		return "a"
 	case poolB:
 		return "b"
+	case poolC:
+		return "c"
 	default:
 		return pool
 	}
