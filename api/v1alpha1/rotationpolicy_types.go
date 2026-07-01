@@ -147,9 +147,12 @@ type MatchNodeRequirements struct {
 	Preferred []string `json:"preferred,omitempty"`
 }
 
-// FeatureToggle gates a reserved expansion point (spec §5.4).
+// FeatureToggle is a boolean on/off gate reused across feature flags (spec §5.4);
+// each field that embeds it documents whether the toggle is available or reserved.
 type FeatureToggle struct {
-	// enabled turns the feature on. Reserved features must stay false in v1.
+	// enabled turns the feature on; the embedding field's own documentation states
+	// whether the toggle is available (e.g. surge.forcefulFallback) or reserved and
+	// required to stay false (e.g. prePull).
 	// +kubebuilder:default=false
 	// +optional
 	Enabled bool `json:"enabled,omitempty"`

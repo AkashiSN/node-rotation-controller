@@ -181,8 +181,10 @@ spec:
                 properties:
                   enabled:
                     default: false
-                    description: enabled turns the feature on. Reserved features must
-                      stay false in v1.
+                    description: |-
+                      enabled turns the feature on; the embedding field's own documentation states
+                      whether the toggle is available (e.g. surge.forcefulFallback) or reserved and
+                      required to stay false (e.g. prePull).
                     type: boolean
                 type: object
                 x-kubernetes-validations:
@@ -211,8 +213,10 @@ spec:
                     properties:
                       enabled:
                         default: false
-                        description: enabled turns the feature on. Reserved features
-                          must stay false in v1.
+                        description: |-
+                          enabled turns the feature on; the embedding field's own documentation states
+                          whether the toggle is available (e.g. surge.forcefulFallback) or reserved and
+                          required to stay false (e.g. prePull).
                         type: boolean
                     type: object
                   matchNodeRequirements:
