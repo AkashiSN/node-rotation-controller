@@ -172,7 +172,7 @@ func ffSeed(t *testing.T, cl client.Client, tier string, enabled bool) (*control
 func ffReconcile(t *testing.T, r *controller.RotationReconciler, poolName string) {
 	t.Helper()
 	ctx := context.Background()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: poolName}}); err != nil {
 			t.Fatalf("reconcile pass %d: %v", i, err)
 		}
