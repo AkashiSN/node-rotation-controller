@@ -62,7 +62,10 @@ components + chart), then `go test -tags e2e ./test/e2e/kwok/...`.
 - `kind.yaml` — single-node kind cluster (digest-pinned node image).
 - `manifests/` — NodePools + KWOKNodeClass (`nodepools.yaml`, three pools: nodepool-a
   the in-scope graceful-surge pool, nodepool-b the out-of-scope confinement pool, and
-  nodepool-c the forceful-fallback pool with 30m expireAfter / ff-scope label),
+  nodepool-c the forceful-fallback pool with a short 20m template expireAfter,
+  a Drifted-blocking disruption budget, and the ff-scope label — the subtest raises
+  its template expireAfter at runtime so the already-stamped claim is a short-lead
+  surge-less candidate),
   the deterministic instance-types file (`instance-types.json`, single zone
   `test-zone-a`), and the controller Helm values overlay (`controller-values.yaml`).
 - `bootstrap.sh` — provisions the cluster and installs everything (idempotent).

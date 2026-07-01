@@ -127,12 +127,19 @@ spec:
         name: default
         kind: KWOKNodeClass
         group: karpenter.kwok.sh
-      expireAfter: 30m # SHORT backstop → deadline-now < t_rot once eligible (§3.3 surge-less)
+      expireAfter: 20m # SHORT initial stamp: the provisioned claim carries E=20m. The e2e raises this template to a feasible value at runtime, so the existing claim (immutable spec) becomes a §3.2 layer-3 short-lead candidate that triggers the §3.3 surge-less path.
   limits:
     cpu: "1000"
   disruption:
     consolidationPolicy: WhenEmpty
     consolidateAfter: 8760h
+    budgets:
+      # Raising the template expireAfter at runtime marks the existing NodeClaim
+      # drifted; block Karpenter drift disruption so only the controller's
+      # surge-less deletion rotates it (the scenario is not proved for the wrong
+      # reason). Direct NodeClaim deletion still drains via termination regardless.
+      - nodes: "0"
+        reasons: ["Drifted"]
 ---
 apiVersion: karpenter.kwok.sh/v1alpha1
 kind: KWOKNodeClass

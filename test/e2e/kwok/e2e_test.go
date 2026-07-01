@@ -916,14 +916,27 @@ func testGovernanceLossReap(ctx context.Context, t *testing.T, cl client.Client)
 // Forceful-fallback surge-less rotation (spec §3.3, ADR-0001; issue #156 D4/D5).
 //
 // Exercises the opt-in window-bounded surge-less forceful fallback end-to-end on
-// nodepool-c, which is governed by a dedicated RotationPolicy with
-// surge.forcefulFallback.enabled=true and carries a short 30m expireAfter.
-// terminationGracePeriod is unset on the pool, so drainBound = DrainFallback (1h)
-// and t_rot ≈ 62m. Once the single candidate ages past the 2m ageThreshold it is
-// eligible AND within t_rot of its deadline (deadline-now ≈ 28m < t_rot ≈ 62m),
-// so the controller rotates it SURGE-LESS: it deletes the old NodeClaim without
-// ever provisioning a placeholder/surge node, drains via the voluntary path, and
-// increments noderotation_forceful_fallback_total.
+// nodepool-c (governed by a dedicated RotationPolicy with
+// surge.forcefulFallback.enabled=true). Surge-less is reached only for a candidate
+// that cannot complete a graceful surge before its OWN deadline while the pool
+// schedule is otherwise feasible (§3.2 layer 3 / §3.5); a globally-infeasible
+// schedule (E < t_rot) is a fatal config error the controller refuses to start
+// (§3.2 layer 1), so a single short-expireAfter pool would just be blocked — never
+// reaching the surge-less pick.
+//
+// To create the layer-3 short-lead case deterministically: pool-c starts with a
+// short template expireAfter (20m), so Karpenter stamps the candidate NodeClaim
+// with E=20m; the test then raises the template to a feasible value (2h). The
+// existing claim keeps its 20m stamp (NodeClaim.spec is immutable), so it becomes
+// a short-lead candidate whose deadline is within t_rot (≈62m — tGP unset →
+// drainBound = DrainFallback 1h). Once it ages past the 2m ageThreshold the
+// controller rotates it SURGE-LESS: deletes the NodeClaim with no placeholder ever
+// staged, drains via the voluntary path, and increments
+// noderotation_forceful_fallback_total. This mirrors spec §3.2's "raising E heals
+// new claims only; existing stamped ones are caught by the layer-3 per-node
+// check". A Drifted-blocking disruption budget on pool-c keeps Karpenter from
+// disrupting the (now template-drifted) node itself, so only the controller's
+// surge-less deletion drives the rotation.
 //
 // This is the scheduled-candidate gate proof the D4 envtest's disabled case could
 // only approximate (review Minor M1); the graceful pool-a subtests (which DO stage
@@ -937,17 +950,23 @@ func testForcefulFallback(ctx context.Context, t *testing.T, cl client.Client) {
 
 	const ageThreshold = 2 * time.Minute
 
-	// 1. A single candidate on pool-c (governed by the nodepool-c RotationPolicy,
-	//    forcefulFallback enabled, 30m expireAfter).
+	// 1. A single candidate on pool-c. pool-c starts with a short 20m template
+	//    expireAfter, so Karpenter stamps this claim with E=20m.
 	applyDeployment(ctx, t, cl, deployment("ffcand", poolC, 300, ""))
 	candClaim := waitClaimProvisioned(ctx, t, cl, poolC)
-	t.Logf("candidate NodeClaim %s present on pool-c; aging it past the %s threshold", candClaim, ageThreshold)
+	t.Logf("candidate NodeClaim %s present on pool-c (stamped short E=20m)", candClaim)
 
-	// 2. Age it past the threshold so it is the sole eligible candidate; because its
-	//    30m deadline is within t_rot, the pick resolves to the surge-less path.
+	// 2. Raise pool-c's template expireAfter to a feasible representative (2h),
+	//    clearing the §3.2 layer-1 OverrideGBelowOne fatal so the pool starts
+	//    rotations. The existing claim keeps its 20m stamp (immutable spec), so it
+	//    stays a §3.2 layer-3 short-lead candidate whose deadline is within t_rot →
+	//    the pick resolves to surge-less (§3.3).
+	raisePoolExpireAfter(ctx, t, cl, poolC, "2h")
+
+	// 3. Age past the threshold so the short-lead claim is the sole eligible candidate.
 	time.Sleep(ageThreshold - 30*time.Second)
 
-	// 3. No placeholder Pod is ever created while the candidate exists — the
+	// 4. No placeholder Pod is ever created while the candidate exists — the
 	//    load-bearing surge-less signal is that a surge is NEVER staged. The sleep
 	//    above ends ~30s before eligibility (age = ageThreshold); this 90s window
 	//    therefore spans from just before eligibility to ~60s after it, so a
@@ -966,11 +985,11 @@ func testForcefulFallback(ctx context.Context, t *testing.T, cl client.Client) {
 		return nil
 	})
 
-	// 4. The forceful-fallback counter incremented for pool-c — proof (only
+	// 5. The forceful-fallback counter incremented for pool-c — proof (only
 	//    startForcefulFallback sets it) that the surge-less path executed.
 	assertForcefulFallbackMetric(ctx, t, poolC)
 
-	// 5. The old candidate NodeClaim is deleted (drained away via the voluntary path).
+	// 6. The old candidate NodeClaim is deleted (drained away via the voluntary path).
 	eventually(t, surgeCompleteBudget, "the candidate NodeClaim to be deleted surge-less", func() error {
 		if _, err := getClaim(ctx, cl, candClaim); !apierrors.IsNotFound(err) {
 			return fmt.Errorf("candidate %s not yet deleted (err=%v)", candClaim, err)
@@ -978,7 +997,7 @@ func testForcefulFallback(ctx context.Context, t *testing.T, cl client.Client) {
 		return nil
 	})
 
-	// 6. The rotation reaches complete: last-rotation stamped, anchor cleared, and
+	// 7. The rotation reaches complete: last-rotation stamped, anchor cleared, and
 	//    the rotation-mode marker cleared (spec §5.3 cleanup on completion).
 	eventually(t, surgeCompleteBudget, "the surge-less rotation to reach complete", func() error {
 		pool, err := getNodePool(ctx, cl, poolC)
@@ -997,9 +1016,27 @@ func testForcefulFallback(ctx context.Context, t *testing.T, cl client.Client) {
 		return nil
 	})
 
-	// 7. Completion side effects: success + drain-duration metrics (surge-less still
+	// 8. Completion side effects: success + drain-duration metrics (surge-less still
 	//    counts a Success and observes the drain phase from DrainingAt).
 	assertSuccessAndDrainMetrics(ctx, t, poolC)
+}
+
+// raisePoolExpireAfter patches the NodePool template's expireAfter to dur (an
+// RFC "1h"/"2h" duration string) via a server-side merge patch — avoiding a
+// read-modify-write race with the nudger, which patches the same NodePool's
+// annotations. Raising it clears a §3.2 layer-1 fatal (an OverrideGBelowOne / A<=0
+// template) so the pool starts rotations again, while any NodeClaim already
+// stamped with a shorter expireAfter keeps it (spec is immutable) and is caught by
+// the §3.2 layer-3 short-lead check — the setup for a surge-less pick.
+func raisePoolExpireAfter(ctx context.Context, t *testing.T, cl client.Client, pool, dur string) {
+	t.Helper()
+	np := &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: pool}}
+	patch := client.RawPatch(types.MergePatchType,
+		[]byte(fmt.Sprintf(`{"spec":{"template":{"spec":{"expireAfter":%q}}}}`, dur)))
+	if err := cl.Patch(ctx, np, patch); err != nil {
+		t.Fatalf("raise %s template expireAfter to %s: %v", pool, dur, err)
+	}
+	t.Logf("raised %s template expireAfter to %s (clears layer-1 fatal; existing claim stays short-lead)", pool, dur)
 }
 
 // inScopeLabelKey is the NodePool label the KWOK RotationPolicy (manifests/
