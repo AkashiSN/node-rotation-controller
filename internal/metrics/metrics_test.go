@@ -136,6 +136,20 @@ func TestCompletedCountersByOutcome(t *testing.T) {
 	}
 }
 
+// ForcefulFallback is a counter incremented once per surge-less window-bounded
+// forceful-fallback rotation initiated (spec §3.3); it carries only a nodepool
+// label (the nodeClaim is logged by callers, not a metric label).
+func TestForcefulFallbackCounter(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	rec := metrics.New(reg)
+	rec.ForcefulFallback("pool-a", "claim-1")
+	rec.ForcefulFallback("pool-a", "claim-2")
+
+	if got := metricValue(t, reg, "noderotation_forceful_fallback_total", map[string]string{"nodepool": "pool-a"}); got != 2 {
+		t.Fatalf("forceful_fallback_total{pool-a} = %v, want 2", got)
+	}
+}
+
 func TestWindowActiveGauge(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	rec := metrics.New(reg)

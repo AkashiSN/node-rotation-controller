@@ -460,13 +460,19 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	if cand == nil {
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
-	ok, err := r.headroomFits(ctx, pool, cand)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !ok {
-		log.Info("insufficient limits headroom; cannot surge", "candidate", cand.Name)
-		return ctrl.Result{RequeueAfter: longRequeue}, nil
+	// A candidate that cannot complete a graceful surge before its own deadline
+	// rotates surge-less when the opt-in fallback is enabled (spec §3.3); it has
+	// no surge, so the headroom gate (which sizes the placeholder) does not apply.
+	surgeless := r.surgelessFallback(cand, res, now)
+	if !surgeless {
+		ok, err := r.headroomFits(ctx, pool, cand)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !ok {
+			log.Info("insufficient limits headroom; cannot surge", "candidate", cand.Name)
+			return ctrl.Result{RequeueAfter: longRequeue}, nil
+		}
 	}
 	// Anchor BEFORE any other side effect: a conflict-checked, only-if-absent
 	// write (optimistic lock on resourceVersion). A racing reconcile's write
@@ -477,7 +483,40 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		}
 		return ctrl.Result{}, err
 	}
+	if surgeless {
+		return r.startForcefulFallback(ctx, pool, cand)
+	}
 	return r.advance(ctx, pool, cand.Name, res)
+}
+
+// surgelessFallback reports whether the candidate must rotate via the opt-in
+// window-bounded surge-less path (spec §3.3): the fallback is enabled and a
+// graceful surge started now cannot finish before the candidate's own deadline
+// (deadline − now < t_rot), so the surge would only lose the race to Forceful
+// Expiration. The pool is already confirmed in-window by startGates. A candidate
+// with expireAfter: Never has no deadline and never qualifies.
+func (r *RotationReconciler) surgelessFallback(cand *karpv1.NodeClaim, res resolved, now time.Time) bool {
+	if !res.pol.Surge.ForcefulFallback.Enabled {
+		return false
+	}
+	dl, ok := claimDeadline(cand)
+	if !ok {
+		return false
+	}
+	// t_rot = readyTimeout + tGP + Buffer (spec §3.2); res.drainBound is tGP + Buffer.
+	tRot := res.readyTimeout + res.drainBound
+	return dl.Sub(now) < tRot
+}
+
+// claimDeadline returns the candidate's Forceful Expiration deadline
+// (creationTimestamp + spec.expireAfter); ok is false for expireAfter: Never
+// (nil Duration), which has no deadline (mirrors internal/selection).
+func claimDeadline(cand *karpv1.NodeClaim) (time.Time, bool) {
+	e := cand.Spec.ExpireAfter.Duration
+	if e == nil {
+		return time.Time{}, false
+	}
+	return cand.CreationTimestamp.Add(*e), true
 }
 
 // observe computes and emits the §4.2 reconcile-time gauges from the live claims
@@ -759,6 +798,43 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	return ctrl.Result{RequeueAfter: shortRequeue}, nil
 }
 
+// startForcefulFallback begins an opt-in surge-less rotation (spec §3.3): with no
+// surge to provision, it records the rotation as forceful-fallback on the anchor,
+// transitions straight to draining, and deletes the old NodeClaim so Karpenter's
+// termination controller drains it via the voluntary path (PDBs apply). The drain
+// and completion reuse advanceDraining/completeOrAbort unchanged. No placeholder,
+// no readyTimeout, no node freeze — there is no surge pair to protect. A crash
+// after the state write but before the delete is healed by advanceDraining, which
+// re-issues the delete (rotation_controller.go ~846).
+func (r *RotationReconciler) startForcefulFallback(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (ctrl.Result, error) {
+	// Durable phase + mode record BEFORE the delete: the mode lives on the anchor
+	// (the candidate is deleted just below), and DrainingAt is the §4.2 drain
+	// histogram start, stamped write-once.
+	if err := r.patchPool(ctx, pool, func(m map[string]string) {
+		m[annotations.ActiveRotationState] = annotations.StateDraining
+		m[annotations.RotationMode] = annotations.RotationModeForcefulFallback
+		if m[annotations.DrainingAt] == "" {
+			m[annotations.DrainingAt] = rfc3339(r.now())
+		}
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
+		m[annotations.State] = annotations.StateDraining
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	r.recorder().ForcefulFallback(pool.Name, cand.Name)
+	if r.Events != nil {
+		r.Events.Eventf(pool, nil, corev1.EventTypeWarning, reasonForcefulFallback, actionForcefulFallback,
+			"rotating NodeClaim %s surge-less: a graceful surge cannot complete before its deadline; deleting in-window via the voluntary path (PDBs apply)", cand.Name)
+	}
+	if err := client.IgnoreNotFound(r.Delete(ctx, cand)); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: shortRequeue}, nil
+}
+
 // abortPendingExpiry handles a candidate caught force-expiring in pending: clean
 // up the runtime objects, mark the claim terminally expired (before releasing the
 // anchor), and emit expired — never success, no cooldown (spec §5.2).
@@ -825,6 +901,7 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 		delete(m, annotations.ActiveRotation)
 		delete(m, annotations.ActiveRotationState)
 		delete(m, annotations.DrainingAt)
+		delete(m, annotations.RotationMode)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -899,6 +976,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 		delete(m, annotations.ActiveRotation)
 		delete(m, annotations.ActiveRotationState)
 		delete(m, annotations.DrainingAt)
+		delete(m, annotations.RotationMode)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -944,6 +1022,7 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 			delete(m, annotations.ActiveRotation)
 			delete(m, annotations.ActiveRotationState)
 			delete(m, annotations.DrainingAt)
+			delete(m, annotations.RotationMode)
 		}); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -1283,6 +1362,7 @@ func (r *RotationReconciler) clearAnchor(ctx context.Context, pool *karpv1.NodeP
 		delete(m, annotations.ActiveRotation)
 		delete(m, annotations.ActiveRotationState)
 		delete(m, annotations.DrainingAt)
+		delete(m, annotations.RotationMode)
 	})
 }
 

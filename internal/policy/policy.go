@@ -52,7 +52,7 @@ type Surge struct {
 	CooldownAfter         *metav1.Duration      `json:"cooldownAfter"`
 	RetryBackoff          *metav1.Duration      `json:"retryBackoff"`
 	MatchNodeRequirements MatchNodeRequirements `json:"matchNodeRequirements"`
-	ForcefulFallback      FeatureToggle         `json:"forcefulFallback"` // §3.3; reserved until #156 — Validate rejects enabled:true
+	ForcefulFallback      FeatureToggle         `json:"forcefulFallback"` // §3.3, ADR-0001; opt-in surge-less window-bounded forceful fallback (default off)
 }
 
 // MatchNodeRequirements selects which candidate-node requirements the
@@ -190,13 +190,6 @@ func (p *Policy) Validate() error {
 	// The v2 pre-pull feature is not implemented in v1; a true value is a misconfig.
 	if p.PrePull.Enabled {
 		errs = append(errs, errors.New("prePull.enabled must be false in v1"))
-	}
-
-	// The window-bounded forceful fallback (spec §3.3) is reserved-disabled until
-	// its controller implementation lands (#156); a true value is a misconfig.
-	// Mirrors the CRD CEL rule on surge.forcefulFallback.
-	if p.Surge.ForcefulFallback.Enabled {
-		errs = append(errs, errors.New("surge.forcefulFallback.enabled must be false until its controller implementation lands (#156)"))
 	}
 
 	return errors.Join(errs...)

@@ -162,7 +162,6 @@ func TestValidateStructuralErrors(t *testing.T) {
 			p.MaintenanceWindows[0].End = "02:00"
 		}},
 		{"prePull enabled", func(p *Policy) { p.PrePull.Enabled = true }},
-		{"forcefulFallback enabled", func(p *Policy) { p.Surge.ForcefulFallback.Enabled = true }},
 		{"K below 1", func(p *Policy) { p.MinRotationChances = new(0) }},
 		{"negative readyTimeout", func(p *Policy) { p.Surge.ReadyTimeout = durPtr(-1 * time.Minute) }},
 		{"negative cooldownAfter", func(p *Policy) { p.Surge.CooldownAfter = durPtr(-1 * time.Minute) }},

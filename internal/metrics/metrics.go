@@ -21,19 +21,20 @@ import (
 
 // Recorder is the Prometheus-backed controller.Recorder.
 type Recorder struct {
-	completed       *prometheus.CounterVec
-	duration        *prometheus.HistogramVec
-	candidates      *prometheus.GaugeVec
-	inProgress      *prometheus.GaugeVec
-	freezeUntil     *prometheus.GaugeVec
-	ageThreshold    *prometheus.GaugeVec
-	rotationChances *prometheus.GaugeVec
-	windowPeriod    *prometheus.GaugeVec
-	shortLead       *prometheus.GaugeVec
-	drainStuck      *prometheus.GaugeVec
-	retryCount      *prometheus.GaugeVec
-	policyConflict  *prometheus.GaugeVec
-	windowActive    *prometheus.GaugeVec
+	completed        *prometheus.CounterVec
+	forcefulFallback *prometheus.CounterVec
+	duration         *prometheus.HistogramVec
+	candidates       *prometheus.GaugeVec
+	inProgress       *prometheus.GaugeVec
+	freezeUntil      *prometheus.GaugeVec
+	ageThreshold     *prometheus.GaugeVec
+	rotationChances  *prometheus.GaugeVec
+	windowPeriod     *prometheus.GaugeVec
+	shortLead        *prometheus.GaugeVec
+	drainStuck       *prometheus.GaugeVec
+	retryCount       *prometheus.GaugeVec
+	policyConflict   *prometheus.GaugeVec
+	windowActive     *prometheus.GaugeVec
 }
 
 var _ controller.Recorder = (*Recorder)(nil)
@@ -49,6 +50,10 @@ func New(reg prometheus.Registerer) *Recorder {
 			Name: "noderotation_completed_total",
 			Help: "Cumulative rotation completions by outcome (success, failure, expired).",
 		}, []string{"nodepool", "outcome"}),
+		forcefulFallback: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "noderotation_forceful_fallback_total",
+			Help: "Cumulative surge-less window-bounded forceful-fallback rotations initiated (spec §3.3).",
+		}, []string{"nodepool"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "noderotation_duration_seconds",
 			Help:    "Per-phase rotation duration in seconds (phase: surge_wait, drain).",
@@ -100,7 +105,7 @@ func New(reg prometheus.Registerer) *Recorder {
 		}, poolLabel),
 	}
 	reg.MustRegister(
-		r.completed, r.duration, r.candidates, r.inProgress, r.freezeUntil,
+		r.completed, r.forcefulFallback, r.duration, r.candidates, r.inProgress, r.freezeUntil,
 		r.ageThreshold, r.rotationChances, r.windowPeriod, r.shortLead,
 		r.drainStuck, r.retryCount, r.policyConflict, r.windowActive,
 	)
@@ -113,6 +118,13 @@ func (r *Recorder) Expired(nodePool, _ string) {
 }
 func (r *Recorder) Failure(nodePool, _ string) {
 	r.completed.WithLabelValues(nodePool, "failure").Inc()
+}
+
+// ForcefulFallback increments the surge-less forceful-fallback counter for one
+// NodePool. The nodeClaim is accepted for symmetry with the other completion
+// recorders and logged by callers; it is not a metric label (cardinality).
+func (r *Recorder) ForcefulFallback(nodePool, _ string) {
+	r.forcefulFallback.WithLabelValues(nodePool).Inc()
 }
 
 func (r *Recorder) ObserveWindow(nodePool string, active bool) {
@@ -159,6 +171,8 @@ func (r *Recorder) ForgetPool(nodePool string) {
 	// an extra label, so drop every series sharing this nodepool.
 	r.completed.DeletePartialMatch(prometheus.Labels{"nodepool": nodePool})
 	r.duration.DeletePartialMatch(prometheus.Labels{"nodepool": nodePool})
+	// forceful_fallback_total{nodepool} has only the nodepool label.
+	r.forcefulFallback.DeleteLabelValues(nodePool)
 }
 
 func b2f(b bool) float64 {
