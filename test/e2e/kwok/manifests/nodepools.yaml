@@ -87,6 +87,60 @@ spec:
     consolidationPolicy: WhenEmpty
     consolidateAfter: 8760h
 ---
+# nodepool-c → in scope for the forceful-fallback e2e (issue #156 D5). Governed by
+# a DEDICATED RotationPolicy (rotationpolicy nodepool-c) with
+# surge.forcefulFallback.enabled=true. It carries ff-scope (NOT in-scope), so
+# rotationpolicy-a never matches it and the two policies never contend.
+#
+# expireAfter is SHORT (30m) so that once a candidate is eligible (age > the 2m
+# ageThreshold), deadline-now (~28m) < t_rot. t_rot = readyTimeout + drainBound;
+# terminationGracePeriod is deliberately UNSET so drainBound = DrainFallback (1h)
+# and t_rot ≈ 62m — the trigger fires with wide margin. 30m is still far enough
+# out that Karpenter never force-expires the node within the ~10m subtest.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: nodepool-c
+  labels:
+    noderotation-e2e/pool: c
+    noderotation-e2e/ff-scope: "true"
+spec:
+  template:
+    metadata:
+      labels:
+        noderotation-e2e/pool: c
+    spec:
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["test-zone-a"]
+      nodeClassRef:
+        name: default
+        kind: KWOKNodeClass
+        group: karpenter.kwok.sh
+      expireAfter: 20m # SHORT initial stamp: the provisioned claim carries E=20m. The e2e raises this template to a feasible value at runtime, so the existing claim (immutable spec) becomes a §3.2 layer-3 short-lead candidate that triggers the §3.3 surge-less path.
+  limits:
+    cpu: "1000"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 8760h
+    budgets:
+      # Raising the template expireAfter at runtime marks the existing NodeClaim
+      # drifted; block Karpenter drift disruption so only the controller's
+      # surge-less deletion rotates it (the scenario is not proved for the wrong
+      # reason). Direct NodeClaim deletion still drains via termination regardless.
+      - nodes: "0"
+        reasons: ["Drifted"]
+---
 apiVersion: karpenter.kwok.sh/v1alpha1
 kind: KWOKNodeClass
 metadata:

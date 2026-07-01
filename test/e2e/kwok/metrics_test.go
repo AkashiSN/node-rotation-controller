@@ -85,6 +85,25 @@ func hasDrainDuration(metrics, pool string) bool {
 	return false
 }
 
+// assertForcefulFallbackMetric polls the scraped /metrics until the surge-less
+// forceful-fallback counter for the pool parses to >= 1. This counter is
+// incremented only by the controller's surge-less path (startForcefulFallback,
+// spec §3.3) and never by a graceful surge, so its presence unambiguously proves
+// the rotation took the surge-less path.
+func assertForcefulFallbackMetric(ctx context.Context, t *testing.T, pool string) {
+	t.Helper()
+	want := fmt.Sprintf(`noderotation_forceful_fallback_total{nodepool="%s"}`, pool)
+	eventually(t, 60*time.Second, "forceful_fallback_total metric on /metrics", func() error {
+		body := scrapeMetrics(ctx, t)
+		for _, line := range strings.Split(body, "\n") {
+			if strings.HasPrefix(line, want) && metricValueAtLeastOne(line) {
+				return nil
+			}
+		}
+		return fmt.Errorf("%s not >=1 yet", want)
+	})
+}
+
 // metricValueAtLeastOne parses the trailing value of a Prometheus text-format
 // line and reports whether it is >= 1.
 func metricValueAtLeastOne(line string) bool {

@@ -53,6 +53,7 @@ const (
 	// (manifests/nodepools.yaml).
 	poolA = "nodepool-a"
 	poolB = "nodepool-b"
+	poolC = "nodepool-c"
 	// workloadNamespace holds the sample workloads driving provisioning.
 	workloadNamespace = "default"
 	// poolLabelKey/inScopeKey mirror the labels on the NodePool manifests.

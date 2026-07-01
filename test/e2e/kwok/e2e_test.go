@@ -91,6 +91,9 @@ func TestKWOKSurge(t *testing.T) {
 	t.Run("GovernanceLossReapsRotation", func(t *testing.T) {
 		testGovernanceLossReap(ctx, t, cl)
 	})
+	t.Run("ForcefulFallbackSurgeless", func(t *testing.T) {
+		testForcefulFallback(ctx, t, cl)
+	})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -909,6 +912,137 @@ func testGovernanceLossReap(ctx context.Context, t *testing.T, cl client.Client)
 	t.Logf("governance-loss reap complete: anchor cleared, placeholder gone, surge pair unfrozen — no orphaned do-not-disrupt")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Forceful-fallback surge-less rotation (spec §3.3, ADR-0001; issue #156 D4/D5).
+//
+// Exercises the opt-in window-bounded surge-less forceful fallback end-to-end on
+// nodepool-c (governed by a dedicated RotationPolicy with
+// surge.forcefulFallback.enabled=true). Surge-less is reached only for a candidate
+// that cannot complete a graceful surge before its OWN deadline while the pool
+// schedule is otherwise feasible (§3.2 layer 3 / §3.5); a globally-infeasible
+// schedule (E < t_rot) is a fatal config error the controller refuses to start
+// (§3.2 layer 1), so a single short-expireAfter pool would just be blocked — never
+// reaching the surge-less pick.
+//
+// To create the layer-3 short-lead case deterministically: pool-c starts with a
+// short template expireAfter (20m), so Karpenter stamps the candidate NodeClaim
+// with E=20m; the test then raises the template to a feasible value (8760h). The
+// existing claim keeps its 20m stamp (NodeClaim.spec is immutable), so it becomes
+// a short-lead candidate whose deadline is within t_rot (≈62m — tGP unset →
+// drainBound = DrainFallback 1h). Once it ages past the 2m ageThreshold the
+// controller rotates it SURGE-LESS: deletes the NodeClaim with no placeholder ever
+// staged, drains via the voluntary path, and increments
+// noderotation_forceful_fallback_total. This mirrors spec §3.2's "raising E heals
+// new claims only; existing stamped ones are caught by the layer-3 per-node
+// check". A Drifted-blocking disruption budget on pool-c keeps Karpenter from
+// disrupting the (now template-drifted) node itself, so only the controller's
+// surge-less deletion drives the rotation.
+//
+// This is the scheduled-candidate gate proof the D4 envtest's disabled case could
+// only approximate (review Minor M1); the graceful pool-a subtests (which DO stage
+// a placeholder) are the contrast. nodepool-c is isolated by the ff-scope selector
+// so rotationpolicy-a never matches it.
+func testForcefulFallback(ctx context.Context, t *testing.T, cl client.Client) {
+	defer resetCluster(ctx, t, cl)
+	// Keep the controller reconciling promptly through the static-KWOK quiet periods
+	// so the aged candidate is picked within the (always-open) window.
+	defer startNudger(ctx, cl, poolC)()
+
+	const ageThreshold = 2 * time.Minute
+
+	// 1. A single candidate on pool-c. pool-c starts with a short 20m template
+	//    expireAfter, so Karpenter stamps this claim with E=20m.
+	applyDeployment(ctx, t, cl, deployment("ffcand", poolC, 300, ""))
+	candClaim := waitClaimProvisioned(ctx, t, cl, poolC)
+	t.Logf("candidate NodeClaim %s present on pool-c (stamped short E=20m)", candClaim)
+
+	// 2. Raise pool-c's template expireAfter to a large feasible value (8760h),
+	//    clearing the §3.2 layer-1 OverrideGBelowOne fatal so the pool starts
+	//    rotations. The value must clear G >= 1 = floor(((E − t_rot) − A) / P):
+	//    the window {00:00–23:59} leaves a 1-minute daily gap so it is NOT
+	//    continuous and P = 24h (not the reconcile tick), hence E must exceed
+	//    P + t_rot + A ≈ 25h — 8760h (matching pools a/b) clears it with wide
+	//    margin. The existing claim keeps its 20m stamp (immutable spec), so it
+	//    stays a §3.2 layer-3 short-lead candidate whose deadline is within t_rot →
+	//    the pick resolves to surge-less (§3.3).
+	raisePoolExpireAfter(ctx, t, cl, poolC, "8760h")
+
+	// 3. Age past the threshold so the short-lead claim is the sole eligible candidate.
+	time.Sleep(ageThreshold - 30*time.Second)
+
+	// 4. No placeholder Pod is ever created while the candidate exists — the
+	//    load-bearing surge-less signal is that a surge is NEVER staged. The sleep
+	//    above ends ~30s before eligibility (age = ageThreshold); this 90s window
+	//    therefore spans from just before eligibility to ~60s after it, so a
+	//    would-be graceful placeholder (which a wrong impl stages right at
+	//    eligibility and holds through readyTimeout) is caught even if the
+	//    controller's first post-eligibility reconcile is delayed under CI load.
+	//    The metric below is the durable proof; this rules out a graceful surge.
+	consistently(t, 90*time.Second, "no placeholder Pod is staged for the surge-less candidate", func() error {
+		ph, err := getPlaceholder(ctx, cl, candClaim)
+		if err != nil {
+			return err
+		}
+		if ph != nil {
+			return fmt.Errorf("placeholder Pod %s exists — the rotation used a surge, not the surge-less path", ph.Name)
+		}
+		return nil
+	})
+
+	// 5. The forceful-fallback counter incremented for pool-c — proof (only
+	//    startForcefulFallback sets it) that the surge-less path executed.
+	assertForcefulFallbackMetric(ctx, t, poolC)
+
+	// 6. The old candidate NodeClaim is deleted (drained away via the voluntary path).
+	eventually(t, surgeCompleteBudget, "the candidate NodeClaim to be deleted surge-less", func() error {
+		if _, err := getClaim(ctx, cl, candClaim); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("candidate %s not yet deleted (err=%v)", candClaim, err)
+		}
+		return nil
+	})
+
+	// 7. The rotation reaches complete: last-rotation stamped, anchor cleared, and
+	//    the rotation-mode marker cleared (spec §5.3 cleanup on completion).
+	eventually(t, surgeCompleteBudget, "the surge-less rotation to reach complete", func() error {
+		pool, err := getNodePool(ctx, cl, poolC)
+		if err != nil {
+			return err
+		}
+		if poolAnno(pool, annotations.LastRotationAt) == "" {
+			return fmt.Errorf("last-rotation-at not yet stamped (anchor=%q)", poolAnno(pool, annotations.ActiveRotation))
+		}
+		if poolAnno(pool, annotations.ActiveRotation) != "" {
+			return fmt.Errorf("anchor still held: %q", poolAnno(pool, annotations.ActiveRotation))
+		}
+		if poolAnno(pool, annotations.RotationMode) != "" {
+			return fmt.Errorf("rotation-mode marker not cleared on completion: %q", poolAnno(pool, annotations.RotationMode))
+		}
+		return nil
+	})
+
+	// 8. Completion side effects: success + drain-duration metrics (surge-less still
+	//    counts a Success and observes the drain phase from DrainingAt).
+	assertSuccessAndDrainMetrics(ctx, t, poolC)
+}
+
+// raisePoolExpireAfter patches the NodePool template's expireAfter to dur (an
+// RFC "1h"/"2h" duration string) via a server-side merge patch — avoiding a
+// read-modify-write race with the nudger, which patches the same NodePool's
+// annotations. Raising it clears a §3.2 layer-1 fatal (an OverrideGBelowOne / A<=0
+// template) so the pool starts rotations again, while any NodeClaim already
+// stamped with a shorter expireAfter keeps it (spec is immutable) and is caught by
+// the §3.2 layer-3 short-lead check — the setup for a surge-less pick.
+func raisePoolExpireAfter(ctx context.Context, t *testing.T, cl client.Client, pool, dur string) {
+	t.Helper()
+	np := &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: pool}}
+	patch := client.RawPatch(types.MergePatchType,
+		[]byte(fmt.Sprintf(`{"spec":{"template":{"spec":{"expireAfter":%q}}}}`, dur)))
+	if err := cl.Patch(ctx, np, patch); err != nil {
+		t.Fatalf("raise %s template expireAfter to %s: %v", pool, dur, err)
+	}
+	t.Logf("raised %s template expireAfter to %s (clears layer-1 fatal; existing claim stays short-lead)", pool, dur)
+}
+
 // inScopeLabelKey is the NodePool label the KWOK RotationPolicy (manifests/
 // rotationpolicy.yaml) selects on; dropping it takes a pool out of governance.
 const inScopeLabelKey = "noderotation-e2e/in-scope"
@@ -1059,11 +1193,11 @@ func keys(m map[string]bool) []string {
 // placeholder), then delete the placeholder Pods, then the workloads/claims.
 func resetCluster(ctx context.Context, t *testing.T, cl client.Client) {
 	t.Helper()
-	for _, pool := range []string{poolA, poolB} {
+	for _, pool := range []string{poolA, poolB, poolC} {
 		clearPoolRotationState(ctx, cl, pool)
 	}
 	deletePlaceholders(ctx, cl)
-	for _, name := range []string{"cand", "spare", "poolb", "preemptor"} {
+	for _, name := range []string{"cand", "spare", "poolb", "preemptor", "ffcand"} {
 		deleteDeployment(ctx, cl, name)
 	}
 	_ = cl.DeleteAllOf(ctx, &policyv1.PodDisruptionBudget{}, client.InNamespace(workloadNamespace))
@@ -1072,7 +1206,7 @@ func resetCluster(ctx context.Context, t *testing.T, cl client.Client) {
 		// Re-clear residue every pass: a slow in-flight reconcile can re-anchor or
 		// recreate a placeholder between the initial sweep and now.
 		deletePlaceholders(ctx, cl)
-		for _, pool := range []string{poolA, poolB} {
+		for _, pool := range []string{poolA, poolB, poolC} {
 			clearPoolRotationState(ctx, cl, pool)
 			claims, err := listClaims(ctx, cl, pool)
 			if err != nil {
