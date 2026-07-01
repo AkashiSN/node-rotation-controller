@@ -937,8 +937,8 @@ func testForcefulFallback(ctx context.Context, t *testing.T, cl client.Client) {
 
 	const ageThreshold = 2 * time.Minute
 
-	// 1. A single candidate on pool-c (governed by rotationpolicy-c, forcefulFallback
-	//    enabled, 30m expireAfter).
+	// 1. A single candidate on pool-c (governed by the nodepool-c RotationPolicy,
+	//    forcefulFallback enabled, 30m expireAfter).
 	applyDeployment(ctx, t, cl, deployment("ffcand", poolC, 300, ""))
 	candClaim := waitClaimProvisioned(ctx, t, cl, poolC)
 	t.Logf("candidate NodeClaim %s present on pool-c; aging it past the %s threshold", candClaim, ageThreshold)
@@ -948,10 +948,14 @@ func testForcefulFallback(ctx context.Context, t *testing.T, cl client.Client) {
 	time.Sleep(ageThreshold - 30*time.Second)
 
 	// 3. No placeholder Pod is ever created while the candidate exists — the
-	//    load-bearing surge-less signal is that a surge is NEVER staged. Assert it
-	//    holds from just after eligibility across the rotation window; the metric
-	//    below is the durable proof, this rules out a graceful surge having run.
-	consistently(t, 45*time.Second, "no placeholder Pod is staged for the surge-less candidate", func() error {
+	//    load-bearing surge-less signal is that a surge is NEVER staged. The sleep
+	//    above ends ~30s before eligibility (age = ageThreshold); this 90s window
+	//    therefore spans from just before eligibility to ~60s after it, so a
+	//    would-be graceful placeholder (which a wrong impl stages right at
+	//    eligibility and holds through readyTimeout) is caught even if the
+	//    controller's first post-eligibility reconcile is delayed under CI load.
+	//    The metric below is the durable proof; this rules out a graceful surge.
+	consistently(t, 90*time.Second, "no placeholder Pod is staged for the surge-less candidate", func() error {
 		ph, err := getPlaceholder(ctx, cl, candClaim)
 		if err != nil {
 			return err
