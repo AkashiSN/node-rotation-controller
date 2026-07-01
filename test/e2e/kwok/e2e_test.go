@@ -926,7 +926,7 @@ func testGovernanceLossReap(ctx context.Context, t *testing.T, cl client.Client)
 //
 // To create the layer-3 short-lead case deterministically: pool-c starts with a
 // short template expireAfter (20m), so Karpenter stamps the candidate NodeClaim
-// with E=20m; the test then raises the template to a feasible value (2h). The
+// with E=20m; the test then raises the template to a feasible value (8760h). The
 // existing claim keeps its 20m stamp (NodeClaim.spec is immutable), so it becomes
 // a short-lead candidate whose deadline is within t_rot (≈62m — tGP unset →
 // drainBound = DrainFallback 1h). Once it ages past the 2m ageThreshold the
@@ -956,12 +956,16 @@ func testForcefulFallback(ctx context.Context, t *testing.T, cl client.Client) {
 	candClaim := waitClaimProvisioned(ctx, t, cl, poolC)
 	t.Logf("candidate NodeClaim %s present on pool-c (stamped short E=20m)", candClaim)
 
-	// 2. Raise pool-c's template expireAfter to a feasible representative (2h),
+	// 2. Raise pool-c's template expireAfter to a large feasible value (8760h),
 	//    clearing the §3.2 layer-1 OverrideGBelowOne fatal so the pool starts
-	//    rotations. The existing claim keeps its 20m stamp (immutable spec), so it
+	//    rotations. The value must clear G >= 1 = floor(((E − t_rot) − A) / P):
+	//    the window {00:00–23:59} leaves a 1-minute daily gap so it is NOT
+	//    continuous and P = 24h (not the reconcile tick), hence E must exceed
+	//    P + t_rot + A ≈ 25h — 8760h (matching pools a/b) clears it with wide
+	//    margin. The existing claim keeps its 20m stamp (immutable spec), so it
 	//    stays a §3.2 layer-3 short-lead candidate whose deadline is within t_rot →
 	//    the pick resolves to surge-less (§3.3).
-	raisePoolExpireAfter(ctx, t, cl, poolC, "2h")
+	raisePoolExpireAfter(ctx, t, cl, poolC, "8760h")
 
 	// 3. Age past the threshold so the short-lead claim is the sole eligible candidate.
 	time.Sleep(ageThreshold - 30*time.Second)
