@@ -68,18 +68,24 @@ type Inputs struct {
 	RetryBackoff time.Duration
 }
 
-// PickOldestEligible returns the oldest eligible candidate, or nil when none
-// qualify (spec §3.2). "Oldest" is the earliest creationTimestamp, ties broken
-// by NodeClaim name (see isOlder). The returned pointer aliases an element of
-// claims.
-func PickOldestEligible(claims []karpv1.NodeClaim, in Inputs) *karpv1.NodeClaim {
+// PickEarliestDeadlineEligible returns the eligible candidate with the earliest
+// forceful-expiration deadline (creationTimestamp + expireAfter), or nil when
+// none qualify (spec §3.2). Ordering by deadline — not raw creationTimestamp —
+// rotates the most at-risk node first when expireAfter is heterogeneous across
+// claims (a younger claim with a shorter expireAfter can reach Forceful
+// Expiration before an older claim with a longer one, issue #157); for the
+// common homogeneous-expireAfter case deadline order equals oldest-first, so
+// the pick is unchanged. Ties (equal deadline, or the deadline-less override
+// mode) fall back to oldest creationTimestamp then NodeClaim name (see
+// isEarlierDeadline). The returned pointer aliases an element of claims.
+func PickEarliestDeadlineEligible(claims []karpv1.NodeClaim, in Inputs) *karpv1.NodeClaim {
 	var best *karpv1.NodeClaim
 	for i := range claims {
 		c := &claims[i]
 		if !eligible(c, in) {
 			continue
 		}
-		if best == nil || isOlder(c, best) {
+		if best == nil || isEarlierDeadline(c, best, in) {
 			best = c
 		}
 	}
@@ -88,7 +94,7 @@ func PickOldestEligible(claims []karpv1.NodeClaim, in Inputs) *karpv1.NodeClaim 
 
 // CountEligible returns how many claims currently pass the rotation-eligibility
 // predicate — the §4.2 noderotation_candidates gauge. It applies the same
-// predicate as PickOldestEligible (ready, in-scope state, triggered, not
+// predicate as PickEarliestDeadlineEligible (ready, in-scope state, triggered, not
 // deleting), so an in-flight or terminal claim is excluded.
 func CountEligible(claims []karpv1.NodeClaim, in Inputs) int {
 	n := 0
@@ -132,16 +138,47 @@ func CountShortLead(claims []karpv1.NodeClaim, leadTime LeadTime) int {
 	return len(ShortLeadClaims(claims, leadTime))
 }
 
-// isOlder orders candidates oldest-first by creationTimestamp, breaking ties on
-// Name so selection is deterministic across reconciles. metav1.Time is
-// second-granular, so claims batch-provisioned by Karpenter routinely share a
-// timestamp; without a stable tiebreak the pick would follow nondeterministic
-// list order. Spec §3.2 specifies oldest-first and leaves the tiebreak open.
-func isOlder(a, b *karpv1.NodeClaim) bool {
+// isEarlierDeadline orders candidates earliest-deadline-first (§3.2). The
+// deadline is the forceful-expiration instant creationTimestamp + expireAfter
+// that the rotation races; sorting by it prioritizes the most at-risk node when
+// expireAfter is heterogeneous (issue #157). Ties — equal deadlines, or the
+// override mode where the trigger is age-based and no per-claim deadline is
+// resolvable (see deadlineOf) — fall back to oldest creationTimestamp then Name.
+// The creationTimestamp fallback keeps the order deterministic across reconciles:
+// metav1.Time is second-granular, so claims batch-provisioned by Karpenter
+// routinely share a timestamp, and Name is the final stable tiebreak.
+func isEarlierDeadline(a, b *karpv1.NodeClaim, in Inputs) bool {
+	da, oka := deadlineOf(a, in)
+	db, okb := deadlineOf(b, in)
+	switch {
+	case oka && okb:
+		if !da.Equal(db) {
+			return da.Before(db)
+		}
+	case oka != okb:
+		return oka // a resolvable deadline sorts ahead of a deadline-less claim
+	}
 	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
 		return a.CreationTimestamp.Before(&b.CreationTimestamp)
 	}
 	return a.Name < b.Name
+}
+
+// deadlineOf resolves a claim's forceful-expiration deadline
+// (creationTimestamp + spec.expireAfter) for selection ordering, reporting false
+// when there is none to order on: under an explicit Override the trigger is
+// purely age-based (every eligible claim shares the same threshold, so deadline
+// order degrades to creationTimestamp order — identical), and a nil (Never)
+// expireAfter has no deadline at all (§3.2). A false result routes the pair to
+// isEarlierDeadline's creationTimestamp/name fallback.
+func deadlineOf(c *karpv1.NodeClaim, in Inputs) (time.Time, bool) {
+	if in.Override != nil {
+		return time.Time{}, false
+	}
+	if e := c.Spec.ExpireAfter.Duration; e != nil {
+		return c.CreationTimestamp.Add(*e), true
+	}
+	return time.Time{}, false
 }
 
 func eligible(c *karpv1.NodeClaim, in Inputs) bool {
@@ -184,7 +221,7 @@ func failedPastBackoff(c *karpv1.NodeClaim, in Inputs) bool {
 }
 
 // Triggered reports whether the claim's age has crossed the rotation trigger
-// (spec §3.2) — the same age/deadline predicate PickOldestEligible applies,
+// (spec §3.2) — the same age/deadline predicate PickEarliestDeadlineEligible applies,
 // exported so the reconcile loop can compute the near-deadline host set for the
 // placeholder's soft hostname exclusion (a preferred term, not required — spec
 // §3.3, issue #96) without duplicating the formula.

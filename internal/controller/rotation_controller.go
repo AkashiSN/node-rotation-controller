@@ -456,7 +456,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	}
 
 	// ── 3. Pick the candidate, gate on its headroom, then anchor.
-	cand := selection.PickOldestEligible(claims, r.selInputs(res, now))
+	cand := selection.PickEarliestDeadlineEligible(claims, r.selInputs(res, now))
 	if cand == nil {
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
