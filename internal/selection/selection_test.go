@@ -183,21 +183,27 @@ func TestPickEarliestDeadlineUnderHeterogeneousExpireAfter(t *testing.T) {
 }
 
 func TestPickEarliestDeadlineTieFallsBackToCreationThenName(t *testing.T) {
-	// Equal deadlines (same age, same expireAfter) must fall back to the old
-	// oldest-creationTimestamp-then-name tiebreak so selection stays
-	// deterministic across reconciles (§3.2).
-	a := claim("a", 20*day)
-	b := claim("b", 20*day)
-	older := claim("z-older", 21*day) // earlier creationTimestamp but same E ⇒ earliest deadline
-	for _, order := range [][]karpv1.NodeClaim{{a, b, older}, {older, b, a}, {b, older, a}} {
+	// Equal deadlines must fall back to oldest creationTimestamp, then Name, so
+	// selection stays deterministic across reconciles (§3.2).
+	//
+	// creationTimestamp precedes Name: both deadlines are now−6d (creationTimestamp
+	// + expireAfter cancels the age/E offset), but the claims differ in
+	// creationTimestamp. The older one wins even though its Name sorts LAST —
+	// proving the creationTimestamp tiebreak is applied before Name.
+	older := claim("z-older", 21*day, expireAfter(15*day))     // deadline now−6d, older by 1d
+	younger := claim("a-younger", 20*day, expireAfter(14*day)) // deadline now−6d
+	for _, order := range [][]karpv1.NodeClaim{{older, younger}, {younger, older}} {
 		if got := selection.PickEarliestDeadlineEligible(order, baseInputs()); got == nil || got.Name != "z-older" {
-			t.Fatalf("want z-older (earliest deadline) for any order, got %v", got)
+			t.Fatalf("equal deadlines must tiebreak on oldest creationTimestamp (z-older), got %v", got)
 		}
 	}
-	// Same deadline: name tiebreak picks "a".
+	// Same deadline AND same creationTimestamp (same age + expireAfter): Name is
+	// the final tiebreak, picking "a".
+	a := claim("a", 20*day)
+	b := claim("b", 20*day)
 	for _, order := range [][]karpv1.NodeClaim{{a, b}, {b, a}} {
 		if got := selection.PickEarliestDeadlineEligible(order, baseInputs()); got == nil || got.Name != "a" {
-			t.Fatalf("equal deadlines must tiebreak on name to a, got %v", got)
+			t.Fatalf("equal deadline and creationTimestamp must tiebreak on name to a, got %v", got)
 		}
 	}
 }
