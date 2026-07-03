@@ -66,6 +66,11 @@ type Inputs struct {
 	// RetryBackoff is the base backoff; a failed claim is re-selectable once
 	// now − failed-at ≥ EscalatedBackoff(retry-count, RetryBackoff).
 	RetryBackoff time.Duration
+	// Excluded is the set of NodeClaim names opted out of proactive rotation —
+	// a claim whose Node carries an operator-set karpenter.sh/do-not-disrupt
+	// (spec §3.2). A claim in this set is never an eligible candidate; its
+	// expireAfter backstop is unaffected. A nil map excludes nothing.
+	Excluded map[string]bool
 }
 
 // PickEarliestDeadlineEligible returns the eligible candidate with the earliest
@@ -182,6 +187,9 @@ func deadlineOf(c *karpv1.NodeClaim, in Inputs) (time.Time, bool) {
 }
 
 func eligible(c *karpv1.NodeClaim, in Inputs) bool {
+	if in.Excluded[c.Name] {
+		return false // operator opted this node out via karpenter.sh/do-not-disrupt (§3.2)
+	}
 	if c.DeletionTimestamp != nil {
 		return false // already being deleted — typically Forceful Expiration (§3.2)
 	}

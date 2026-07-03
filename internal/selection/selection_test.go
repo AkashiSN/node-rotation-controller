@@ -400,6 +400,37 @@ func TestCountEligibleZeroWhenNoneEligible(t *testing.T) {
 	}
 }
 
+func TestPickEarliestDeadlineEligibleSkipsOptedOut(t *testing.T) {
+	claims := []karpv1.NodeClaim{
+		claim("kept", 20*day), // oldest — would be picked
+		claim("other", 15*day),
+	}
+	in := baseInputs()
+	in.Excluded = map[string]bool{"kept": true}
+	got := selection.PickEarliestDeadlineEligible(claims, in)
+	if got == nil || got.Name != "other" {
+		t.Fatalf("opted-out oldest must be skipped; want other, got %v", got)
+	}
+}
+
+func TestPickEarliestDeadlineEligibleNilWhenAllOptedOut(t *testing.T) {
+	claims := []karpv1.NodeClaim{claim("only", 20*day)}
+	in := baseInputs()
+	in.Excluded = map[string]bool{"only": true}
+	if got := selection.PickEarliestDeadlineEligible(claims, in); got != nil {
+		t.Fatalf("want nil, got %v", got.Name)
+	}
+}
+
+func TestCountEligibleSkipsOptedOut(t *testing.T) {
+	claims := []karpv1.NodeClaim{claim("a", 20*day), claim("b", 20*day)}
+	in := baseInputs()
+	in.Excluded = map[string]bool{"a": true}
+	if n := selection.CountEligible(claims, in); n != 1 {
+		t.Fatalf("want 1 eligible (b), got %d", n)
+	}
+}
+
 func TestShortLeadClaims(t *testing.T) {
 	claims := []karpv1.NodeClaim{
 		claim("ample", 1*day, expireAfter(30*day)), // not short-lead
