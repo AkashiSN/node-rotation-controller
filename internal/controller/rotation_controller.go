@@ -375,12 +375,13 @@ func poolTGP(pool *karpv1.NodePool) (time.Duration, bool) {
 	return schedule.DrainFallback, true
 }
 
-func (r *RotationReconciler) selInputs(res resolved, now time.Time) selection.Inputs {
+func (r *RotationReconciler) selInputs(res resolved, now time.Time, excluded map[string]bool) selection.Inputs {
 	return selection.Inputs{
 		Now:          now,
 		LeadTime:     res.leadTime,
 		Override:     res.override,
 		RetryBackoff: res.retryBackoff,
+		Excluded:     excluded,
 	}
 }
 
@@ -401,6 +402,14 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		return ctrl.Result{}, err
 	}
 
+	// Build the opt-out set (§3.2): claims on a Node carrying an operator-set
+	// do-not-disrupt are declined for proactive rotation. One label-scoped Node
+	// list per pass, shared by the candidates gauge (step 0) and the pick (step 3).
+	excluded, err := r.excludedClaims(ctx, pool, claims)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Derive the §3.2 thresholds + feasibility findings once from current state;
 	// the §4.2 gauges (step 0) and the fatal-feasibility gate (step 1b) share them.
 	// WorstCasePeriod/ShortestWindow's ok is always true here: policy.Validate
@@ -411,7 +420,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	derived := r.derivedThresholds(pool, res, p, d, len(claims))
 
 	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
-	r.observe(pool, res, now, claims, p, derived)
+	r.observe(pool, res, now, claims, p, derived, excluded)
 
 	// Per-pass heartbeat at debug verbosity (issue #100): a single un-deduplicated
 	// line every reconcile so liveness is visible at raised -v / -zap-devel even
@@ -421,7 +430,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// a human-readable aid, not a substitute for them.
 	log.V(1).Info("reconcile",
 		"phase", reconcilePhase(pool),
-		"candidates", selection.CountEligible(claims, r.selInputs(res, now)),
+		"candidates", selection.CountEligible(claims, r.selInputs(res, now, excluded)),
 		"claims", len(claims),
 		"inWindow", sched.InWindow(now),
 		"findings", len(derived.Findings))
@@ -456,7 +465,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	}
 
 	// ── 3. Pick the candidate, gate on its headroom, then anchor.
-	cand := selection.PickEarliestDeadlineEligible(claims, r.selInputs(res, now))
+	cand := selection.PickEarliestDeadlineEligible(claims, r.selInputs(res, now, excluded))
 	if cand == nil {
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
@@ -525,12 +534,12 @@ func claimDeadline(cand *karpv1.NodeClaim) (time.Time, bool) {
 // pool with no failures reports zero retries. The window-active gauge is
 // per-NodePool — each pool's governing-policy schedule resolves independently
 // (spec §5.4) — and set here because the reconcile is the only periodic tick (§5.2).
-func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now time.Time, claims []karpv1.NodeClaim, p time.Duration, derived schedule.Result) {
+func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now time.Time, claims []karpv1.NodeClaim, p time.Duration, derived schedule.Result, excluded map[string]bool) {
 	rec := r.recorder()
 	rec.ObserveWindow(pool.Name, res.sched.InWindow(now))
 
 	o := PoolObservation{
-		Candidates:      selection.CountEligible(claims, r.selInputs(res, now)),
+		Candidates:      selection.CountEligible(claims, r.selInputs(res, now, excluded)),
 		ShortLeadNodes:  selection.CountShortLead(claims, res.leadTime),
 		RetryCount:      highestRetry(claims),
 		DrainStuck:      r.drainStuck(pool, claims, res, now),
@@ -1271,7 +1280,7 @@ func (r *RotationReconciler) excludedHostnames(ctx context.Context, pool *karpv1
 	if err != nil {
 		return nil, err
 	}
-	sel := r.selInputs(res, r.now())
+	sel := r.selInputs(res, r.now(), nil)
 	for i := range claims {
 		c := &claims[i]
 		if c.Name == cand.Name || c.Status.NodeName == "" || !selection.Triggered(c, sel) {
@@ -1500,6 +1509,19 @@ func (r *RotationReconciler) poolClaims(ctx context.Context, pool *karpv1.NodePo
 		return nil, err
 	}
 	return list.Items, nil
+}
+
+// excludedClaims returns the pool's NodeClaims opted out of proactive rotation:
+// those scheduled onto a Node carrying an operator-set karpenter.sh/do-not-disrupt
+// (spec §3.2). It lists the pool's Nodes once (label-scoped, symmetric with
+// poolClaims) and maps the operator-opted-out nodes to their claims. Returns nil
+// when nothing is opted out.
+func (r *RotationReconciler) excludedClaims(ctx context.Context, pool *karpv1.NodePool, claims []karpv1.NodeClaim) (map[string]bool, error) {
+	var nodes corev1.NodeList
+	if err := r.List(ctx, &nodes, client.MatchingLabels{karpv1.NodePoolLabelKey: pool.Name}); err != nil {
+		return nil, err
+	}
+	return excludedClaimNames(claims, excludedNodeNames(nodes.Items)), nil
 }
 
 func (r *RotationReconciler) allPods(ctx context.Context) ([]corev1.Pod, error) {
