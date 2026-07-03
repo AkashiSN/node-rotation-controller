@@ -17,10 +17,9 @@ func testNode(anns map[string]string, unschedulable bool) *corev1.Node {
 	}
 }
 
-func testNodeNamed(name string, anns map[string]string, unschedulable bool) corev1.Node {
+func testNodeNamed(name string, anns map[string]string) corev1.Node {
 	return corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Annotations: anns},
-		Spec:       corev1.NodeSpec{Unschedulable: unschedulable},
 	}
 }
 
@@ -209,8 +208,13 @@ func TestExcludedNodeNamesIncludesOperatorOwned(t *testing.T) {
 	// Nodes with operator's do-not-disrupt (without the controller's owned
 	// marker) should be excluded from rotation (spec §3.2).
 	nodes := []corev1.Node{
-		testNodeNamed("node-op", map[string]string{karpv1.DoNotDisruptAnnotationKey: "true"}, false),
-		testNodeNamed("node-clean", nil, false),
+		testNodeNamed("node-op", map[string]string{karpv1.DoNotDisruptAnnotationKey: "true"}),
+		testNodeNamed("node-clean", nil),
+		// A non-"true" value is not operator protection — Karpenter honors only
+		// the literal "true" — so it must NOT be treated as an opt-out. Pins the
+		// operatorOwnsDoNotDisrupt `== "true"` check against a future `!= ""`
+		// refactor that would wrongly exclude such nodes (spec §3.2).
+		testNodeNamed("node-false", map[string]string{karpv1.DoNotDisruptAnnotationKey: "false"}),
 	}
 	excluded := excludedNodeNames(nodes)
 	if !excluded["node-op"] {
@@ -218,6 +222,9 @@ func TestExcludedNodeNamesIncludesOperatorOwned(t *testing.T) {
 	}
 	if excluded["node-clean"] {
 		t.Error("clean node should not be excluded")
+	}
+	if excluded["node-false"] {
+		t.Error(`node with do-not-disrupt="false" is not protected and should not be excluded`)
 	}
 }
 
@@ -229,7 +236,7 @@ func TestExcludedNodeNamesExcludesControllerOwned(t *testing.T) {
 		testNodeNamed("node-surge", map[string]string{
 			karpv1.DoNotDisruptAnnotationKey: "true",
 			annotations.DoNotDisruptOwned:    "true",
-		}, false),
+		}),
 	}
 	excluded := excludedNodeNames(nodes)
 	if excluded["node-surge"] {
