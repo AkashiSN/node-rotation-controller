@@ -17,6 +17,20 @@ func testNode(anns map[string]string, unschedulable bool) *corev1.Node {
 	}
 }
 
+func testNodeNamed(name string, anns map[string]string, unschedulable bool) corev1.Node {
+	return corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Annotations: anns},
+		Spec:       corev1.NodeSpec{Unschedulable: unschedulable},
+	}
+}
+
+func nodeClaimOn(name, nodeName string) karpv1.NodeClaim {
+	return karpv1.NodeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Status:     karpv1.NodeClaimStatus{NodeName: nodeName},
+	}
+}
+
 func TestApplyFreezeSetsMarkers(t *testing.T) {
 	n := testNode(nil, false)
 	if !applyFreeze(n, "nc-old") {
@@ -188,5 +202,85 @@ func TestApplyUnfreezeNoChangeWhenClean(t *testing.T) {
 	n := testNode(nil, false)
 	if applyUnfreeze(n) {
 		t.Error("applyUnfreeze on a clean node must report no change")
+	}
+}
+
+func TestExcludedNodeNamesIncludesOperatorOwned(t *testing.T) {
+	// Nodes with operator's do-not-disrupt (without the controller's owned
+	// marker) should be excluded from rotation (spec §3.2).
+	nodes := []corev1.Node{
+		testNodeNamed("node-op", map[string]string{karpv1.DoNotDisruptAnnotationKey: "true"}, false),
+		testNodeNamed("node-clean", nil, false),
+	}
+	excluded := excludedNodeNames(nodes)
+	if !excluded["node-op"] {
+		t.Error("node with operator do-not-disrupt should be excluded")
+	}
+	if excluded["node-clean"] {
+		t.Error("clean node should not be excluded")
+	}
+}
+
+func TestExcludedNodeNamesExcludesControllerOwned(t *testing.T) {
+	// A node with do-not-disrupt AND the controller's owned marker is a
+	// mid-surge node the controller marked itself — this is NOT an opt-out,
+	// so it should NOT be excluded (spec §3.2, §5.3).
+	nodes := []corev1.Node{
+		testNodeNamed("node-surge", map[string]string{
+			karpv1.DoNotDisruptAnnotationKey: "true",
+			annotations.DoNotDisruptOwned:    "true",
+		}, false),
+	}
+	excluded := excludedNodeNames(nodes)
+	if excluded["node-surge"] {
+		t.Error("controller-owned do-not-disrupt node should not be excluded")
+	}
+}
+
+func TestExcludedClaimNamesReturnsNilWhenEmpty(t *testing.T) {
+	claims := []karpv1.NodeClaim{
+		nodeClaimOn("claim-1", "node-1"),
+		nodeClaimOn("claim-2", "node-2"),
+	}
+	excluded := make(map[string]bool)
+	result := excludedClaimNames(claims, excluded)
+	if result != nil {
+		t.Error("excludedClaimNames should return nil when excluded is empty")
+	}
+}
+
+func TestExcludedClaimNamesMapsClaims(t *testing.T) {
+	claims := []karpv1.NodeClaim{
+		nodeClaimOn("claim-1", "node-excluded"),
+		nodeClaimOn("claim-2", "node-ok"),
+		nodeClaimOn("claim-3", "node-excluded"),
+	}
+	excluded := map[string]bool{"node-excluded": true}
+	result := excludedClaimNames(claims, excluded)
+	if !result["claim-1"] {
+		t.Error("claim-1 should be excluded")
+	}
+	if result["claim-2"] {
+		t.Error("claim-2 should not be excluded")
+	}
+	if !result["claim-3"] {
+		t.Error("claim-3 should be excluded")
+	}
+}
+
+func TestExcludedClaimNamesSkipsUnscheduledClaims(t *testing.T) {
+	// A claim with an empty NodeName (unscheduled) should not be in the result
+	// even if it's included in the claims slice.
+	claims := []karpv1.NodeClaim{
+		nodeClaimOn("claim-scheduled", "node-excluded"),
+		nodeClaimOn("claim-unscheduled", ""),
+	}
+	excluded := map[string]bool{"node-excluded": true}
+	result := excludedClaimNames(claims, excluded)
+	if !result["claim-scheduled"] {
+		t.Error("scheduled claim on excluded node should be excluded")
+	}
+	if result["claim-unscheduled"] {
+		t.Error("unscheduled claim should not be excluded")
 	}
 }

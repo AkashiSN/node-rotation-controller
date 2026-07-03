@@ -122,3 +122,39 @@ func hasAnnotation(o *corev1.Node, key string) bool {
 	_, ok := o.Annotations[key]
 	return ok
 }
+
+// excludedNodeNames returns a map of node names that carry an operator's active
+// do-not-disrupt protection and should be excluded from rotation (spec §3.2).
+// A node is excluded only when the operator owns the do-not-disrupt annotation
+// (value is exactly "true" and the controller's owned marker is absent);
+// a node the controller marked itself (with the owned marker) is a mid-surge
+// rotation target and is NOT excluded.
+// Returns nil if no nodes are excluded (empty excluded set).
+func excludedNodeNames(nodes []corev1.Node) map[string]bool {
+	excluded := make(map[string]bool)
+	for i := range nodes {
+		if operatorOwnsDoNotDisrupt(&nodes[i]) {
+			excluded[nodes[i].Name] = true
+		}
+	}
+	if len(excluded) == 0 {
+		return nil
+	}
+	return excluded
+}
+
+// excludedClaimNames returns a map of claim names scheduled on excluded nodes,
+// or nil if the excluded set is empty. This enables the selection logic to skip
+// claims whose nodes the operator has opted out of rotation.
+func excludedClaimNames(claims []karpv1.NodeClaim, excluded map[string]bool) map[string]bool {
+	if len(excluded) == 0 {
+		return nil
+	}
+	result := make(map[string]bool)
+	for i := range claims {
+		if excluded[claims[i].Status.NodeName] {
+			result[claims[i].Name] = true
+		}
+	}
+	return result
+}
