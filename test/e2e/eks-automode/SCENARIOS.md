@@ -886,6 +886,98 @@ kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/tem
 
 ---
 
+### Scenario O — trick-free forceful fallback (production-like mix)
+
+Validates the opt-in window-bounded **surge-less forceful fallback** (spec §3.3,
+ADR-0001; #156) end-to-end on real EKS, **without** the KWOK immutable-spec
+expireAfter-raise trick: `nodepool-ff` keeps a **fixed** `expireAfter: 2h`. A
+12-replica PDB-backed workload lands one pod per node (a synchronized batch of 12
+nodes sharing one deadline). Because `N=12 > K·C=2` the serial surge cannot
+rotate all of them gracefully within the `K·P=1h` grace, so the surplus is
+rotated **surge-less**. This one scenario also exercises earliest-deadline
+ordering (#157) and do-not-disrupt exclusion (#170).
+
+Firing math (K=2, `t_rot = readyTimeout 5m + tGP 5m + Buffer 15m = 25m`,
+`P=30m`, `WindowLen=28m`, `C=1`, `E=2h`): candidate age `A=35m`, forceful-fire
+age `E − t_rot = 1h35m`, grace `K·P=1h`. Expect the schedule to emit the
+intentional `ThroughputBurstShortfall` (and likely `ThroughputBelowArrival`)
+**warn** findings — these predict the surge-less path and are not errors.
+
+**Setup (from Shared setup §3, controller installed):**
+
+```bash
+cd test/e2e/eks-automode
+bash scenarios/gen-ff-windows.sh                 # (re)generate nrc-ff-policy.yaml
+kubectl apply -f scenarios/nodepool-ff.yaml
+kubectl apply -f scenarios/nrc-ff-policy.yaml
+kubectl apply -f scenarios/ff-workload.yaml
+# wait for the 12-node synchronized batch to be Ready
+kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff -w
+```
+
+**Observe the mix (over ~1.5–2h):**
+
+```bash
+# forceful-fallback counter climbs as the surplus fires surge-less
+kubectl port-forward -n node-rotation-system deploy/node-rotation-controller 8080:8080 &
+curl -s localhost:8080/metrics | grep noderotation_forceful_fallback_total
+
+# the anchor records the surge-less mode while a forceful rotation is in flight
+kubectl get nodepool nodepool-ff -o jsonpath='{.metadata.annotations.noderotation\.io/rotation-mode}{"\n"}'
+# expect: forceful-fallback (absent = default surge)
+
+# Warning Events: ForcefulFallback on the NodePool
+kubectl get events --field-selector reason=ForcefulFallback -A
+
+# surge-less proof: NO placeholder Pod is ever staged for a forceful candidate
+kubectl get pods -n node-rotation-system -l noderotation.io/placeholder=true -w
+```
+
+Expected: some early candidates rotate **gracefully** (a placeholder Pod appears,
+new node joins, old drains) and the later surplus rotates **surge-less**
+(`rotation-mode=forceful-fallback`, `ForcefulFallback` event,
+`noderotation_forceful_fallback_total` increments, **no placeholder Pod** for
+those) — a mix in one pool.
+
+**If forceful fallback does not appear** (serial surge kept up), tune LIVE (E
+stays fixed):
+
+```bash
+# slow the serial cadence so the surplus ages past 1h35m before its turn
+kubectl patch rotationpolicy nrc-ff --type merge -p '{"spec":{"surge":{"cooldownAfter":"10m"}}}'
+# or raise the batch size
+kubectl scale deploy/ff-workload --replicas=16
+# or if workload pods stay Pending (node allocatable < 2000m after system-reserved + DaemonSets):
+kubectl set resources deploy/ff-workload --requests=cpu=1000m  # or edit scenarios/ff-workload.yaml
+```
+
+**#157 earliest-deadline order:** the 12 claims share one deadline, so the pick
+order is the `creationTimestamp → name` tiebreak. Confirm the rotated NodeClaims
+are consumed in ascending `(creationTimestamp, name)`:
+
+```bash
+kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff \
+  -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp,STATE:'.metadata.annotations.noderotation\.io/state' --sort-by=.metadata.name
+```
+
+**#170 do-not-disrupt exclusion:** mark one node's Node object and confirm it is
+never chosen:
+
+```bash
+node=$(kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff -o jsonpath='{.items[0].status.nodeName}')
+kubectl annotate node "$node" karpenter.sh/do-not-disrupt=true
+# the candidates gauge drops by one; that node keeps its original NodeClaim
+curl -s localhost:8080/metrics | grep 'noderotation_candidates{.*nodepool="nodepool-ff"'
+```
+
+**Teardown of the scenario objects (cluster stays up for other scenarios):**
+
+```bash
+kubectl delete -f scenarios/ff-workload.yaml -f scenarios/nrc-ff-policy.yaml -f scenarios/nodepool-ff.yaml
+```
+
+---
+
 ## 5. Cleanup between / after scenarios
 
 | Action | Command |
