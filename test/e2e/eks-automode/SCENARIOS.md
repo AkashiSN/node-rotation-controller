@@ -943,6 +943,13 @@ new node joins, old drains) and the later surplus rotates **surge-less**
 `noderotation_forceful_fallback_total` increments, **no placeholder Pod** for
 those) — a mix in one pool.
 
+> **Note.** Forceful fallback is still **serial** per NodePool
+> (`surge.maxUnavailable = 1`). If the serial cadence cannot clear all ~10 surplus
+> nodes before their fixed 2h `expireAfter`, the latest few may surface as
+> Karpenter's native `expired` backstop outcome rather than `ForcefulFallback` —
+> this is expected, not a failure; the forceful-fallback behavior is proven by the
+> first surplus node firing surge-less at age 1h35m.
+
 **If forceful fallback does not appear** (serial surge kept up), tune LIVE (E
 stays fixed):
 
@@ -965,10 +972,15 @@ kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff \
 ```
 
 **#170 do-not-disrupt exclusion:** mark one node's Node object and confirm it is
-never chosen:
+never chosen. Pick a NodeClaim that is **not in-flight** (empty
+`noderotation.io/state`) — a mid-rotation node already carries the controller's own
+`do-not-disrupt`, so annotating it would be a no-op and the assertion unreliable:
 
 ```bash
-node=$(kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff -o jsonpath='{.items[0].status.nodeName}')
+# select a NodeClaim with no rotation state, then annotate its Node
+claim=$(kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff \
+  -o jsonpath='{range .items[?(@.metadata.annotations.noderotation\.io/state=="")]}{.metadata.name} {.status.nodeName}{"\n"}{end}' | head -1)
+node=$(echo "$claim" | awk '{print $2}')
 kubectl annotate node "$node" karpenter.sh/do-not-disrupt=true
 # the candidates gauge drops by one; that node keeps its original NodeClaim
 curl -s localhost:8080/metrics | grep 'noderotation_candidates{.*nodepool="nodepool-ff"'
@@ -992,6 +1004,7 @@ kubectl delete -f scenarios/ff-workload.yaml -f scenarios/nrc-ff-policy.yaml -f 
 | Clear a manual freeze (Scenario E) | `kubectl annotate nodepool nrc-poc noderotation.io/freeze-` |
 | Remove a scenario's workload | `kubectl delete -f scenarios/<workload>.yaml` (`workload`, `statefulset-ebs`, `pdb-workload`, `workload-absorb`, `preemption`, `nodepool-b`) |
 | Revert a Scenario N drift label | `kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/template/metadata/labels/poc-drift"}]'` |
+| Remove Scenario O objects | `kubectl delete -f scenarios/ff-workload.yaml -f scenarios/nrc-ff-policy.yaml -f scenarios/nodepool-ff.yaml` |
 
 > **Teardown order.** When a scenario tightened the window or another knob, **drop
 > the in-scope label first**, then restore the other knobs. Restoring an open
