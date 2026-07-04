@@ -14,7 +14,7 @@ region = "us-west-2"
 name = "nrc-eks-automode-e2e"
 
 # EKS control-plane Kubernetes version.
-kubernetes_version = "1.33"
+kubernetes_version = "1.36"
 
 # VPC CIDR for the ephemeral network.
 vpc_cidr = "10.0.0.0/16"

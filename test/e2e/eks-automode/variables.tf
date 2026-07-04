@@ -22,7 +22,7 @@ variable "name" {
 variable "kubernetes_version" {
   description = "EKS control-plane Kubernetes version. EKS Auto Mode requires a recent version; pin it explicitly per run."
   type        = string
-  default     = "1.33"
+  default     = "1.36"
 }
 
 variable "vpc_cidr" {

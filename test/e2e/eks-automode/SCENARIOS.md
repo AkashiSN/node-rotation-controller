@@ -51,7 +51,7 @@ export REPO=$(terraform output -raw ecr_repository_url)
 export REGION=$(terraform output -raw region)
 ```
 
-Reference environment: **EKS Auto Mode, K8s 1.33, `karpenter.sh/v1`**,
+Reference environment: **EKS Auto Mode, K8s 1.36, `karpenter.sh/v1`**,
 controller image tag `poc`, region `us-west-2` (2 AZs: `us-west-2a`,
 `us-west-2b`). For the dated record of which release was validated on what, see
 [`VALIDATION.md`](VALIDATION.md).
