@@ -919,7 +919,7 @@ kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff -w
 
 ```bash
 # forceful-fallback counter climbs as the surplus fires surge-less
-kubectl port-forward -n node-rotation-system deploy/node-rotation-controller 8080:8080 &
+kubectl port-forward -n node-rotation-system svc/node-rotation-controller-metrics 8080:8080 &
 curl -s localhost:8080/metrics | grep noderotation_forceful_fallback_total
 
 # the anchor records the surge-less mode while a forceful rotation is in flight
@@ -929,8 +929,12 @@ kubectl get nodepool nodepool-ff -o jsonpath='{.metadata.annotations.noderotatio
 # Warning Events: ForcefulFallback on the NodePool
 kubectl get events --field-selector reason=ForcefulFallback -A
 
-# surge-less proof: NO placeholder Pod is ever staged for a forceful candidate
-kubectl get pods -n node-rotation-system -l noderotation.io/placeholder=true -w
+# surge-less proof: watch ALL placeholders by the surge-for marker — a graceful
+# candidate's placeholder (noderotation-surge-<candidate>) appears here, but a
+# forceful candidate's never does
+kubectl get pods -n node-rotation-system -l noderotation.io/surge-for -w
+# or confirm a specific forceful candidate never got one:
+kubectl get pod -n node-rotation-system noderotation-surge-<candidate>   # → NotFound
 ```
 
 Expected: some early candidates rotate **gracefully** (a placeholder Pod appears,
