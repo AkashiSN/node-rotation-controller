@@ -1058,12 +1058,17 @@ kubectl delete -f scenarios/ff-workload.yaml -f scenarios/nrc-ff-policy.yaml -f 
 - **Metrics reset on restart.** The `completed_total` counters are in-memory; a
   controller restart zeroes them. Capture a baseline after each restart.
 
-- **Keep the controller OFF the nrc-poc pool.** Auto Mode consolidation can land
-  the controller Pod on an nrc-poc node; rotating or force-deleting that node then
-  restarts the controller mid-scenario and resets the metric counters (this
-  silently broke a first Scenario E run). `scenarios/controller-values.yaml` ships
-  an `affinity` (`noderotation-poc/pool NotIn [poc]`) that pins it to the
-  general-purpose/system pools — keep it.
+- **Keep the controller OFF every rotated pool.** Auto Mode consolidation can land
+  the controller Pod on a rotated node; rotating or force-deleting that node then
+  restarts the controller mid-scenario and resets the in-memory metric counters
+  (this silently broke a first Scenario E run, and a first Scenario O run — see
+  `VALIDATION.md`). `scenarios/controller-values.yaml` ships an `affinity` that
+  **positively allowlists** the Auto Mode built-in pools
+  (`karpenter.sh/nodepool In [general-purpose, system]`), which no scenario
+  rotates — keep it. A `NotIn` blocklist on one scenario's own label (e.g.
+  `noderotation-poc/pool` or `nodepool-ff`'s `karpenter.sh/nodepool`) is unsafe: a
+  rotated node from a *different* scenario lacks that label and passes the filter,
+  so the controller can still land there.
 
 - **Reading a `/`-keyed annotation with jsonpath.** Escape the dots inside the
   bracket selector: `['karpenter\.sh/do-not-disrupt']`, not
