@@ -1,0 +1,56 @@
+# Production-like load for the forceful-fallback scenario (SCENARIOS.md Scenario
+# O): 12 replicas, each requesting 1.5 vCPU with hostname anti-affinity, so each
+# pod needs its own 2-vCPU nodepool-ff node => a 12-node synchronized batch that
+# shares one creationTimestamp (and thus one deadline). N=12 > K*C=2, so the
+# serial surge cannot rotate all 12 gracefully within the K*P=1h grace and the
+# surplus fires surge-less forceful fallback.
+#
+# The PDB (minAvailable: 11) makes the drain of each rotated node proceed one pod
+# at a time via Karpenter's VOLUNTARY path — forceful fallback is break-before-make
+# but still voluntary, so PDBs are honored up to terminationGracePeriod (§3.3).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ff-workload
+  namespace: default
+spec:
+  replicas: 12
+  selector:
+    matchLabels:
+      app: ff-workload
+  template:
+    metadata:
+      labels:
+        app: ff-workload
+    spec:
+      nodeSelector:
+        noderotation-ff/pool: ff
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: ff-workload
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: "1500m"
+              memory: 256Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ff-workload
+  namespace: default
+spec:
+  # 12 replicas, minAvailable 11 => exactly one pod may be voluntarily evicted at
+  # a time; the drain steps one node at a time and a rescheduled pod must land on
+  # a freshly provisioned node (anti-affinity fills every existing one).
+  minAvailable: 11
+  selector:
+    matchLabels:
+      app: ff-workload

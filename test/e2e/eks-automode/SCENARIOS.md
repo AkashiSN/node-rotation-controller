@@ -886,6 +886,114 @@ kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/tem
 
 ---
 
+### Scenario O — trick-free forceful fallback (production-like mix)
+
+Validates the opt-in window-bounded **surge-less forceful fallback** (spec §3.3,
+ADR-0001; #156) end-to-end on real EKS, **without** the KWOK immutable-spec
+expireAfter-raise trick: `nodepool-ff` keeps a **fixed** `expireAfter: 2h`. A
+12-replica PDB-backed workload lands one pod per node (a synchronized batch of 12
+nodes sharing one deadline). Because `N=12 > K·C=2` the serial surge cannot
+rotate all of them gracefully within the `K·P=1h` grace, so the surplus is
+rotated **surge-less**. This one scenario also exercises earliest-deadline
+ordering (#157) and do-not-disrupt exclusion (#170).
+
+Firing math (K=2, `t_rot = readyTimeout 5m + tGP 5m + Buffer 15m = 25m`,
+`P=30m`, `WindowLen=28m`, `C=1`, `E=2h`): candidate age `A=35m`, forceful-fire
+age `E − t_rot = 1h35m`, grace `K·P=1h`. Expect the schedule to emit the
+intentional `ThroughputBurstShortfall` (and likely `ThroughputBelowArrival`)
+**warn** findings — these predict the surge-less path and are not errors.
+
+**Setup (from Shared setup §3, controller installed):**
+
+```bash
+cd test/e2e/eks-automode
+bash scenarios/gen-ff-windows.sh                 # (re)generate nrc-ff-policy.yaml
+kubectl apply -f scenarios/nodepool-ff.yaml
+kubectl apply -f scenarios/nrc-ff-policy.yaml
+kubectl apply -f scenarios/ff-workload.yaml
+# wait for the 12-node synchronized batch to be Ready
+kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff -w
+```
+
+**Observe the mix (over ~1.5–2h):**
+
+```bash
+# forceful-fallback counter climbs as the surplus fires surge-less
+kubectl port-forward -n node-rotation-system svc/node-rotation-controller-metrics 8080:8080 &
+curl -s localhost:8080/metrics | grep noderotation_forceful_fallback_total
+
+# the anchor records the surge-less mode while a forceful rotation is in flight
+kubectl get nodepool nodepool-ff -o jsonpath='{.metadata.annotations.noderotation\.io/rotation-mode}{"\n"}'
+# expect: forceful-fallback (absent = default surge)
+
+# Warning Events: ForcefulFallback on the NodePool
+kubectl get events --field-selector reason=ForcefulFallback -A
+
+# surge-less proof: watch ALL placeholders by the surge-for marker — a graceful
+# candidate's placeholder (noderotation-surge-<candidate>) appears here, but a
+# forceful candidate's never does
+kubectl get pods -n node-rotation-system -l noderotation.io/surge-for -w
+# or confirm a specific forceful candidate never got one:
+kubectl get pod -n node-rotation-system noderotation-surge-<candidate>   # → NotFound
+```
+
+Expected: some early candidates rotate **gracefully** (a placeholder Pod appears,
+new node joins, old drains) and the later surplus rotates **surge-less**
+(`rotation-mode=forceful-fallback`, `ForcefulFallback` event,
+`noderotation_forceful_fallback_total` increments, **no placeholder Pod** for
+those) — a mix in one pool.
+
+> **Note.** Forceful fallback is still **serial** per NodePool
+> (`surge.maxUnavailable = 1`). If the serial cadence cannot clear all ~10 surplus
+> nodes before their fixed 2h `expireAfter`, the latest few may surface as
+> Karpenter's native `expired` backstop outcome rather than `ForcefulFallback` —
+> this is expected, not a failure; the forceful-fallback behavior is proven by the
+> first surplus node firing surge-less at age 1h35m.
+
+**If forceful fallback does not appear** (serial surge kept up), tune LIVE (E
+stays fixed):
+
+```bash
+# slow the serial cadence so the surplus ages past 1h35m before its turn
+kubectl patch rotationpolicy nrc-ff --type merge -p '{"spec":{"surge":{"cooldownAfter":"10m"}}}'
+# or raise the batch size
+kubectl scale deploy/ff-workload --replicas=16
+# or if workload pods stay Pending (node allocatable < 2000m after system-reserved + DaemonSets):
+kubectl set resources deploy/ff-workload --requests=cpu=1000m  # or edit scenarios/ff-workload.yaml
+```
+
+**#157 earliest-deadline order:** the 12 claims share one deadline, so the pick
+order is the `creationTimestamp → name` tiebreak. Confirm the rotated NodeClaims
+are consumed in ascending `(creationTimestamp, name)`:
+
+```bash
+kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff \
+  -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp,STATE:'.metadata.annotations.noderotation\.io/state' --sort-by=.metadata.name
+```
+
+**#170 do-not-disrupt exclusion:** mark one node's Node object and confirm it is
+never chosen. Pick a NodeClaim that is **not in-flight** (empty
+`noderotation.io/state`) — a mid-rotation node already carries the controller's own
+`do-not-disrupt`, so annotating it would be a no-op and the assertion unreliable:
+
+```bash
+# select a NodeClaim with no rotation state, then annotate its Node
+claim=$(kubectl get nodeclaim -l karpenter.sh/nodepool=nodepool-ff \
+  -o jsonpath='{range .items[?(@.metadata.annotations.noderotation\.io/state=="")]}{.metadata.name} {.status.nodeName}{"\n"}{end}' | head -1)
+node=$(echo "$claim" | awk '{print $2}')
+kubectl annotate node "$node" karpenter.sh/do-not-disrupt=true
+# the candidates gauge drops by one; that node keeps its original NodeClaim
+curl -s localhost:8080/metrics | grep 'noderotation_candidates{.*nodepool="nodepool-ff"'
+```
+
+**Teardown of the scenario objects (cluster stays up for other scenarios):**
+
+```bash
+kubectl delete -f scenarios/ff-workload.yaml -f scenarios/nrc-ff-policy.yaml -f scenarios/nodepool-ff.yaml
+```
+
+---
+
 ## 5. Cleanup between / after scenarios
 
 | Action | Command |
@@ -896,6 +1004,7 @@ kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/tem
 | Clear a manual freeze (Scenario E) | `kubectl annotate nodepool nrc-poc noderotation.io/freeze-` |
 | Remove a scenario's workload | `kubectl delete -f scenarios/<workload>.yaml` (`workload`, `statefulset-ebs`, `pdb-workload`, `workload-absorb`, `preemption`, `nodepool-b`) |
 | Revert a Scenario N drift label | `kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/template/metadata/labels/poc-drift"}]'` |
+| Remove Scenario O objects | `kubectl delete -f scenarios/ff-workload.yaml -f scenarios/nrc-ff-policy.yaml -f scenarios/nodepool-ff.yaml` |
 
 > **Teardown order.** When a scenario tightened the window or another knob, **drop
 > the in-scope label first**, then restore the other knobs. Restoring an open
@@ -949,12 +1058,17 @@ kubectl patch nodepool nrc-poc --type json -p '[{"op":"remove","path":"/spec/tem
 - **Metrics reset on restart.** The `completed_total` counters are in-memory; a
   controller restart zeroes them. Capture a baseline after each restart.
 
-- **Keep the controller OFF the nrc-poc pool.** Auto Mode consolidation can land
-  the controller Pod on an nrc-poc node; rotating or force-deleting that node then
-  restarts the controller mid-scenario and resets the metric counters (this
-  silently broke a first Scenario E run). `scenarios/controller-values.yaml` ships
-  an `affinity` (`noderotation-poc/pool NotIn [poc]`) that pins it to the
-  general-purpose/system pools — keep it.
+- **Keep the controller OFF every rotated pool.** Auto Mode consolidation can land
+  the controller Pod on a rotated node; rotating or force-deleting that node then
+  restarts the controller mid-scenario and resets the in-memory metric counters
+  (this silently broke a first Scenario E run, and a first Scenario O run — see
+  `VALIDATION.md`). `scenarios/controller-values.yaml` ships an `affinity` that
+  **positively allowlists** the Auto Mode built-in pools
+  (`karpenter.sh/nodepool In [general-purpose, system]`), which no scenario
+  rotates — keep it. A `NotIn` blocklist on one scenario's own label (e.g.
+  `noderotation-poc/pool` or `nodepool-ff`'s `karpenter.sh/nodepool`) is unsafe: a
+  rotated node from a *different* scenario lacks that label and passes the filter,
+  so the controller can still land there.
 
 - **Reading a `/`-keyed annotation with jsonpath.** Escape the dots inside the
   bracket selector: `['karpenter\.sh/do-not-disrupt']`, not

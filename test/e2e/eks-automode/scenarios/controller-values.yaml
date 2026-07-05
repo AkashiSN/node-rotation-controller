@@ -10,19 +10,27 @@ replicaCount: 1
 podDisruptionBudget:
   enabled: false
 
-# Keep the controller OFF the nrc-poc pool it rotates. Otherwise Auto Mode
-# consolidation can land the controller Pod on an nrc-poc node, and rotating (or
-# force-deleting) that node restarts the controller mid-scenario — resetting the
-# in-memory metric counters and disrupting observation. It belongs on the
-# general-purpose/system pools.
+# Keep the controller OFF every rotated pool. Otherwise Auto Mode consolidation
+# can land the controller Pod on a rotated node, and rotating (or force-deleting)
+# that node restarts the controller mid-scenario — resetting the in-memory metric
+# counters and disrupting observation.
+#
+# Use a POSITIVE allowlist onto the EKS Auto Mode built-in pools (general-purpose
+# / system), which no scenario rotates. A NotIn blocklist on a scenario's own
+# label (nrc-poc's noderotation-poc/pool, or nodepool-ff's karpenter.sh/nodepool)
+# is unsafe: a built-in-pool node lacks that label, so NotIn passes — but a
+# rotated-pool node whose label is simply absent for a *different* scenario also
+# passes, so the controller can still land there. Observed in Scenario O: with the
+# old nrc-poc blocklist the controller was evicted onto a nodepool-ff node when its
+# general-purpose host consolidated, restarting mid-run and resetting the counters.
 affinity:
   nodeAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:
       nodeSelectorTerms:
         - matchExpressions:
-            - key: noderotation-poc/pool
-              operator: NotIn
-              values: ["poc"]
+            - key: karpenter.sh/nodepool
+              operator: In
+              values: ["general-purpose", "system"]
 
 # Human-readable logs so the rotation lifecycle is easy to follow.
 logging:

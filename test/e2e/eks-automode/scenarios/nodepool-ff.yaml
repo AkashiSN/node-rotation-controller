@@ -1,0 +1,57 @@
+# Dedicated NodePool for the trick-free forceful-fallback scenario (SCENARIOS.md
+# Scenario O). ff-scope selector isolates it from the nrc-poc policy. E is fixed
+# at 2h and NEVER patched (trick-free): with the nrc-ff schedule (P=30m, t_rot
+# 25m) feasibility passes (E > K*P+t_rot = 1h25m) and each node fires forceful
+# fallback once its age passes E - t_rot = 1h35m. terminationGracePeriod is set
+# (5m) so drain is bounded and no TGPUnset finding fires. instance-cpu pinned to
+# 2 so each 1.5-cpu workload pod needs its own node (12 pods => 12 nodes).
+#
+# disruption.budgets blocks Karpenter's OWN voluntary disruption (Underutilized
+# consolidation of the batch, and Drifted — though with E never patched no drift
+# is expected) so ONLY the controller's rotation drives node turnover. Empty is
+# left allowed so a leftover empty surge node is still reclaimed.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: nodepool-ff
+  labels:
+    noderotation-ff/in-scope: "true"
+spec:
+  template:
+    metadata:
+      labels:
+        noderotation-ff/pool: ff
+    spec:
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      expireAfter: 2h
+      terminationGracePeriod: 5m
+  limits:
+    cpu: "48" # 12 candidates (2 vCPU each = 24) + surge headroom
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 60s
+    budgets:
+      - nodes: "0"
+        reasons: ["Underutilized", "Drifted"]
