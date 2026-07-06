@@ -6,7 +6,7 @@ Feedback on the design and implementation is welcome via Issues.
 
 ## Ways to contribute
 
-- **Design feedback**: open an Issue against the spec in [`docs/specification.md`](docs/specification.md)
+- **Design feedback**: open an Issue against the spec in [`docs/specification/`](docs/specification/)
 - **Documentation**: clarify the spec, fix typos, improve the Japanese translation
 - **Implementation**: once a milestone's issues are defined, pick one up
 
@@ -26,8 +26,8 @@ Feedback on the design and implementation is welcome via Issues.
 4. **Open a PR** to `main`:
    - One concern per PR.
    - Reference the issue: `Closes #<issue>`.
-   - If the change affects behavior, update [`docs/specification.md`](docs/specification.md)
-     **and** [`docs/ja/specification.md`](docs/ja/specification.md) in the same PR.
+   - If the change affects behavior, update [`docs/specification/`](docs/specification/)
+     **and** [`docs/ja/specification/`](docs/ja/specification/) in the same PR.
    - Ensure CI is green.
 5. **Review & merge**: PRs are squash-merged once approved and CI passes.
 
@@ -38,7 +38,7 @@ Feedback on the design and implementation is welcome via Issues.
 
 ## Specification is the source of truth
 
-The design in `docs/specification.md` leads the implementation. Code and spec
+The design in `docs/specification/` leads the implementation. Code and spec
 must not diverge — if your change alters documented behavior, update the spec
 in the same PR.
 

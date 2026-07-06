@@ -3,7 +3,7 @@
 Terraform that stands up a **real, ephemeral EKS Auto Mode cluster** so the
 node-rotation-controller PoC scenarios can be validated against real cloud
 capacity and storage — the half of the spec
-[§7.2](../../../docs/specification.md#72-validated-assumptions) PoC that the
+[§7.2](../../../docs/specification/07-risks.md#72-validated-assumptions) PoC that the
 local [KWOK harness](../kwok/README.md) (#92) deliberately cannot cover.
 
 It is the **real-cloud companion** to the KWOK harness:
@@ -17,7 +17,7 @@ It is the **real-cloud companion** to the KWOK harness:
 > does not touch the controller (`internal/`, `cmd/`). EKS Auto Mode provides
 > Karpenter v1 natively, so the controller still routes every node operation
 > through the Karpenter `NodeClaim` CRD — the project's core architectural
-> invariant (see [`docs/specification.md`](../../../docs/specification.md)) is preserved.
+> invariant (see [`docs/specification/`](../../../docs/specification/)) is preserved.
 
 ## Cost warning — ephemeral by design
 
@@ -144,7 +144,7 @@ row says otherwise:
 | R6 | `expireAfter` stays a backstop the controller's lead time wins against | validated via a **scaled** multi-rotation soak; a full multi-hour tight-race soak remains deferred (#109) |
 
 Results are recorded in spec
-[§7.2 Validated Assumptions](../../../docs/specification.md#72-validated-assumptions);
+[§7.2 Validated Assumptions](../../../docs/specification/07-risks.md#72-validated-assumptions);
 remaining real-cloud items are tracked in #109. File any divergence as a follow-up
 `fix(...)` issue before any production-readiness claim (see the roadmap, spec §6.2).
 

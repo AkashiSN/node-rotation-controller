@@ -5,7 +5,7 @@ Thanks for helping keep `node-rotation-controller` and its users safe.
 ## Supported versions
 
 The project is **pre-1.0** (`v0.x.y`); see the
-[release roadmap](docs/specification.md#62-roadmap) for the path to a stable
+[release roadmap](docs/specification/06-release.md#62-roadmap) for the path to a stable
 v1.0. Security fixes are applied to the **latest released minor only** — there
 are no long-term-support branches before 1.0. Always run the most recent release.
 
@@ -73,7 +73,7 @@ Out of scope — report these to their respective projects/vendors:
   `nodePoolSelector`, an unsatisfiable PDB) that the controller faithfully acts
   on. The controller never bypasses Karpenter — all node operations route through
   the `NodeClaim` CRD and Karpenter's voluntary, PDB-respecting drain path
-  ([spec §3.3](docs/specification.md#33-surge-sequence-v1)).
+  ([spec §3.3](docs/specification/03-design.md#33-surge-sequence-v1)).
 
 Operational guidance for safe configuration lives in the
 [production runbook](docs/runbook.md).

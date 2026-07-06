@@ -16,7 +16,7 @@ annotation keys, metrics, or the public surface, describe the change explicitly.
 
 ## Spec impact
 
-- [ ] Requires an update to `docs/specification.md` (and `docs/ja/`)
+- [ ] Requires an update to `docs/specification/` (and `docs/ja/`)
 - [ ] Affects the ConfigMap schema
 - [ ] Affects annotation/label keys
 - [ ] Affects Prometheus metrics

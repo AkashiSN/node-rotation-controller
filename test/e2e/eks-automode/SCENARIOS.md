@@ -1,7 +1,7 @@
 # Reproducible PoC validation scenarios (issue #93)
 
 This runbook lets a third party **re-run the spec
-[§7.2](../../../docs/specification.md#72-validated-assumptions) PoC validation**
+[§7.2](../../../docs/specification/07-risks.md#72-validated-assumptions) PoC validation**
 against a real EKS Auto Mode cluster and reach the same outcomes. It is the
 "observe rotations" half that the infra
 [`README.md`](README.md) (steps 4) only sketches: here are the exact NodePool,
@@ -1102,4 +1102,4 @@ make e2e-eks-down          # terraform destroy
 Confirm nothing lingers (Auto Mode EC2/EBS, load balancers) before walking away.
 Record any divergence from the expected outcomes as a follow-up `fix(...)` issue
 and update spec
-[§7.2](../../../docs/specification.md#72-validated-assumptions).
+[§7.2](../../../docs/specification/07-risks.md#72-validated-assumptions).

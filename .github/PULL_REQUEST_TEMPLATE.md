@@ -8,8 +8,8 @@ The motivation. Link the issue: `Closes #<issue>` (or `Refs #<issue>`).
 
 ## Spec sync
 
-- [ ] No behavior change, or behavior change is reflected in `docs/specification.md`
-- [ ] `docs/ja/specification.md` updated to match (if the English spec changed)
+- [ ] No behavior change, or behavior change is reflected in `docs/specification/`
+- [ ] `docs/ja/specification/` updated to match (if the English spec changed)
 
 ## Testing
 

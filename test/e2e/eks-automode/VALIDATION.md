@@ -4,7 +4,7 @@ This is the **recorded outcome** of running the [`SCENARIOS.md`](SCENARIOS.md)
 runbook against a real EKS Auto Mode cluster. `SCENARIOS.md` is the *how* (the
 reproducible steps, expected output, and gotchas); this file is the *what
 happened* — a dated log of actual results, so a reader can see that the spec
-[§7.2](../../../docs/specification.md#72-validated-assumptions) assumptions were
+[§7.2](../../../docs/specification/07-risks.md#72-validated-assumptions) assumptions were
 exercised end-to-end, not just described.
 
 Each run records the artifacts under test, the per-scenario verdict with the

@@ -1,7 +1,7 @@
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.4.0_released_(pre--1.0)-blue.svg)](docs/specification.md)
+[![Status](https://img.shields.io/badge/status-v0.4.0_released_(pre--1.0)-blue.svg)](docs/specification/)
 
 A Kubernetes controller that proactively rotates Karpenter-managed nodes within a defined maintenance window, using **make-before-break (surge)** semantics, before Karpenter's forceful `expireAfter` triggers.
 
@@ -9,9 +9,9 @@ Designed for EKS Auto Mode and any Karpenter v1+ environment where node expirati
 
 ## Status
 
-**v0.4.0 — v1 surge MVP, released (pre-1.0).** The v1 make-before-break rotation state machine (spec §5.2), `ageThreshold`/candidate derivation (§3.2), surge placeholder (§3.3), metrics and Warning Events (§4.2), the Helm chart, and the Karpenter v1 startup preflight (§5.1) are implemented, with unit tests and an envtest smoke test in CI. The core surge path is validated on EKS Auto Mode across a full rotation regression suite; a multi-hour tight-race soak remains the open item before v1.0 (see the [roadmap](docs/specification.md#62-roadmap)). Still **pre-1.0** — the configuration surface may change between minor releases. [docs/specification.md](docs/specification.md) remains the source of truth for the design; see [Compatibility](#compatibility) for the Karpenter contract.
+**v0.4.0 — v1 surge MVP, released (pre-1.0).** The v1 make-before-break rotation state machine (spec §5.2), `ageThreshold`/candidate derivation (§3.2), surge placeholder (§3.3), metrics and Warning Events (§4.2), the Helm chart, and the Karpenter v1 startup preflight (§5.1) are implemented, with unit tests and an envtest smoke test in CI. The core surge path is validated on EKS Auto Mode across a full rotation regression suite; a multi-hour tight-race soak remains the open item before v1.0 (see the [roadmap](docs/specification/06-release.md#62-roadmap)). Still **pre-1.0** — the configuration surface may change between minor releases. [docs/specification/](docs/specification/) remains the source of truth for the design; see [Compatibility](#compatibility) for the Karpenter contract.
 
-日本語版: [README.ja.md](README.ja.md) / [docs/ja/specification.md](docs/ja/specification.md)
+日本語版: [README.ja.md](README.ja.md) / [docs/ja/specification/](docs/ja/specification/)
 
 ## Why
 
@@ -50,17 +50,18 @@ The compatibility contract is the **stable `karpenter.sh/v1` CRD surface — not
 - **No internals, no cloud APIs:** the controller interacts only through Kubernetes API objects (`NodeClaim`/`NodePool` CRDs, core `Node`/`Pod`); it never calls Karpenter controller internals or a cloud-provider API. Unknown Auto Mode internals are fine as long as the public `karpenter.sh/v1` surface is compatible.
 - A startup preflight fails fast if `karpenter.sh/v1` (`nodeclaims`/`nodepools`) is not served or not readable.
 
-See the [compatibility policy](docs/specification.md#21-scope-and-compatibility) for the full list of required CRD fields, labels, and annotations.
+See the [compatibility policy](docs/specification/02-scope.md#21-scope-and-compatibility) for the full list of required CRD fields, labels, and annotations.
 
 ## Project layout
 
 ```
 .
 ├── docs/
-│   ├── specification.md       Full design specification (English)
+│   ├── specification/         Full design specification (English, per chapter)
 │   ├── runbook.md             Production runbook (English)
-│   ├── ja/specification.md    Japanese translation
-│   └── ja/runbook.md          Production runbook (Japanese)
+│   ├── ja/specification/      Japanese translation
+│   ├── ja/runbook.md          Production runbook (Japanese)
+│   └── reference/             ADRs and performance notes
 ├── charts/                    Helm chart (node-rotation-controller)
 ├── examples/                  Ready-to-adapt RotationPolicy manifests
 ├── cmd/                       Controller entry point (manager bootstrap + startup preflight)

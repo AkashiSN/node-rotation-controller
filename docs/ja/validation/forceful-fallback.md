@@ -2,10 +2,10 @@
 
 ウィンドウ境界の forceful フォールバック（#156）、最早期限順（#157）、do-not-disrupt
 除外（#170）を同一デッドライン上で同時に走らせた実 EKS 検証。この検証が実証する前提
-については [仕様書 §7.2](/ja/specification#_7-2-検証済み前提) を、
+については [仕様書 §7.2](/ja/specification/07-risks#72-検証済み前提) を、
 `noderotation_forceful_fallback_total` メトリクスと `ForcefulFallback` Warning
 イベントが運用上何を意味するかについては
-[ランブック](/ja/runbook#_3-noderotation-メトリクスの読み方) を参照。
+[ランブック](/ja/runbook#3-noderotation_-メトリクスの読み方) を参照。
 
 <TimelineForcefulFallback />
 
