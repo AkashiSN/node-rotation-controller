@@ -15,9 +15,15 @@ concurrency:
 jobs:
   # Classify the PR's changed paths so each required job can skip its heavy
   # steps when nothing it cares about changed — WITHOUT skipping the job itself
-  # (a skipped required job hangs `pending` and blocks merge; see e2e.yaml). On
-  # push to main every flag is true. The classifier is unit-tested and run here
-  # on every CI invocation (cheap) so it can never silently rot.
+  # (a skipped required job hangs `pending` and blocks merge). Unlike e2e.yaml,
+  # which folds detection into its single job to avoid a cross-job dependency,
+  # this workflow's four jobs `needs:` a shared `changes` job (DRY: one
+  # detection). To keep that fan-out safe, `changes` is itself a required status
+  # check: it runs unconditionally on every PR, so it never hangs `pending`, and
+  # if its self-test or classifier fails it surfaces as a clear red gate instead
+  # of four silently-skipped required checks. On push to main every flag is true.
+  # The classifier is unit-tested and run here on every CI invocation (cheap) so
+  # it can never silently rot.
   changes:
     runs-on: ubuntu-latest
     outputs:

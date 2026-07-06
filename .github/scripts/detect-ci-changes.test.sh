@@ -23,6 +23,8 @@ assert "infra-makefile"   $'go=false\nchart=false\ndocker=false\ninfra=true'   "
 assert "infra-detector"   $'go=false\nchart=false\ndocker=false\ninfra=true'   ".github/scripts/detect-ci-changes.sh"
 assert "config-is-go"     $'go=true\nchart=false\ndocker=false\ninfra=false'   "config/crd/bases/noderotation.io_rotationpolicies.yaml"
 assert "gomod"            $'go=true\nchart=false\ndocker=false\ninfra=false'   "go.mod"
+assert "golangci-config"  $'go=true\nchart=false\ndocker=false\ninfra=false'   ".golangci.yml"
+assert "dockerignore"     $'go=false\nchart=false\ndocker=true\ninfra=false'   ".dockerignore"
 assert "empty-input"      "$ALL_FALSE"                                    ""
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }

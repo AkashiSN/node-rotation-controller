@@ -9,9 +9,9 @@ changed="$(cat)"
 has() { grep -qE "$1" <<<"$changed"; }   # here-string: no pipe, so no SIGPIPE under pipefail
 
 go=false; chart=false; docker=false; infra=false
-if has '(\.go$|^go\.(mod|sum)$|^api/|^config/)'; then go=true; fi
+if has '(\.go$|^go\.(mod|sum)$|^api/|^config/|^\.golangci\.ya?ml$)'; then go=true; fi
 if has '^charts/'; then chart=true; fi
-if has '^Dockerfile$'; then docker=true; fi
+if has '(^Dockerfile$|^\.dockerignore$)'; then docker=true; fi
 if has '(^Makefile$|^aqua\.yaml$|^aqua-policy\.yaml$|^aqua/|^\.github/workflows/ci\.yaml$|^\.github/scripts/)'; then infra=true; fi
 
 printf 'go=%s\nchart=%s\ndocker=%s\ninfra=%s\n' "$go" "$chart" "$docker" "$infra"
