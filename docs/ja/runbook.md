@@ -434,7 +434,7 @@ Pod は任意の名前空間に存在しうる（[spec §3.3](specification/03-d
 そのため controller-runtime の informer は **クラスタ内の全 Pod をキャッシュ** し、
 コントローラのメモリフットプリントは総 Pod 数に比例する — これは reconcile パスのスキャン
 最適化では **減らない**。コストはスキャンではなくキャッシュにあるからである
-（[`docs/perf/pod-cache-scalability.md`](../reference/perf/pod-cache-scalability.md)、issue #80）。
+（[`docs/reference/perf/pod-cache-scalability.md`](../reference/perf/pod-cache-scalability.md)、issue #80）。
 
 **指針。** コントローラ Deployment のメモリ `requests`/`limits` を総 Pod 数から決める。
 以下の実測フットプリントは **保守的な下限** として扱うこと（実際にキャッシュされる

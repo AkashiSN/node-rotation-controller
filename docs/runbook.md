@@ -453,7 +453,7 @@ candidate node, and those Pods may live in any namespace
 informer therefore caches **every Pod in the cluster**, so the controller's
 memory footprint scales with total Pod count — it is **not** reduced by the
 reconcile-path scan optimizations, because the cost is the cache, not the scan
-([`docs/perf/pod-cache-scalability.md`](reference/perf/pod-cache-scalability.md), issue #80).
+([`docs/reference/perf/pod-cache-scalability.md`](reference/perf/pod-cache-scalability.md), issue #80).
 
 **Guidance.** Size the controller Deployment's memory `requests`/`limits` from
 total Pod count, treating these measured footprints as a **conservative lower
