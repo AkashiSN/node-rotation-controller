@@ -105,8 +105,10 @@ for `latest`.
 
 A fourth workflow, `pages.yaml`, builds this VitePress site with
 `npm run docs:build` and deploys the result to GitHub Pages. It triggers on
-pushes to `main` that touch `docs/**`, `package.json`, `package-lock.json`,
-or the workflow file itself, plus `workflow_dispatch` for manual runs. It is
+pushes to `main` that touch `docs/**`, the root `README.md`/`README.ja.md`
+(which are copied into the Getting Started pages at build time),
+`package.json`, `package-lock.json`, or the workflow file itself, plus
+`workflow_dispatch` for manual runs. It is
 not part of the required-check set discussed above — it publishes docs, it
 does not gate merges — so it needs none of the change-detection gating this
 page describes.

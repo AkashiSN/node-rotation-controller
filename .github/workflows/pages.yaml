@@ -4,6 +4,10 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      # copy-readme.mjs generates the Getting Started pages from these at build
+      # time, so a README-only change must also trigger a redeploy.
+      - 'README.md'
+      - 'README.ja.md'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/pages.yaml'

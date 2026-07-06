@@ -100,8 +100,9 @@
 ## `pages.yaml`: ドキュメントデプロイ
 
 4 つ目のワークフロー `pages.yaml` は、本 VitePress サイトを `npm run docs:build`
-でビルドし GitHub Pages にデプロイする。トリガーは `docs/**`、`package.json`、
-`package-lock.json`、またはワークフロー自身のファイルに触れる `main` への
-push、および手動実行（`workflow_dispatch`）である。上述の必須チェック集合には
+でビルドし GitHub Pages にデプロイする。トリガーは `docs/**`、ルートの
+`README.md`/`README.ja.md`（ビルド時に Getting Started ページへコピーされる）、
+`package.json`、`package-lock.json`、またはワークフロー自身のファイルに触れる
+`main` への push、および手動実行（`workflow_dispatch`）である。上述の必須チェック集合には
 含まれない — ドキュメントを公開するものでありマージをゲートしないため — この
 ページで説明した変更検知ゲーティングは不要である。
