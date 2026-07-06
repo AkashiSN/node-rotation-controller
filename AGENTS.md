@@ -5,8 +5,8 @@ Karpenter-managed nodes in a make-before-break (surge) fashion within a
 configurable maintenance window, before Karpenter's forceful `expireAfter`
 fires. It targets EKS Auto Mode and any Karpenter v1+ environment.
 
-The **source of truth for design** is [`docs/specification.md`](docs/specification.md)
-(Japanese translation: [`docs/ja/specification.md`](docs/ja/specification.md)).
+The **source of truth for design** is [`docs/specification/`](docs/specification/)
+(Japanese translation: [`docs/ja/specification/`](docs/ja/specification/)).
 Read it before making design-affecting changes.
 
 The project is in the **v0.3 MVP** phase: the v1 surge implementation — the
@@ -56,7 +56,7 @@ and spec in sync (see *Specification rules* below).
 
 ## Specification rules
 
-- `docs/specification.md` (English) is the canonical spec. `docs/ja/specification.md`
+- `docs/specification/` (English) is the canonical spec. `docs/ja/specification/`
   is a translation and **must be kept in sync** — update both in the same PR.
 - English is the default language for code, comments, docs, issues, and PRs.
   Japanese content lives only under `docs/ja/`.

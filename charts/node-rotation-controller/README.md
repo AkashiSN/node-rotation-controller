@@ -8,7 +8,7 @@ and Disruption Budgets do not apply.
 This chart deploys the controller, its RBAC, the cluster-scoped `RotationPolicy`
 CRD, the surge placeholder `PriorityClass`, and (optionally) Prometheus Operator
 integration. For the design, read the
-[specification](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/specification.md);
+[specification](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/specification/);
 for day-2 operations, the
 [runbook](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/runbook.md).
 
@@ -169,7 +169,7 @@ To manage your own policies outside the chart instead, set `rotationPolicy.creat
 (and leave `rotationPolicies` empty) and `kubectl apply` one `RotationPolicy` per
 divergent policy. The full schema, conflict resolution, and the `status`
 subresource are documented in
-[specification §5.4](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/specification.md#54-configuration-schema).
+[specification §5.4](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/specification/05-implementation.md#54-configuration-schema).
 
 ## Metrics and alerts
 
@@ -283,8 +283,8 @@ kubectl delete crd rotationpolicies.noderotation.io
 
 ## Links
 
-- [Specification](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/specification.md)
-  ([日本語](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/ja/specification.md))
+- [Specification](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/specification/)
+  ([日本語](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/ja/specification/))
 - [Production runbook](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/runbook.md)
   ([日本語](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/ja/runbook.md))
 - [Project README](https://github.com/AkashiSN/node-rotation-controller/blob/main/README.md)
