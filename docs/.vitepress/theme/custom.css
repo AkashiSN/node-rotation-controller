@@ -1,0 +1,36 @@
+/* docs/.vitepress/theme/custom.css */
+:root {
+  --vp-c-brand-1: #17958a;   /* teal — graceful/accent */
+  --vp-c-brand-2: #2b7d93;
+  --vp-c-brand-3: #49a7bd;
+  --vp-c-brand-soft: rgba(23, 149, 138, 0.13);
+  --vp-font-family-base: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --vp-font-family-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Figure palette — light (from ff-timeline.html / coverage-matrix.html :root) */
+  --fig-bg: #f4f7f9; --fig-surface: #ffffff; --fig-surface-2: #eef2f5;
+  --fig-text: #101820; --fig-muted: #5a6773; --fig-faint: #8493a0;
+  --fig-line: #d5dde4; --fig-line-strong: #b7c2cc;
+  --fig-graceful: #17958a; --fig-graceful-fill: rgba(23,149,138,.13);
+  --fig-forceful: #d4791a; --fig-forceful-fill: rgba(212,121,26,.13);
+  --fig-backstop: #b23f3f; --fig-backstop-fill: rgba(178,63,63,.08);
+  --fig-accent: #2b7d93; --fig-idle-fill: rgba(90,103,115,.07);
+  --fig-ext: #7a6cc4; --fig-ext-soft: rgba(122,108,196,.13);
+  --fig-shadow: 0 1px 2px rgba(16,24,32,.06), 0 6px 18px rgba(16,24,32,.05);
+  --fig-pin-num: #ffffff;
+}
+.dark {
+  --vp-c-brand-1: #3cbcac; --vp-c-brand-2: #49a7bd; --vp-c-brand-3: #49a7bd;
+  --vp-c-brand-soft: rgba(60,188,172,0.15);
+  /* Figure palette — dark (from the prefers-color-scheme:dark blocks) */
+  --fig-bg: #0c1218; --fig-surface: #121b24; --fig-surface-2: #0f171f;
+  --fig-text: #e7eef4; --fig-muted: #93a1ad; --fig-faint: #6c7b88;
+  --fig-line: #243039; --fig-line-strong: #33424e;
+  --fig-graceful: #3cbcac; --fig-graceful-fill: rgba(60,188,172,.14);
+  --fig-forceful: #e89a41; --fig-forceful-fill: rgba(232,154,65,.14);
+  --fig-backstop: #d76d6d; --fig-backstop-fill: rgba(215,109,109,.10);
+  --fig-accent: #49a7bd; --fig-idle-fill: rgba(147,161,173,.07);
+  --fig-ext: #9a8ce0; --fig-ext-soft: rgba(154,140,224,.16);
+  --fig-shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px rgba(0,0,0,.35);
+  --fig-pin-num: #ffffff;
+}
