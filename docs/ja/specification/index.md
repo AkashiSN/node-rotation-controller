@@ -15,6 +15,7 @@ English: [docs/specification/](../../specification/)
 5. **[実装](./05-implementation)** — [5.1 アーキテクチャ](./05-implementation#51-アーキテクチャ) · [5.2 Reconcile ループ](./05-implementation#52-reconcile-ループ) · [5.3 状態モデル](./05-implementation#53-状態モデル) · [5.4 設定スキーマ](./05-implementation#54-設定スキーマ)
 6. **[リリース](./06-release)** — [6.1 バージョニングとリリース](./06-release#61-バージョニングとリリース) · [6.2 ロードマップ](./06-release#62-ロードマップ)
 7. **[リスクと状況](./07-risks)** — [7.1 リスク](./07-risks#71-リスク) · [7.2 検証済み前提](./07-risks#72-検証済み前提) · [7.3 未決事項](./07-risks#73-未決事項)
+
 ## 参考
 
 - [Karpenter Disruption（公式）](https://karpenter.sh/docs/concepts/disruption/)

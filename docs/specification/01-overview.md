@@ -90,6 +90,3 @@ This controller fills the second and third rows above and substantially simplifi
 | [AWS Node Termination Handler](https://github.com/aws/aws-node-termination-handler) | Spot interruption / scheduled events | None; different trigger |
 | [descheduler](https://github.com/kubernetes-sigs/descheduler) | Pod rebalancing | None; doesn't touch nodes |
 | EKS Node Auto Repair (AWS managed) | Replace unhealthy nodes | None; not expiration-driven |
-
----
-

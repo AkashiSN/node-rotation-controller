@@ -15,6 +15,7 @@ Japanese translation: [docs/ja/specification/](../ja/specification/)
 5. **[Implementation](./05-implementation)** — [5.1 Architecture](./05-implementation#51-architecture) · [5.2 Reconcile Loop](./05-implementation#52-reconcile-loop) · [5.3 State Model](./05-implementation#53-state-model) · [5.4 Configuration Schema](./05-implementation#54-configuration-schema)
 6. **[Release](./06-release)** — [6.1 Versioning and Release](./06-release#61-versioning-and-release) · [6.2 Roadmap](./06-release#62-roadmap)
 7. **[Risks & Status](./07-risks)** — [7.1 Risks](./07-risks#71-risks) · [7.2 Validated Assumptions](./07-risks#72-validated-assumptions) · [7.3 Open Questions](./07-risks#73-open-questions)
+
 ## References
 
 - [Karpenter Disruption (official docs)](https://karpenter.sh/docs/concepts/disruption/)

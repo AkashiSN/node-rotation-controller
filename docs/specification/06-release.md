@@ -22,6 +22,3 @@
 | v0.3 (MVP, v1 surge) | Reconcile + surge + drain + metrics + Helm chart |
 | v0.4 | Pre-pull (v2 feature) |
 | v1.0 | Stable `RotationPolicy` CRD (`v1`), documented production runbook, soak-tested on a real EKS Auto Mode cluster |
-
----
-

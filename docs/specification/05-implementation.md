@@ -446,6 +446,3 @@ data:
     prePull:                   # v2 (disabled in v1); only `enabled` is accepted in v1
       enabled: false
 ```
-
----
-

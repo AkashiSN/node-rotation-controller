@@ -436,6 +436,3 @@ data:
     prePull:                   # v2（v1 では無効）。v1 では `enabled` のみ受理
       enabled: false
 ```
-
----
-

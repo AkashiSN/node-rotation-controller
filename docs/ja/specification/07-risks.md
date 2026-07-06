@@ -45,6 +45,3 @@
 3. EKS Auto Mode 以外（AKS NAP / GKE）への **マルチクラウド検証**
 
 > `RotationPolicy` CRD（issue #119）により解決済み: *NodePool が別々のローテーションポリシーを必要とする場合の CRD ベースのポリシー移行* と *NodePool ごとのメンテナンスウィンドウ vs クラスタ単一窓* — いずれも NodePool ごとの `RotationPolicy`（§5.4）で提供される。
-
----
-

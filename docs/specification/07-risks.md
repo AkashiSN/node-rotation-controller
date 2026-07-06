@@ -45,6 +45,3 @@
 3. **Multi-cloud verification** (AKS NAP, GKE) before claiming compatibility beyond EKS Auto Mode
 
 > Resolved by the `RotationPolicy` CRD (issue #119): *CRD-based policy migration when NodePools need divergent rotation policy* and *per-NodePool maintenance window vs a single cluster-wide window* — both delivered by the per-NodePool `RotationPolicy` (§5.4).
-
----
-
