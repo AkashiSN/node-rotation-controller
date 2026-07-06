@@ -38,3 +38,11 @@ artifacts/
 # tree (visible to editors) without being tracked. See "Parallel development
 # with worktrees" in AGENTS.md.
 .worktrees/
+
+# VitePress docs site
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+# Generated at build time from the root READMEs (see copy-readme.mjs)
+docs/getting-started.md
+docs/ja/getting-started.md
