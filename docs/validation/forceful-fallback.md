@@ -2,9 +2,9 @@
 
 Real-EKS validation of the window-bounded forceful fallback (#156), earliest-deadline
 ordering (#157), and do-not-disrupt exclusion (#170) running together on a shared
-deadline. See the [specification §7.2](/specification/07-risks#_7-2-validated-assumptions) for
+deadline. See the [specification §7.2](/specification/07-risks#72-validated-assumptions) for
 the assumptions this exercises, and the
-[runbook](/runbook#_3-interpreting-the-noderotation-metrics) for what the
+[runbook](/runbook#3-interpreting-the-noderotation_-metrics) for what the
 `noderotation_forceful_fallback_total` metric and `ForcefulFallback` Warning
 Event mean operationally.
 

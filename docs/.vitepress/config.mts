@@ -2,11 +2,33 @@
 import { defineConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 
+// GitHub-compatible heading slugify. VitePress's default (@mdit-vue/shared)
+// renders a dotted-number heading like "1.1 Background" as `_1-1-background`,
+// which does NOT match the GitHub anchor (`11-background`) that the canonical
+// docs use in their cross-references — so those deep links loaded the right
+// page on the site but never scrolled to the section. The canonical docs are
+// browsed BOTH on GitHub and on this site, and their fragments are GitHub-form,
+// so we make VitePress emit GitHub-form ids too (one algorithm, both surfaces).
+// Mirrors github-slugger: lower-case, strip punctuation except letters,
+// numbers, connector `_` and hyphen, and map each space to a hyphen WITHOUT
+// collapsing runs (so "Capacity / Availability" → `capacity--availability`).
+function githubSlugify(str: string): string {
+  return str
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\p{Pc}\- ]/gu, '')
+    .replace(/ /g, '-')
+}
+
 export default withMermaid(defineConfig({
   title: 'node-rotation-controller',
   description: 'Proactive make-before-break rotation for Karpenter-managed nodes',
   base: '/node-rotation-controller/',
   cleanUrls: true,
+  markdown: {
+    anchor: { slugify: githubSlugify },
+  },
   srcExclude: ['superpowers/**'],
   // The canonical docs (specification/, ja/specification/, reference/adr/ and
   // their ja/ translations) are the source of truth and are never
