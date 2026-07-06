@@ -14,7 +14,7 @@ assert() {
 }
 
 ALL_FALSE=$'go=false\nchart=false\ndocker=false\ninfra=false'
-assert "docs-only"        "$ALL_FALSE"                                    "docs/specification.md" "README.md" "docs/ja/runbook.md"
+assert "docs-only"        "$ALL_FALSE"                                    "docs/specification/03-design.md" "README.md" "docs/ja/runbook.md"
 assert "chart-only"       $'go=false\nchart=true\ndocker=false\ninfra=false'   "charts/node-rotation-controller/values.yaml"
 assert "go-only"          $'go=true\nchart=false\ndocker=false\ninfra=false'   "internal/reconciler/foo.go"
 assert "api-generates"    $'go=true\nchart=true\ndocker=false\ninfra=false'    "api/v1/rotationpolicy_types.go" "charts/node-rotation-controller/crds/noderotation.io_rotationpolicies.yaml"
