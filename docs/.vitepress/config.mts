@@ -19,7 +19,7 @@ export default withMermaid(defineConfig({
   ignoreDeadLinks: [
     /CLAUDE(\.md)?$/,
     /go\.mod$/,
-    /\/charts\//,
+    /\.\.\/charts\//,
   ],
   themeConfig: {
     search: { provider: 'local' },

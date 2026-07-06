@@ -12,7 +12,7 @@
 | `ci.yaml` | `main` への push、全 PR | 必須チェック: `lint`、`test`、`build`、`chart`（および後述の `changes`） |
 | `e2e.yaml` | `main` への push、全 PR | surge メカニズム向けの KWOK ベース Karpenter e2e、単一の `e2e` ジョブ |
 | `release.yaml` | `v*` タグの push | マルチアーキのコントローライメージと Helm chart（OCI）を `ghcr.io` にビルド・push し、GitHub Release を作成 |
-| `pages.yaml`（予定） | `main` への push | 本 VitePress サイトをビルドし GitHub Pages にデプロイ |
+| `pages.yaml` | `main` への push（ドキュメント関連パス）、手動実行 | 本 VitePress サイトをビルドし GitHub Pages にデプロイ |
 
 ## `pending` の罠
 
@@ -97,10 +97,11 @@
 ダウンロードして GitHub Release を作成し、`image` ジョブが `latest` を
 スキップするのと同じハイフン付きタグに対してはプレリリースとしてマークする。
 
-## `pages.yaml`: ドキュメントデプロイ（予定）
+## `pages.yaml`: ドキュメントデプロイ
 
 4 つ目のワークフロー `pages.yaml` は、本 VitePress サイトを `npm run docs:build`
-でビルドし GitHub Pages にデプロイする予定である。本ドキュメントサイトを完成
-させる後続 PR で、サイト本体と合わせて追加される。上述の必須チェック集合には
+でビルドし GitHub Pages にデプロイする。トリガーは `docs/**`、`package.json`、
+`package-lock.json`、またはワークフロー自身のファイルに触れる `main` への
+push、および手動実行（`workflow_dispatch`）である。上述の必須チェック集合には
 含まれない — ドキュメントを公開するものでありマージをゲートしないため — この
 ページで説明した変更検知ゲーティングは不要である。

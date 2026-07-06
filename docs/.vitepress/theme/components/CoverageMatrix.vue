@@ -263,7 +263,7 @@ const T = computed(() => ja.value ? {
       rec: 'Either one alone is enough for the rollback assertions (M-A\'s preemption is distinct, so keep it).',
     },
     external: {
-      rel: 'N · A(一部)', title: 'external guarantees',
+      rel: 'N · A (partial)', title: 'external guarantees',
       body: '<b>N</b> (Karpenter honoring do-not-disrupt) and <b>A\'s EBS reattach</b> are more a check of <b>Karpenter/AWS\'s own guarantees</b> (de-risking) than of this controller\'s logic.',
       rec: 'Can be <b>deprioritized under cost pressure</b> (on the assumption that the docs can be trusted).',
     },

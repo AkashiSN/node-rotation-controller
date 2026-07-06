@@ -11,7 +11,7 @@ required status checks fast without ever leaving one stuck `pending`.
 | `ci.yaml` | push to `main`, every PR | Required checks: `lint`, `test`, `build`, `chart` (plus `changes`, see below) |
 | `e2e.yaml` | push to `main`, every PR | KWOK-based Karpenter e2e for the surge mechanism, single `e2e` job |
 | `release.yaml` | push of a `v*` tag | Builds and pushes the multi-arch controller image and the Helm chart (OCI) to `ghcr.io`, then creates a GitHub Release |
-| `pages.yaml` *(forthcoming)* | push to `main` | Builds this VitePress site and deploys it to GitHub Pages |
+| `pages.yaml` | push to `main` (docs-relevant paths), manual dispatch | Builds this VitePress site and deploys it to GitHub Pages |
 
 ## The `pending` trap
 
@@ -101,11 +101,12 @@ and `release` downloads the packaged chart and creates a GitHub Release from
 it, marked as a pre-release for the same hyphenated tags the image job skips
 for `latest`.
 
-## `pages.yaml`: docs deploy (forthcoming)
+## `pages.yaml`: docs deploy
 
-A fourth workflow, `pages.yaml`, will build this VitePress site with
-`npm run docs:build` and deploy the result to GitHub Pages. It lands in the
-follow-up PR that finishes this docs site, alongside the site content itself,
-and is not part of the required-check set discussed above — it publishes
-docs, it does not gate merges — so it needs none of the change-detection
-gating this page describes.
+A fourth workflow, `pages.yaml`, builds this VitePress site with
+`npm run docs:build` and deploys the result to GitHub Pages. It triggers on
+pushes to `main` that touch `docs/**`, `package.json`, `package-lock.json`,
+or the workflow file itself, plus `workflow_dispatch` for manual runs. It is
+not part of the required-check set discussed above — it publishes docs, it
+does not gate merges — so it needs none of the change-detection gating this
+page describes.

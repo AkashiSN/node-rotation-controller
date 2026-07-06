@@ -71,7 +71,6 @@ const T = computed(() => ja.value ? {
   sectionTimeline: 'タイムライン（2h 比例軸）',
   sectionLogic: '判定ロジック（pick 時点の残り時間で分岐）',
   sectionLog: '時系列（実測ログ）',
-  timeline: 'タイムライン（2h 比例軸）',
   zones: { pre: 'pre-threshold', graceful: 'graceful window', forceful: 'forceful window' },
   svg: {
     ariaLabel: '12ノード rotation の比例タイムライン',
@@ -139,7 +138,6 @@ const T = computed(() => ja.value ? {
   sectionTimeline: 'Timeline (2h proportional axis)',
   sectionLogic: 'Decision logic (branches on remaining time at pick)',
   sectionLog: 'Chronology (observed log)',
-  timeline: 'Timeline (2h proportional axis)',
   zones: { pre: 'pre-threshold', graceful: 'graceful window', forceful: 'forceful window' },
   svg: {
     ariaLabel: 'Proportional timeline of the 12-node rotation',
