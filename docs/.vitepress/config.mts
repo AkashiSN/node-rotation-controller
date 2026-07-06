@@ -8,14 +8,15 @@ export default withMermaid(defineConfig({
   base: '/node-rotation-controller/',
   cleanUrls: true,
   srcExclude: ['superpowers/**'],
-  // The canonical docs (specification.md, runbook.md, adr/README.md and their
-  // ja/ translations) are the source of truth and are never forked/rewritten
-  // for the site — they legitimately link to repo files that live outside the
-  // docs root (CLAUDE.md, go.mod, the Helm chart's values.yaml/README.md) and
-  // therefore cannot resolve as site pages. Ignore ONLY those specific
-  // outside-root targets; every other link (intra-docs pages, the generated
-  // Getting Started pages, the spec's cross-locale anchors, figure/nav links)
-  // stays checked so real dead links still fail the build.
+  // The canonical docs (specification/, ja/specification/, reference/adr/ and
+  // their ja/ translations) are the source of truth and are never
+  // forked/rewritten for the site — they legitimately link to repo files that
+  // live outside the docs root (CLAUDE.md, go.mod, the Helm chart's
+  // values.yaml/README.md) and therefore cannot resolve as site pages. Ignore
+  // ONLY those specific outside-root targets; every other link (intra-docs
+  // pages, the generated Getting Started pages, the spec's cross-locale
+  // anchors, figure/nav links) stays checked so real dead links still fail
+  // the build.
   ignoreDeadLinks: [
     /CLAUDE(\.md)?$/,
     /go\.mod$/,
@@ -34,7 +35,7 @@ export default withMermaid(defineConfig({
       themeConfig: {
         nav: [
           { text: 'Getting Started', link: '/getting-started' },
-          { text: 'Specification', link: '/specification' },
+          { text: 'Specification', link: '/specification/' },
           { text: 'Runbook', link: '/runbook' },
           { text: 'Validation', link: '/validation/forceful-fallback' },
           { text: 'Development', link: '/development/ci-cd' },
@@ -42,8 +43,17 @@ export default withMermaid(defineConfig({
         sidebar: [
           { text: 'Overview', collapsed: false, items: [
             { text: 'Getting Started', link: '/getting-started' },
-            { text: 'Specification', link: '/specification' },
             { text: 'Runbook', link: '/runbook' },
+          ]},
+          { text: 'Specification', collapsed: false, items: [
+            { text: 'Contents', link: '/specification/' },
+            { text: '1. Overview', link: '/specification/01-overview' },
+            { text: '2. Scope', link: '/specification/02-scope' },
+            { text: '3. Design', link: '/specification/03-design' },
+            { text: '4. Operations', link: '/specification/04-operations' },
+            { text: '5. Implementation', link: '/specification/05-implementation' },
+            { text: '6. Release', link: '/specification/06-release' },
+            { text: '7. Risks & Status', link: '/specification/07-risks' },
           ]},
           { text: 'Validation', collapsed: false, items: [
             { text: 'Forceful fallback (Scenario O)', link: '/validation/forceful-fallback' },
@@ -51,10 +61,10 @@ export default withMermaid(defineConfig({
           { text: 'Development', collapsed: false, items: [
             { text: 'CI/CD design', link: '/development/ci-cd' },
           ]},
-          { text: 'Reference (English)', collapsed: false, items: [
-            { text: 'ADR index', link: '/adr/' },
-            { text: 'ADR-0001 forceful fallback', link: '/adr/0001-window-bounded-forceful-fallback' },
-            { text: 'Perf: pod cache scalability', link: '/perf/pod-cache-scalability' },
+          { text: 'Reference', collapsed: false, items: [
+            { text: 'ADR index', link: '/reference/adr/' },
+            { text: 'ADR-0001 forceful fallback', link: '/reference/adr/0001-window-bounded-forceful-fallback' },
+            { text: 'Perf: pod cache scalability', link: '/reference/perf/pod-cache-scalability' },
           ]},
         ],
       },
@@ -66,7 +76,7 @@ export default withMermaid(defineConfig({
       themeConfig: {
         nav: [
           { text: 'はじめに', link: '/ja/getting-started' },
-          { text: '仕様書', link: '/ja/specification' },
+          { text: '仕様書', link: '/ja/specification/' },
           { text: 'ランブック', link: '/ja/runbook' },
           { text: '検証', link: '/ja/validation/forceful-fallback' },
           { text: '開発者向け', link: '/ja/development/ci-cd' },
@@ -74,8 +84,17 @@ export default withMermaid(defineConfig({
         sidebar: [
           { text: '概要', collapsed: false, items: [
             { text: 'はじめに', link: '/ja/getting-started' },
-            { text: '仕様書', link: '/ja/specification' },
             { text: 'ランブック', link: '/ja/runbook' },
+          ]},
+          { text: '仕様書', collapsed: false, items: [
+            { text: '目次', link: '/ja/specification/' },
+            { text: '1. 概要', link: '/ja/specification/01-overview' },
+            { text: '2. スコープ', link: '/ja/specification/02-scope' },
+            { text: '3. 設計', link: '/ja/specification/03-design' },
+            { text: '4. 運用', link: '/ja/specification/04-operations' },
+            { text: '5. 実装', link: '/ja/specification/05-implementation' },
+            { text: '6. リリース', link: '/ja/specification/06-release' },
+            { text: '7. リスクと状況', link: '/ja/specification/07-risks' },
           ]},
           { text: '検証', collapsed: false, items: [
             { text: 'Forceful fallback（シナリオ O）', link: '/ja/validation/forceful-fallback' },
@@ -83,10 +102,10 @@ export default withMermaid(defineConfig({
           { text: '開発者向け', collapsed: false, items: [
             { text: 'CI/CD 設計', link: '/ja/development/ci-cd' },
           ]},
-          // ADR/perf are EN-only; link out to the English pages.
+          // ADR/perf are EN-only; link out to the English reference pages.
           { text: 'リファレンス（英語）', collapsed: false, items: [
-            { text: 'ADR インデックス', link: '/adr/' },
-            { text: 'Perf: pod cache scalability', link: '/perf/pod-cache-scalability' },
+            { text: 'ADR インデックス', link: '/reference/adr/' },
+            { text: 'Perf: pod cache scalability', link: '/reference/perf/pod-cache-scalability' },
           ]},
         ],
       },
