@@ -2,7 +2,7 @@
 
 Ready-to-adapt `RotationPolicy` manifests for `node-rotation-controller`. Policy
 is configured through cluster-scoped `RotationPolicy` objects (spec
-[§5.4](../docs/specification.md#54-configuration-schema)); the controller
+[§5.4](../docs/specification/05-implementation.md#54-configuration-schema)); the controller
 resolves each NodePool's governing policy at reconcile time. A NodePool matched
 by **no** policy is never rotated — its `expireAfter` backstop still applies.
 
