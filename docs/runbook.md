@@ -1,7 +1,7 @@
 # Production runbook
 
 Operational guidance for running `node-rotation-controller` on a real cluster.
-The [specification](specification.md) is the source of truth for *why* the
+The [specification](specification/) is the source of truth for *why* the
 controller behaves as it does; this runbook is the operator-facing *how*. Every
 section links back to the relevant spec section.
 
@@ -9,7 +9,7 @@ Japanese translation: [docs/ja/runbook.md](ja/runbook.md).
 
 > The controller is pre-1.0. EKS Auto Mode PoC runs have validated the core surge
 > path, but edge cases and a full multi-hour tight-race soak remain open (see
-> [§7.2 validated assumptions](specification.md#72-validated-assumptions)). Treat
+> [§7.2 validated assumptions](specification/07-risks.md#72-validated-assumptions)). Treat
 > this runbook as the starting point for a production rollout, not a guarantee.
 
 > **Responding to an incident right now?** Start at
@@ -42,16 +42,16 @@ replacement node *before* draining the old one. For zonal-PV workloads the
 replacement node is **pinned to the candidate's AZ** so the existing volume can
 re-attach — `topology.kubernetes.io/zone` is in the default `required` set of
 `surge.matchNodeRequirements`
-([§3.3 *Stateful and zonal workloads*](specification.md#33-surge-sequence-v1)).
+([§3.3 *Stateful and zonal workloads*](specification/03-design.md#33-surge-sequence-v1)).
 The controller cannot and does not migrate zonal storage across AZs.
 
 The consequence is a **hard constraint**: a same-AZ capacity shortage **cannot
 fall back to another zone**. If the candidate's AZ has no schedulable capacity
 for a same-zone replacement, the surge cannot complete. The placeholder Pod
 never goes `Running`, `readyTimeout` fires, and the rotation rolls back to the
-`expireAfter` baseline ([§3.3 *Rollback*](specification.md#33-surge-sequence-v1)).
+`expireAfter` baseline ([§3.3 *Rollback*](specification/03-design.md#33-surge-sequence-v1)).
 Repeated same-AZ shortages surface as an escalating `noderotation_retry_count`
-(risk [R3](specification.md#71-risks)).
+(risk [R3](specification/07-risks.md#71-risks)).
 
 **Guidance.** For each NodePool fronting zonal-PV workloads, **keep one node's
 worth of surge headroom per in-use AZ**:
@@ -83,7 +83,7 @@ that alert fires for a zonal-PV NodePool, suspect a per-AZ capacity gap first.
 `terminationGracePeriod` (`tGP`) default is `24h`).
 
 **Why it matters.** The controller's throughput model
-([§3.2 layer 2](specification.md#32-candidate-selection)) must budget the full
+([§3.2 layer 2](specification/03-design.md#32-candidate-selection)) must budget the full
 `tGP` as the potential drain time for *each* rotation, because that is the bound
 Karpenter can hold a drain to. The single-node rotation bound is
 `t_rot = readyTimeout + tGP + buffer`, and a window of duration `D` can rotate
@@ -96,14 +96,14 @@ The model is correct: it cannot assume the drain will be fast.
 
 **Guidance.** Lower the NodePool `spec.template.spec.terminationGracePeriod` to a
 **realistic per-node drain bound** — the worked example in
-[§3.2](specification.md#32-candidate-selection) uses `1h`. With `tGP = 1h`,
+[§3.2](specification/03-design.md#32-candidate-selection) uses `1h`. With `tGP = 1h`,
 `t_rot ≈ 1.5h` and the same 4-hour window gives `C = floor(4h / (1.5h + 10m)) = 2`
 rotations per occurrence.
 
 Lowering `tGP` has two further effects, both beneficial here:
 
 - **It relaxes the Auto Mode 21-day hard cap** (`E + tGP ≤ 21d`,
-  [§1.1](specification.md#11-background)). `tGP = 1h` admits `expireAfter` up to
+  [§1.1](specification/01-overview.md#11-background)). `tGP = 1h` admits `expireAfter` up to
   ~`20d`, which is exactly the headroom needed to satisfy the lead-time
   derivation for sparser (e.g. weekly) windows.
 - **It tightens the stuck-drain bound.** `noderotation_drain_stuck` fires at
@@ -118,13 +118,13 @@ model passes. Do **not** copy the `1h` from the example blindly.
 > If `tGP` is unset (self-managed Karpenter allows nil), the drain is unbounded
 > by Karpenter; the controller substitutes a fixed fallback bound (e.g. `1h`)
 > for both the throughput model and the stuck-drain alert
-> ([§3.2 layer-1 `TGPUnset` warning](specification.md#32-candidate-selection)).
+> ([§3.2 layer-1 `TGPUnset` warning](specification/03-design.md#32-candidate-selection)).
 
 ---
 
 ## 3. Interpreting the `noderotation_*` metrics
 
-Exposed on `/metrics` ([§4.2](specification.md#42-observability)). Names and
+Exposed on `/metrics` ([§4.2](specification/04-operations.md#42-observability)). Names and
 labels below are the **exact** strings emitted by the controller. Per-NodePool
 series are **cleared when the NodePool is deleted** — and likewise when a pool
 loses its governing `RotationPolicy` (no policy matches it any longer) — so a pool
@@ -132,23 +132,23 @@ that stops reconciling does not latch its last value forever.
 
 | Metric | Type | Labels | Read it as |
 |--------|------|--------|------------|
-| `noderotation_candidates` | Gauge | `nodepool` | Eligible NodeClaims awaiting rotation. **Should trend to 0** inside/after each window. Stuck > 0 across two windows → controller is falling behind ([R2](specification.md#71-risks)). |
+| `noderotation_candidates` | Gauge | `nodepool` | Eligible NodeClaims awaiting rotation. **Should trend to 0** inside/after each window. Stuck > 0 across two windows → controller is falling behind ([R2](specification/07-risks.md#71-risks)). |
 | `noderotation_in_progress` | Gauge | `nodepool` | Active rotations (0 or 1 in v1 — serial per pool). |
-| `noderotation_completed_total` | Counter | `nodepool`, `outcome` | Cumulative completions. `outcome ∈ {success, failure, expired}`. `expired` = the old node was **force-expired before** a graceful rotation finished (the lead-time race was lost — [§3.5](specification.md#35-backstop-behavior)); it is never counted as `success`. |
+| `noderotation_completed_total` | Counter | `nodepool`, `outcome` | Cumulative completions. `outcome ∈ {success, failure, expired}`. `expired` = the old node was **force-expired before** a graceful rotation finished (the lead-time race was lost — [§3.5](specification/03-design.md#35-backstop-behavior)); it is never counted as `success`. |
 | `noderotation_duration_seconds` | Histogram | `nodepool`, `phase` | Per-phase latency. `phase ∈ {surge_wait, drain}`. Rising `surge_wait` ≈ slow/failing provisioning; rising `drain` ≈ slow eviction. |
-| `noderotation_window_active` | Gauge | `nodepool` | `0/1` window membership for the pool's **governing-policy** maintenance window. Per-NodePool, since each pool resolves its own `RotationPolicy` window ([§5.4](specification.md#54-configuration-schema)). |
-| `noderotation_policy_conflict` | Gauge | `nodepool` | `0/1`. `1` = the pool is **blocked from rotating** by a `RotationPolicy` conflict — an equal-specificity selector tie or a runtime-invalid governing policy ([§5.4](specification.md#54-configuration-schema)). Resolve the overlap (or fix the policy); the pool also emits a `PolicyConflict` Warning event. |
+| `noderotation_window_active` | Gauge | `nodepool` | `0/1` window membership for the pool's **governing-policy** maintenance window. Per-NodePool, since each pool resolves its own `RotationPolicy` window ([§5.4](specification/05-implementation.md#54-configuration-schema)). |
+| `noderotation_policy_conflict` | Gauge | `nodepool` | `0/1`. `1` = the pool is **blocked from rotating** by a `RotationPolicy` conflict — an equal-specificity selector tie or a runtime-invalid governing policy ([§5.4](specification/05-implementation.md#54-configuration-schema)). Resolve the overlap (or fix the policy); the pool also emits a `PolicyConflict` Warning event. |
 | `noderotation_freeze_until_timestamp` | Gauge | `nodepool` | Unix timestamp of the active freeze (`0` = no freeze). Non-zero → rotation is **deliberately suppressed** (see [§4](#4-the-freeze-workflow)). |
-| `noderotation_age_threshold_seconds` | Gauge | `nodepool` | The derived `ageThreshold` `A` ([§3.2](specification.md#32-candidate-selection)). Varies per pool. |
+| `noderotation_age_threshold_seconds` | Gauge | `nodepool` | The derived `ageThreshold` `A` ([§3.2](specification/03-design.md#32-candidate-selection)). Varies per pool. |
 | `noderotation_rotation_chances` | Gauge | `nodepool` | Guaranteed rotation chances `G` for the derived threshold. With auto-derivation `G = K`; an override may lower it (and is validated). |
 | `noderotation_window_period_seconds` | Gauge | `nodepool` | Worst-case window period `P`. Identical across pools in v1 (window is cluster-wide); the `nodepool` label is forward-looking. |
-| `noderotation_short_lead_nodes` | Gauge | `nodepool` | NodeClaims whose **own** stamped `expireAfter` can no longer guarantee `K` chances ([§3.2 layer 3](specification.md#32-candidate-selection)). Rotated best-effort; may reach Forceful Expiration. |
+| `noderotation_short_lead_nodes` | Gauge | `nodepool` | NodeClaims whose **own** stamped `expireAfter` can no longer guarantee `K` chances ([§3.2 layer 3](specification/03-design.md#32-candidate-selection)). Rotated best-effort; may reach Forceful Expiration. |
 | `noderotation_drain_stuck` | Gauge | `nodepool` | `0/1`: the in-flight drain exceeded `tGP + buffer`. `1` → operator action needed ([§5](#5-handling-a-stuck-drain)). |
-| `noderotation_retry_count` | Gauge | `nodepool` | Highest `noderotation.io/retry-count` across the pool's NodeClaims (`0` when none). `≥ 3` → a **systematic** failure (sustained preemption or same-AZ shortage, [R3](specification.md#71-risks)). |
+| `noderotation_retry_count` | Gauge | `nodepool` | Highest `noderotation.io/retry-count` across the pool's NodeClaims (`0` when none). `≥ 3` → a **systematic** failure (sustained preemption or same-AZ shortage, [R3](specification/07-risks.md#71-risks)). |
 
 **Warning Events.** Non-fatal findings are *also* surfaced as Kubernetes
 `Warning` Events on the NodePool / NodeClaim
-([§4.2](specification.md#42-observability)), so `kubectl describe nodepool <name>`
+([§4.2](specification/04-operations.md#42-observability)), so `kubectl describe nodepool <name>`
 shows them without a metrics stack. Reasons include `KBelowTwo`,
 `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `ThroughputZero`,
 `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `OverrideGBelowK`, and `ShortLead`.
@@ -188,7 +188,7 @@ business-critical period — without uninstalling the controller or losing the
 `expireAfter` backstop.
 
 **Mechanism.** Set the freeze annotation on the **NodePool**, with an RFC3339
-timestamp value ([§3.1](specification.md#31-maintenance-window)):
+timestamp value ([§3.1](specification/03-design.md#31-maintenance-window)):
 
 ```sh
 kubectl annotate nodepool <name> \
@@ -228,7 +228,7 @@ stateDiagram-v2
     Draining --> Completed: drain finishes, freeze cannot abort it
 ```
 
-**Manage it via GitOps, not ad hoc** (risk [R5](specification.md#71-risks)). A
+**Manage it via GitOps, not ad hoc** (risk [R5](specification/07-risks.md#71-risks)). A
 forgotten ad-hoc freeze silently disables rotation for the pool until its
 timestamp passes; the backstop still bounds node age at `expireAfter`, but the
 graceful path is off. Declare the freeze in your GitOps repo so it is visible in
@@ -249,7 +249,7 @@ kubectl annotate nodepool <name> noderotation.io/freeze- # remove the annotation
 **Meaning.** The in-flight rotation entered `draining` (the controller already
 deleted the old NodeClaim, so Karpenter is draining the node via the voluntary,
 PDB-respecting path), and the drain has now exceeded `tGP + buffer`
-([§5.2](specification.md#52-reconcile-loop)). The gauge is recomputed from live
+([§5.2](specification/05-implementation.md#52-reconcile-loop)). The gauge is recomputed from live
 state every reconcile, so it **clears on its own** the moment the drain finishes.
 
 **Important — the serial gate is held on purpose.** A `draining` rotation
@@ -319,7 +319,7 @@ Working through it concretely:
 
 Do **not** attempt to "unstick" the rotation by deleting the controller's
 annotations or the placeholder — the rotation resumes from the NodePool anchor
-([§5.2](specification.md#52-reconcile-loop)) and the handlers are idempotent.
+([§5.2](specification/05-implementation.md#52-reconcile-loop)) and the handlers are idempotent.
 Fix the underlying PDB/finalizer and let the drain complete.
 
 ---
@@ -327,7 +327,7 @@ Fix the underlying PDB/finalizer and let the drain complete.
 ## 6. Alerting (PrometheusRule)
 
 The Helm chart ships an **optional** `PrometheusRule` with the six
-[§4.2](specification.md#42-observability) alerts. It is **off by default** (so
+[§4.2](specification/04-operations.md#42-observability) alerts. It is **off by default** (so
 existing installs and clusters without the Prometheus Operator are unaffected).
 Enable it with:
 
@@ -339,11 +339,11 @@ helm upgrade --install rot charts/node-rotation-controller \
 | Alert | Expression | Means |
 |-------|------------|-------|
 | `NodeRotationCompletedFailureOrExpired` | `increase(noderotation_completed_total{outcome=~"failure\|expired"}[1h]) > 0` | A rotation failed or a node was force-expired in the last hour. |
-| `NodeRotationCandidatesNotDraining` | `min_over_time(noderotation_candidates[<2·P>]) > 0 and noderotation_candidates offset <2·P> > 0` | Candidates have not cleared across two consecutive windows ([R2](specification.md#71-risks)). The `offset` guard keeps a freshly created non-zero series from alerting before two windows of history exist. |
+| `NodeRotationCandidatesNotDraining` | `min_over_time(noderotation_candidates[<2·P>]) > 0 and noderotation_candidates offset <2·P> > 0` | Candidates have not cleared across two consecutive windows ([R2](specification/07-risks.md#71-risks)). The `offset` guard keeps a freshly created non-zero series from alerting before two windows of history exist. |
 | `NodeRotationStalledInWindow` | window active **and** candidates `> 0` **and** zero completions | Rotation is wedged inside the maintenance window. |
 | `NodeRotationDrainStuck` | `noderotation_drain_stuck == 1` | Drain blocked past `tGP + buffer` — see [§5](#5-handling-a-stuck-drain). |
 | `NodeRotationShortLeadNodes` | `noderotation_short_lead_nodes > 0` | NodeClaims whose stamped `expireAfter` can no longer guarantee `K` chances. |
-| `NodeRotationRetryCountHigh` | `noderotation_retry_count >= 3` | The same rotation keeps failing — systematic cause ([R3](specification.md#71-risks)). |
+| `NodeRotationRetryCountHigh` | `noderotation_retry_count >= 3` | The same rotation keeps failing — systematic cause ([R3](specification/07-risks.md#71-risks)). |
 
 **Tune the schedule-dependent ranges.** Two alerts depend on your window
 period `P` and window duration `D`; their ranges are **chart values**, not
@@ -374,15 +374,15 @@ the section that fixes it. The signal strings are the exact ones from
 | Symptom (what you see) | Confirm with | Likely cause | Go to |
 |------------------------|--------------|--------------|-------|
 | Surge node never appears; the placeholder Pod stays `Pending` and rotations end in `failure` | `noderotation_duration_seconds{phase="surge_wait"}` climbing; `noderotation_completed_total{outcome="failure"}` | No schedulable **same-AZ** capacity for the replacement (zonal-PV pin) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) |
-| `noderotation_candidates` never trends to `0` across two windows | `NodeRotationCandidatesNotDraining` ([R2](specification.md#71-risks)) | Throughput too low for the window, **or** rotation wedged for one of the causes below | [§2](#2-lowering-auto-mode-terminationgraceperiod), then scan the rows below |
+| `noderotation_candidates` never trends to `0` across two windows | `NodeRotationCandidatesNotDraining` ([R2](specification/07-risks.md#71-risks)) | Throughput too low for the window, **or** rotation wedged for one of the causes below | [§2](#2-lowering-auto-mode-terminationgraceperiod), then scan the rows below |
 | `ThroughputZero` warning on **every** window (`C = 0`) | `ThroughputZero` Warning Event | `tGP` too large for the window length, so the throughput model rounds to zero | [§2](#2-lowering-auto-mode-terminationgraceperiod) |
 | A drain hangs past `tGP + buffer` | `noderotation_drain_stuck == 1`; `NodeRotationDrainStuck` | Unsatisfiable PDB or a stuck Pod finalizer | [§5](#5-handling-a-stuck-drain) |
 | `noderotation_in_progress` stuck at `1` with no new completions | `NodeRotationStalledInWindow` | Either the surge is not coming up (→ §1) or the drain is stuck (→ §5) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) / [§5](#5-handling-a-stuck-drain) |
-| A NodePool never rotates; candidates frozen and no rotation starts | `noderotation_policy_conflict == 1`; `PolicyConflict` Warning Event | An equal-specificity `RotationPolicy` selector tie, or a runtime-invalid governing policy | [§3](#3-interpreting-the-noderotation_-metrics) metric row, [spec §5.4](specification.md#54-configuration-schema) |
+| A NodePool never rotates; candidates frozen and no rotation starts | `noderotation_policy_conflict == 1`; `PolicyConflict` Warning Event | An equal-specificity `RotationPolicy` selector tie, or a runtime-invalid governing policy | [§3](#3-interpreting-the-noderotation_-metrics) metric row, [spec §5.4](specification/05-implementation.md#54-configuration-schema) |
 | A NodePool stopped rotating, seemingly on purpose | `noderotation_freeze_until_timestamp > 0` | An active (possibly forgotten ad-hoc) freeze | [§4](#4-the-freeze-workflow) |
-| Nodes reach `expireAfter` before a graceful rotation finishes | `noderotation_completed_total{outcome="expired"}` | The lead-time race was lost — threshold/throughput too tight for the window cadence | [§2](#2-lowering-auto-mode-terminationgraceperiod), [spec §3.5](specification.md#35-backstop-behavior) |
-| `noderotation_short_lead_nodes > 0` | `NodeRotationShortLeadNodes`; `ShortLead` Warning Event | A node's own stamped `expireAfter` can no longer guarantee `K` chances | [§2](#2-lowering-auto-mode-terminationgraceperiod), [spec §3.2 layer 3](specification.md#32-candidate-selection) |
-| `noderotation_retry_count >= 3` for a pool | `NodeRotationRetryCountHigh` ([R3](specification.md#71-risks)) | A **systematic** failure: sustained preemption or a same-AZ capacity shortage | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) |
+| Nodes reach `expireAfter` before a graceful rotation finishes | `noderotation_completed_total{outcome="expired"}` | The lead-time race was lost — threshold/throughput too tight for the window cadence | [§2](#2-lowering-auto-mode-terminationgraceperiod), [spec §3.5](specification/03-design.md#35-backstop-behavior) |
+| `noderotation_short_lead_nodes > 0` | `NodeRotationShortLeadNodes`; `ShortLead` Warning Event | A node's own stamped `expireAfter` can no longer guarantee `K` chances | [§2](#2-lowering-auto-mode-terminationgraceperiod), [spec §3.2 layer 3](specification/03-design.md#32-candidate-selection) |
+| `noderotation_retry_count >= 3` for a pool | `NodeRotationRetryCountHigh` ([R3](specification/07-risks.md#71-risks)) | A **systematic** failure: sustained preemption or a same-AZ capacity shortage | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) |
 | "Reconcile looks stalled" — no recent warning **log** lines | *Not a real symptom.* Check `controller_runtime_reconcile_total{controller="rotation"}` is still rising | Warning logs/events are deduped on transition; a healthy steady-state loop emits **zero** log lines | [§3](#3-interpreting-the-noderotation_-metrics) (judging liveness) |
 
 ---
@@ -401,12 +401,12 @@ this section is the **operational** view: is it safe while a rotation is live.)
 state lives on Kubernetes objects — the NodePool's `active-rotation` anchor plus
 the old NodeClaim's `state` annotation, with the placeholder Pod and node markers
 as transient runtime objects the idempotent handlers re-assert if lost
-([§5.2](specification.md#52-reconcile-loop), [§5.3](specification.md#53-state-model)).
+([§5.2](specification/05-implementation.md#52-reconcile-loop), [§5.3](specification/05-implementation.md#53-state-model)).
 There is **no external datastore** and nothing in controller memory that a
 restart loses. With `replicaCount=2` and leader election, a rolling upgrade hands
 leadership to the new pod, which **resumes any in-flight rotation from the
 anchor** — leader-change resume is a validated path
-([§7.2](specification.md#72-validated-assumptions)). So running `helm upgrade`
+([§7.2](specification/07-risks.md#72-validated-assumptions)). So running `helm upgrade`
 while `noderotation_in_progress == 1` does not corrupt, duplicate, or orphan a
 rotation.
 
@@ -435,7 +435,7 @@ rolling back **across a CRD schema change**: a `RotationPolicy` authored against
 the newer schema may fail the older controller's reconcile-time validation, which
 the controller treats as a **conflict** — it sets `noderotation_policy_conflict == 1`,
 emits a `PolicyConflict` Warning Event, and **refuses to rotate that pool rather
-than guess** ([spec §5.4](specification.md#54-configuration-schema)). Rotation
+than guess** ([spec §5.4](specification/05-implementation.md#54-configuration-schema)). Rotation
 pauses for that pool, but the **`expireAfter` backstop still bounds node age
 throughout** — nothing runs unbounded. To roll back cleanly, also revert the
 affected `RotationPolicy` objects to the schema the older controller accepts.
@@ -449,11 +449,11 @@ affected `RotationPolicy` objects to the schema the older controller accepts.
 **Why it matters.** The controller needs **cluster-wide Pod visibility**: the
 surge placeholder is sized to the sum of the reschedulable Pod requests on the
 candidate node, and those Pods may live in any namespace
-([spec §3.3](specification.md#33-surge-sequence-v1)). The controller-runtime
+([spec §3.3](specification/03-design.md#33-surge-sequence-v1)). The controller-runtime
 informer therefore caches **every Pod in the cluster**, so the controller's
 memory footprint scales with total Pod count — it is **not** reduced by the
 reconcile-path scan optimizations, because the cost is the cache, not the scan
-([`docs/perf/pod-cache-scalability.md`](perf/pod-cache-scalability.md), issue #80).
+([`docs/perf/pod-cache-scalability.md`](reference/perf/pod-cache-scalability.md), issue #80).
 
 **Guidance.** Size the controller Deployment's memory `requests`/`limits` from
 total Pod count, treating these measured footprints as a **conservative lower
