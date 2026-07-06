@@ -1,0 +1,19 @@
+{
+  "name": "node-rotation-controller-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predocs:dev": "node docs/.vitepress/scripts/copy-readme.mjs",
+    "docs:dev": "vitepress dev docs",
+    "predocs:build": "node docs/.vitepress/scripts/copy-readme.mjs",
+    "docs:build": "vitepress build docs",
+    "predocs:preview": "node docs/.vitepress/scripts/copy-readme.mjs",
+    "docs:preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.3",
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "mermaid": "^11.4.1",
+    "vue": "^3.5.13"
+  }
+}
