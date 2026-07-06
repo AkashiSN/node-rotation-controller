@@ -9,7 +9,7 @@ EKS Auto Mode をはじめ、Node Expiration が Forceful で Disruption Budgets
 
 ## Status
 
-**v0.4.0 — v1 surge MVP、リリース済み（pre-1.0）。** v1 の make-before-break 置換ステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。core surge path は EKS Auto Mode 上でフルローテーション回帰スイートを通して検証済みであり、v1.0 に向けて残る項目は multi-hour tight-race soak である（[ロードマップ](docs/ja/specification/#62-ロードマップ)を参照）。なお依然として **pre-1.0** であり、設定スキーマは minor リリース間で変わりうる。設計の canonical source of truth は [docs/specification/](docs/specification/) であり、[docs/ja/specification/](docs/ja/specification/) は同期された日本語訳である。Karpenter の契約は[互換性](#互換性)を参照。
+**v0.4.0 — v1 surge MVP、リリース済み（pre-1.0）。** v1 の make-before-break 置換ステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。core surge path は EKS Auto Mode 上でフルローテーション回帰スイートを通して検証済みであり、v1.0 に向けて残る項目は multi-hour tight-race soak である（[ロードマップ](docs/ja/specification/06-release.md#62-ロードマップ)を参照）。なお依然として **pre-1.0** であり、設定スキーマは minor リリース間で変わりうる。設計の canonical source of truth は [docs/specification/](docs/specification/) であり、[docs/ja/specification/](docs/ja/specification/) は同期された日本語訳である。Karpenter の契約は[互換性](#互換性)を参照。
 
 English: [README.md](README.md) / [docs/specification/](docs/specification/)
 
@@ -50,7 +50,7 @@ Expiration は意図的に Forceful とされている（参照: 公式 [forcefu
 - **内部・クラウド API 不使用:** 本コントローラは Kubernetes API オブジェクト（`NodeClaim`/`NodePool` CRD、core の `Node`/`Pod`）のみを介して動作する。Karpenter コントローラの内部やクラウドプロバイダ API は一切呼ばない。公開 `karpenter.sh/v1` サーフェスが互換である限り、未知の Auto Mode 内部は問題にならない。
 - 起動時プリフライトが、`karpenter.sh/v1`（`nodeclaims`/`nodepools`）が提供されない・読み取れない場合に fail fast する。
 
-必須の CRD フィールド・ラベル・アノテーションの一覧は[互換性ポリシー](docs/ja/specification/#21-スコープと互換性)を参照。
+必須の CRD フィールド・ラベル・アノテーションの一覧は[互換性ポリシー](docs/ja/specification/02-scope.md#21-スコープと互換性)を参照。
 
 ## プロジェクト構成
 
