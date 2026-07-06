@@ -13,21 +13,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Classify the PR's changed paths so each required job can skip its heavy
+  # steps when nothing it cares about changed — WITHOUT skipping the job itself
+  # (a skipped required job hangs `pending` and blocks merge). Unlike e2e.yaml,
+  # which folds detection into its single job to avoid a cross-job dependency,
+  # this workflow's four jobs `needs:` a shared `changes` job (DRY: one
+  # detection). To keep that fan-out safe, `changes` is itself a required status
+  # check: it runs unconditionally on every PR, so it never hangs `pending`, and
+  # if its self-test or classifier fails it surfaces as a clear red gate instead
+  # of four silently-skipped required checks. On push to main every flag is true.
+  # The classifier is unit-tested and run here on every CI invocation (cheap) so
+  # it can never silently rot.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.detect.outputs.go }}
+      chart: ${{ steps.detect.outputs.chart }}
+      docker: ${{ steps.detect.outputs.docker }}
+      infra: ${{ steps.detect.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so the diff can reach the PR base commit.
+          fetch-depth: 0
+      - name: Self-test the change classifier
+        run: bash .github/scripts/detect-ci-changes.test.sh
+      - name: Detect changed paths
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "event=${{ github.event_name }} → running all jobs"
+            printf 'go=true\nchart=true\ndocker=true\ninfra=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only "$BASE_SHA" HEAD \
+            | tee /dev/stderr \
+            | bash .github/scripts/detect-ci-changes.sh >> "$GITHUB_OUTPUT"
+          echo "--- classification ---"; cat "$GITHUB_OUTPUT"
+
   # The Go toolchain and every CLI come from aqua (aqua.yaml) — there is no
   # actions/setup-go. aqua-installer installs aqua and links the commands;
   # `make` lazily installs each pinned version (incl. go) on first use. The
   # cache persists the Go module/build cache and aqua's tool store across runs.
   lint:
     runs-on: ubuntu-latest
+    needs: changes
     steps:
       - uses: actions/checkout@v6
       - uses: aquaproj/aqua-installer@v4.0.4
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         with:
           aqua_version: v2.60.1
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
       - name: Cache Go + aqua tools
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -37,10 +81,13 @@ jobs:
           key: ci-${{ runner.os }}-${{ hashFiles('go.sum', 'aqua.yaml') }}
           restore-keys: ci-${{ runner.os }}-
       - name: golangci-lint
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         run: make lint
       - name: gopls check (severity>=hint)
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         run: make gopls-check
       - name: verify generated artifacts are up to date
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         run: |
           make generate manifests
           git diff --exit-code -- api config || { \
@@ -50,15 +97,18 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    needs: changes
     steps:
       - uses: actions/checkout@v6
       - uses: aquaproj/aqua-installer@v4.0.4
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         with:
           aqua_version: v2.60.1
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
       - name: Cache Go + aqua tools
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -67,19 +117,23 @@ jobs:
             ~/.local/share/aquaproj-aqua
           key: ci-${{ runner.os }}-${{ hashFiles('go.sum', 'aqua.yaml') }}
           restore-keys: ci-${{ runner.os }}-
-      - run: make test
+      - if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
+        run: make test
 
   build:
     runs-on: ubuntu-latest
+    needs: changes
     steps:
       - uses: actions/checkout@v6
       - uses: aquaproj/aqua-installer@v4.0.4
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.infra == 'true'
         with:
           aqua_version: v2.60.1
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
       - name: Cache Go + aqua tools
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.infra == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -88,9 +142,12 @@ jobs:
             ~/.local/share/aquaproj-aqua
           key: ci-${{ runner.os }}-${{ hashFiles('go.sum', 'aqua.yaml') }}
           restore-keys: ci-${{ runner.os }}-
-      - run: make build
+      - if: needs.changes.outputs.go == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.infra == 'true'
+        run: make build
       - uses: docker/setup-buildx-action@v4
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.infra == 'true'
       - name: Build container image (no push)
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.infra == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -98,21 +155,26 @@ jobs:
 
   chart:
     runs-on: ubuntu-latest
+    needs: changes
     steps:
       - uses: actions/checkout@v6
       # helm is pinned in aqua.yaml (v4 line) and resolved from $PATH; the
       # helm-unittest plugin is installed into it below.
       - uses: aquaproj/aqua-installer@v4.0.4
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         with:
           aqua_version: v2.60.1
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
       - name: helm lint
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         run: helm lint charts/node-rotation-controller
       - name: helm template (defaults)
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         run: helm template rot charts/node-rotation-controller --namespace node-rotation-system
       - name: helm template (ServiceMonitor enabled)
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         run: helm template rot charts/node-rotation-controller --namespace node-rotation-system --set metrics.serviceMonitor.enabled=true
 
       # Rendered-manifest content assertions (issue #75): prove the RBAC verb set
@@ -121,14 +183,17 @@ jobs:
       # `--verify=false` skips Helm 4's plugin provenance check (helm is pinned
       # to the v4 line in aqua.yaml; the helm-unittest release ships no .prov).
       - name: Install helm-unittest plugin
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         run: helm plugin install --verify=false https://github.com/helm-unittest/helm-unittest --version v1.1.1
       - name: helm unittest (RBAC + PriorityClass assertions)
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         run: helm unittest charts/node-rotation-controller
 
       # values.schema.json negative cases (issue #75, §5.4): each invalid value
       # MUST be rejected by `helm template` (the schema is validated at render
       # time). Expected-to-fail renders — the step fails if any bad value renders.
       - name: values.schema.json rejects invalid values
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         run: |
           set -euo pipefail
           chart=charts/node-rotation-controller
