@@ -149,4 +149,4 @@ independently from this scan optimization.
 > in `candidateRequests`, `createPlaceholder`, and `reapSurgeClaim` with
 > node-scoped `MatchingFields` lists. Must keep `internal/surge/requests` and
 > controller tests green and preserve DaemonSet / mirror / completed / node-pinned
-> exclusion semantics. Reference the benchmark in `docs/perf/pod-cache-scalability.md`.
+> exclusion semantics. Reference the benchmark in `docs/reference/perf/pod-cache-scalability.md`.
