@@ -40,18 +40,18 @@ export default withMermaid(defineConfig({
           { text: 'Development', link: '/development/ci-cd' },
         ],
         sidebar: [
-          { text: 'Overview', items: [
+          { text: 'Overview', collapsed: false, items: [
             { text: 'Getting Started', link: '/getting-started' },
             { text: 'Specification', link: '/specification' },
             { text: 'Runbook', link: '/runbook' },
           ]},
-          { text: 'Validation', items: [
+          { text: 'Validation', collapsed: false, items: [
             { text: 'Forceful fallback (Scenario O)', link: '/validation/forceful-fallback' },
           ]},
-          { text: 'Development', items: [
+          { text: 'Development', collapsed: false, items: [
             { text: 'CI/CD design', link: '/development/ci-cd' },
           ]},
-          { text: 'Reference (English)', items: [
+          { text: 'Reference (English)', collapsed: false, items: [
             { text: 'ADR index', link: '/adr/' },
             { text: 'ADR-0001 forceful fallback', link: '/adr/0001-window-bounded-forceful-fallback' },
             { text: 'Perf: pod cache scalability', link: '/perf/pod-cache-scalability' },
@@ -72,19 +72,19 @@ export default withMermaid(defineConfig({
           { text: '開発者向け', link: '/ja/development/ci-cd' },
         ],
         sidebar: [
-          { text: '概要', items: [
+          { text: '概要', collapsed: false, items: [
             { text: 'はじめに', link: '/ja/getting-started' },
             { text: '仕様書', link: '/ja/specification' },
             { text: 'ランブック', link: '/ja/runbook' },
           ]},
-          { text: '検証', items: [
+          { text: '検証', collapsed: false, items: [
             { text: 'Forceful fallback（シナリオ O）', link: '/ja/validation/forceful-fallback' },
           ]},
-          { text: '開発者向け', items: [
+          { text: '開発者向け', collapsed: false, items: [
             { text: 'CI/CD 設計', link: '/ja/development/ci-cd' },
           ]},
           // ADR/perf are EN-only; link out to the English pages.
-          { text: 'リファレンス（英語）', items: [
+          { text: 'リファレンス（英語）', collapsed: false, items: [
             { text: 'ADR インデックス', link: '/adr/' },
             { text: 'Perf: pod cache scalability', link: '/perf/pod-cache-scalability' },
           ]},
