@@ -8,7 +8,19 @@ export default withMermaid(defineConfig({
   base: '/node-rotation-controller/',
   cleanUrls: true,
   srcExclude: ['superpowers/**'],
-  ignoreDeadLinks: false,
+  // The canonical docs (specification.md, runbook.md, adr/README.md and their
+  // ja/ translations) are the source of truth and are never forked/rewritten
+  // for the site — they legitimately link to repo files that live outside the
+  // docs root (CLAUDE.md, go.mod, the Helm chart's values.yaml/README.md) and
+  // therefore cannot resolve as site pages. Ignore ONLY those specific
+  // outside-root targets; every other link (intra-docs pages, the generated
+  // Getting Started pages, the spec's cross-locale anchors, figure/nav links)
+  // stays checked so real dead links still fail the build.
+  ignoreDeadLinks: [
+    /CLAUDE(\.md)?$/,
+    /go\.mod$/,
+    /\/charts\//,
+  ],
   themeConfig: {
     search: { provider: 'local' },
     socialLinks: [
