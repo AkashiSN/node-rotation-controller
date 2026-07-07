@@ -17,7 +17,7 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 
 | # | Goal |
 |---|------|
-| G1 | **Prevent forceful Expiration from firing in practice** by replacing `NodeClaim` resources that approach an age threshold (derived per NodePool from the maintenance schedule and a target number of rotation chances — see §3.2) during a defined maintenance window, using the voluntary disruption path |
+| G1 | **Prevent Forceful Expiration from firing in practice** by replacing `NodeClaim` resources that approach an age threshold (derived per NodePool from the maintenance schedule and a target number of rotation chances — see §3.2) during a defined maintenance window, using the voluntary disruption path |
 | G2 | **Eliminate the pending-pod window** by adding a NodePool-owned replacement node first and waiting for it to be `Ready` before deleting the old one (node-level surge / make-before-break; Pod-level ordering is delegated to PDB — see §3.3) |
 | G3 | **Confine rotation to business-safe time slots** via a configurable maintenance window (weekday / time-of-day / timezone) |
 | G4 | **Compose with existing protections** — PDB, `topologySpreadConstraints`, preStop hooks, Pod Readiness Gates, ALB slow start — without replacing them |
@@ -38,9 +38,15 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 |------|------------|
 | **NodeClaim** | Karpenter v1 CRD; a 1:1 representation of an underlying instance (e.g., EC2) |
 | **surge** | Creating a replacement node and waiting until it is `Ready` before draining the old one (make-before-break) |
+| **placeholder (Pod)** | A low-priority "pause" Pod the controller creates to induce NodePool-owned replacement capacity — Karpenter provisions a new node (or the scheduler bin-packs it onto existing spare) to host it, never a standalone `NodeClaim` (§3.3) |
 | **maintenance window** | The **union** of one or more configured weekday/time-of-day ranges during which the controller may *start* a rotation. In-flight rotations are allowed to complete past the window boundary |
+| **freeze** | A per-NodePool hold on rotation, set via the `noderotation.io/freeze` annotation, that pauses even an in-flight `pending` rotation until it expires (§3.1) — distinct from the window, which gates only *starts* |
 | **age threshold** | The `creationTimestamp` age beyond which a `NodeClaim` becomes a rotation candidate. **Derived** per NodePool from the schedule and the target rotation chances (`minRotationChances`), not set directly (§3.2). The actual per-node trigger anchors on each NodeClaim's own `spec.expireAfter` deadline; `ageThreshold` is its age-equivalent representative (§3.2) |
+| **candidate** | A `NodeClaim` that meets every selection condition (§3.2) and is therefore eligible to be rotated |
+| **governing policy** | The `RotationPolicy` (§5.4) that wins selector specificity for a given NodePool and thus supplies its schedule, `minRotationChances`, and `surge` settings |
 | **backstop** | Karpenter's native `expireAfter` (Forceful Expiration), which still fires if the controller is unavailable. Intentionally retained as a safety net |
+| **voluntary / forceful path** | Karpenter's two disruption classes (§1.1). The **voluntary path** (Consolidation, Drift, and the controller's own `NodeClaim` delete) honors PDBs; the **forceful path** (`expireAfter`, Spot Interruption) respects PDBs only up to `terminationGracePeriod`. This controller always routes through the voluntary path |
+| **forceful fallback** | An opt-in, window-bounded mode (`surge.forcefulFallback`, default off; ADR-0001) that deletes an at-risk `NodeClaim` in-window **without** the surge — still via the voluntary path, so PDBs apply (§3.3) |
 
 **Symbols** — used throughout §3–§5. See §3.2 for the full derivation and the authoritative per-node vs NodePool-template distinction (the **Source** column there).
 
@@ -54,6 +60,12 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 | `leadTime` | how early a node is selected before its deadline = `K·P + t_rot` |
 | `A` | `ageThreshold` — the age at which a node becomes a candidate; derived `A = E − (K·P + t_rot)` |
 | `G` | rotation chances the schedule actually guarantees; `G = K` under auto-derivation, recomputed for an explicit `ageThreshold` override |
+| `D` | maintenance-window duration — the length of a single window occurrence (§3.2 layer 2) |
+| `m` | `surge.maxUnavailable` — concurrent rotations per NodePool; fixed at `1` in v1 (§3.2 layer 2) |
+| `C` | per-occurrence window capacity — nodes one window occurrence can rotate, `C = m · floor(D / (t_rot + cooldownAfter))` (§3.2 layer 2) |
+| `N` | NodePool node count — used only by the layer-2 throughput check, not by the per-node derivation (§3.2) |
+
+> `buffer`, `cooldownAfter`, and `readyTimeout` are configuration fields (§5.4), not derived symbols; they feed the `t_rot` and `C` formulas above.
 
 ## 1.5 Position in the Karpenter Ecosystem
 

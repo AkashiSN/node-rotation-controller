@@ -21,4 +21,4 @@
 | v0.2（skeleton）| プロジェクト構成、controller-runtime bootstrap、leader election、CI |
 | v0.3（MVP, v1 surge）| Reconcile + surge + drain + metrics + Helm chart |
 | v0.4 | pre-pull（v2 機能）|
-| v1.0 | `RotationPolicy` CRD（`v1`）安定、production runbook の文書化、実 EKS Auto Mode クラスタでのソークテスト済み |
+| v1.0 | `RotationPolicy` CRD（`v1`）安定、production runbook の文書化、実 EKS Auto Mode クラスタでのsoak テスト済み |
