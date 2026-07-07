@@ -3,43 +3,43 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.4.0_released_(pre--1.0)-blue.svg)](docs/ja/specification/)
 
-Karpenter 配下の Node を、設定可能なメンテナンスウィンドウ内で **make-before-break（surge）** 型に先回り置換し、Karpenter の Forceful な `expireAfter` 発火を実質起こさないようにする Kubernetes コントローラ。
+Karpenter 配下のノードを、設定可能なメンテナンスウィンドウ内で **make-before-break（surge）** 型に先回り置換し、Karpenter の Forceful な `expireAfter` 発火を実質起こさないようにする Kubernetes コントローラ。
 
-EKS Auto Mode をはじめ、Node Expiration が Forceful で Disruption Budgets が効かない Karpenter v1+ 環境向け。
+EKS Auto Mode をはじめ、ノードの Expiration が Forceful で Disruption Budgets が効かない Karpenter v1+ 環境向け。
 
-## Status
+## ステータス
 
-**v0.4.0 — v1 surge MVP、リリース済み（pre-1.0）。** v1 の make-before-break 置換ステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。core surge path は EKS Auto Mode 上でフルローテーション回帰スイートを通して検証済みであり、v1.0 に向けて残る項目は multi-hour tight-race soak である（[ロードマップ](docs/ja/specification/06-release.md#62-ロードマップ)を参照）。なお依然として **pre-1.0** であり、設定スキーマは minor リリース間で変わりうる。設計の canonical source of truth は [docs/specification/](docs/specification/) であり、[docs/ja/specification/](docs/ja/specification/) は同期された日本語訳である。Karpenter の契約は[互換性](#互換性)を参照。
+**v0.4.0 — v1 surge MVP、リリース済み（pre-1.0）。** v1 の make-before-break 置換ステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。コアの surge 経路は EKS Auto Mode 上でフルローテーション回帰スイートを通して検証済みであり、v1.0 に向けて残る項目は数時間規模の tight-race soak である（[ロードマップ](docs/ja/specification/06-release.md#62-ロードマップ)を参照）。なお依然として **pre-1.0** であり、設定スキーマは minor リリース間で変わりうる。設計の一次情報（source of truth）は [docs/specification/](docs/specification/) であり、[docs/ja/specification/](docs/ja/specification/) は同期された日本語訳である。Karpenter の契約は[互換性](#互換性)を参照。
 
 English: [README.md](README.md) / [docs/specification/](docs/specification/)
 
 ## なぜ必要か
 
-Karpenter は Node の disruption を 2 種類に分類している。
+Karpenter はノードの disruption を 2 種類に分類している。
 
-| 分類 | 例 | NodePool Disruption Budgets | 代替 Node の事前起動 |
+| 分類 | 例 | NodePool Disruption Budgets | 代替ノードの事前起動 |
 |------|-----|------------------------------|-----------------------|
 | Graceful | Drift, Consolidation | 適用される | する（make-before-break）|
 | **Forceful** | **Expiration**, Spot Interruption | **適用されない** | **しない** |
 
-Expiration は意図的に Forceful とされている（参照: 公式 [forceful-expiration design](https://github.com/kubernetes-sigs/karpenter/blob/main/designs/forceful-expiration.md)）。AMI パッチやセキュリティ更新を Budgets で無期限延期させないため。同 design は「運用者が独自に graceful rotation を実装する」ことも妥当解として明示している。EKS Auto Mode はさらに **21 日 hard cap** を強制する。
+Expiration が意図的に Forceful とされているのは、AMI パッチやセキュリティ更新が **誤設定された** Budgets によって無期限に延期されるのを防ぐためである（参照: 公式 [forceful-expiration design](https://github.com/kubernetes-sigs/karpenter/blob/main/designs/forceful-expiration.md)）。同 design は「運用者が独自に graceful rotation を実装する」ことも妥当解として明示している。EKS Auto Mode はさらに、解除できない **21 日のノード寿命 hard cap** を強制する。
 
-帰結: Node は **必ず Force drain される瞬間が来る**（PDB 無視可、`terminationGracePeriod` でキャップ）。Karpenter は drain 開始の **後から** 代替を立ち上げるため、ピーク時間と衝突した瞬間に Pod Pending が発生する。
+帰結: ノードは 21 日以内のどこかで **必ず Force drain される** — その drain が PDB を尊重するのは `terminationGracePeriod` までで、無期限ではない — Karpenter が代替を立ち上げるのは drain 開始の **後** であり、これがピーク営業時間帯に当たりうる。
 
 本コントローラはこのギャップを以下で埋める。
 
 1. `expireAfter` 接近の `NodeClaim` を watch
 2. 設定可能な **メンテナンスウィンドウ**（例: 土曜 02:00–06:00）に置換を閉じ込める
 3. 低優先度の **placeholder Pod** で NodePool 所有の代替ノードを先に誘発し（standalone `NodeClaim` は作成しない — 仕様 §3.3）、予約容量の準備完了を待ってから旧 `NodeClaim` を delete（**surge**）
-4. 旧 Node の drain は Karpenter 標準の termination controller に委ねる（**PDB が効く voluntary 経路**）
+4. 旧ノードの drain は Karpenter 標準の termination controller に委ねる（**PDB が効く voluntary 経路**）
 
 ## スコープ外
 
 - Karpenter Consolidation / Drift / Disruption Budgets の置き換え（共存）
 - Spot 中断（[AWS Node Termination Handler](https://github.com/aws/aws-node-termination-handler) を使う）
-- OS パッチ起因の Node 再起動（[kured](https://github.com/kubereboot/kured) を使う）
+- OS パッチ起因のノード再起動（[kured](https://github.com/kubereboot/kured) を使う）
 - Pod 再配置（[descheduler](https://github.com/kubernetes-sigs/descheduler) を使う）
-- アプリケーション側 warm-up（`readinessProbe` / `readinessGate` / `slow_start` の領分）
+- アプリケーション側 warm-up（`readinessProbe` / `readinessGate` / `slow_start` の領分）— surge が配置するのはノードであり、アプリ自身の配置はアプリの責務
 
 ## 互換性
 
@@ -94,17 +94,24 @@ helm install node-rotation-controller charts/node-rotation-controller \
   --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
 ```
 
-chart はコントローラ（leader election 付き `replicas=2`）、その RBAC、
-クラスタスコープの `RotationPolicy` CRD（chart の `crds/` ディレクトリから）と
-サンプルの `RotationPolicy` オブジェクト、surge placeholder Pod 用の専用の負優先度
-`PriorityClass`（仕様 §3.3・§4.3・§5.1）をインストールする。置換の設定は
-`rotationPolicy.spec`（仕様 §5.4 のスキーマ）を編集する —
-[`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml)
-を参照。`rotationPolicy.create=false` にすれば自前の `RotationPolicy`
-オブジェクト（分岐するポリシーごとに 1 つ）を管理できる。どの `RotationPolicy`
-にもマッチしない NodePool は単に置換されない。すぐ流用できるポリシー —
-単一の catch-all、NodePool ごとに分岐するポリシー、specificity 解決、
-メンテナンスウィンドウの合成 — は [`examples/`](examples/) を参照。
+- **chart が入れるもの。** コントローラ（leader election 付き `replicas=2`）、
+  その RBAC、クラスタスコープの `RotationPolicy` CRD（chart の `crds/`
+  ディレクトリから）とサンプルの `RotationPolicy` オブジェクト、surge
+  placeholder Pod 用の専用の負優先度 `PriorityClass`（仕様 §3.3・§4.3・§5.1）。
+- **置換の設定。** `rotationPolicies` 配下にポリシーを列挙する（仕様 §5.4 の
+  スキーマ）— chart はエントリごとに 1 つの `RotationPolicy` をレンダリングする
+  ため、NodePool ごとに異なるウィンドウ / `ageThreshold` / surge を与えられる。
+  [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml)
+  を参照。
+- **非推奨の単数形。** 上のクイックスタートに示した単数形の `rotationPolicy.spec`
+  も引き続き動作し、当面はデフォルトのままだが、**非推奨**（issue #153）であり
+  1.0 で削除予定 — 1 エントリの `rotationPolicies` リストが 1:1 の置き換えである。
+- **自前のポリシーを使う。** `rotationPolicy.create=false` と
+  `rotationPolicies: []` を設定すれば、自前の `RotationPolicy` オブジェクト
+  （分岐するポリシーごとに 1 つ）を別管理できる。どのポリシーにもマッチしない
+  NodePool は単に置換されない。すぐ流用できるポリシー — 単一の catch-all、
+  NodePool ごとに分岐するポリシー、specificity 解決、メンテナンスウィンドウの
+  合成 — は [`examples/`](examples/) を参照。
 
 > **メンテナー向けメモ（初回リリース時のみ）:** ghcr.io のイメージと chart の
 > パッケージは初回公開時に **private** で作成されることがある。未認証の
