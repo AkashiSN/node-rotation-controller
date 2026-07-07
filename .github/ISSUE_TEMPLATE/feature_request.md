@@ -17,7 +17,7 @@ annotation keys, metrics, or the public surface, describe the change explicitly.
 ## Spec impact
 
 - [ ] Requires an update to `docs/specification/` (and `docs/ja/`)
-- [ ] Affects the ConfigMap schema
+- [ ] Affects the RotationPolicy schema
 - [ ] Affects annotation/label keys
 - [ ] Affects Prometheus metrics
 

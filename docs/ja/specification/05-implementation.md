@@ -322,11 +322,11 @@ sweep は **ちょうど 1 回、最初の reconcile が何らかの作業をす
 
 ## 5.4 設定スキーマ
 
-設定キャリアは cluster-scoped な `RotationPolicy` CRD であり、NodePool ごとに異なるポリシーを表現できる（issue #119）。コントローラは各 NodePool の統治ポリシーをクラスタの `RotationPolicy` オブジェクトから reconcile 時に解決する — もはや旧来の単一 `policy.yaml` ConfigMap は読まない。ConfigMap は本節末尾に歴史的参照のためにのみ記載する。もはや消費されず、Helm chart からも削除済みで、chart は代わりに CRD とサンプルの `RotationPolicy` を同梱する。
+設定キャリアは cluster-scoped な `RotationPolicy` CRD であり、NodePool ごとに異なるポリシーを表現できる（issue #119）。コントローラは各 NodePool の統治ポリシーをクラスタの `RotationPolicy` オブジェクトから reconcile 時に解決する。Helm chart は CRD とサンプルの `RotationPolicy` を同梱する。
 
 ### RotationPolicy CRD (`noderotation.io/v1alpha1`)
 
-`RotationPolicy` は cluster-scoped（NodePool が cluster-scoped であり、namespaced なポリシーはインピーダンスミスマッチになる）で、自身の `nodePoolSelector` とポリシーブロック一式を持つ。フィールド形は旧来の ConfigMap と 1:1 で、これはキャリアの変更（1 つの ConfigMap → N 個の CRD オブジェクト）であってポリシーフィールドの再定義ではない。バージョンは `v1alpha1`（1.0 前で凍結しない）で、1.0 マイルストーンで `v1` に安定化する。CRD の OpenAPI スキーマが構造ルールを admission 時に強制し、typo が実行時にしか落ちなかった ConfigMap の弱点を塞ぐ — ノードを削除するコントローラでは重要。OpenAPI スキーマで表現できないフィールド横断ルール（ウィンドウの `end` は `start` より後、surge の各 duration は厳密に正）はポリシー解決時に reconcile 時に検証され、これらに失敗したポリシーは（実行されず）競合（下記）として扱われる。
+`RotationPolicy` は cluster-scoped（NodePool が cluster-scoped であり、namespaced なポリシーはインピーダンスミスマッチになる）で、自身の `nodePoolSelector` とポリシーブロック一式を持つ。バージョンは `v1alpha1`（1.0 前で凍結しない）で、1.0 マイルストーンで `v1` に安定化する。CRD の OpenAPI スキーマが構造ルールを admission 時に強制し、typo は実行時ではなく admission 時に弾かれる — ノードを削除するコントローラでは重要。OpenAPI スキーマで表現できないフィールド横断ルール（ウィンドウの `end` は `start` より後、surge の各 duration は厳密に正）はポリシー解決時に reconcile 時に検証され、これらに失敗したポリシーは（実行されず）競合（下記）として扱われる。
 
 ```yaml
 apiVersion: noderotation.io/v1alpha1
@@ -387,52 +387,3 @@ status:                           # 観測／導出のみ — 権威ある実行
 1 つの `RotationPolicy` の変更が、そのセレクタが触れる任意のプールについてどのポリシーが勝つか — または同点が存在するか — を変えうるため、任意の `RotationPolicy` の create/update/delete は **すべての** NodePool を再解決のために再エンキューする。
 
 `maintenanceWindows` は各ポリシーに載るようになったため、メンテナンスウィンドウは **NodePool ごと**（統治ポリシーから解決される）であり、和集合のセマンティクス（§3.1）は 1 つのポリシーのリスト内で適用される。これが `noderotation_window_active` と `noderotation_window_period_seconds` が意味を持つ `nodepool` ラベルを持つ理由である（§4.2）。
-
-### ConfigMap（legacy — コントローラはもはや読まない）
-
-以下の単一 `policy.yaml` ConfigMap は v0.x のキャリアであった。コントローラはもはやこれを読まない。`RotationPolicy` への 1:1 のフィールドマッピング（`nodepoolSelectors[].matchLabels` → `spec.nodePoolSelector.matchLabels`、その他のフィールドは不変）を文書化するためにのみ残す。Helm chart はもはや ConfigMap を同梱せず、代わりに CRD とサンプルの `RotationPolicy` をインストールする。
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: node-rotation-config
-  namespace: node-rotation-system
-data:
-  policy.yaml: |
-    nodepoolSelectors:
-      - matchLabels:
-          # NodePool のラベルに合わせて調整
-          workload: api
-
-    ageThreshold: auto         # NodePool ごとに導出（§3.2）。明示的な duration 上書きも可だが検証は走る —
-                               #   再計算した G < 1 は fatal、G < K は警告（§3.2 レイヤ1）
-    minRotationChances: 2      # K。下限 1、2 未満は警告のみ
-
-    maintenanceWindows:        # リスト。実効ウィンドウは全エントリの和集合（§3.1）
-      - timezone: Asia/Tokyo
-        days: [Wed, Sat]
-        start: "02:00"
-        end:   "06:00"
-
-    surge:
-      maxUnavailable: 1        # v1 は 1 固定（直列）。> 1 は将来バージョン用の予約。明示値として有効なのは 1 のみ:
-                               #   未設定は 1 にデフォルトされるが、明示的な 0 は（強制変換せず）拒否される。誤設定を
-                               #   見逃さず、Helm schema の const 1 とコントローラを一致させるため
-      readyTimeout: 15m        # surge ノードがこの時間内に Ready にならなければ state=failed。0 超でなければならない（バリデーションが ≤ 0 を拒否）
-      cooldownAfter: 10m       # ウィンドウ内で連続するローテーション間の整定休止（t_rot には含めない。スループットに
-                               #   影響、§3.2）。「失敗した」試行後の NodePool レベルの試行間休止としても再利用される
-                               #   （last-failure-at をアンカーに、§5.2 ステップ2 / §4.4） — v1 では別ノブを設けない。0 超でなければならない
-      retryBackoff: 30m        # failed な NodeClaim を再選定するまでの基本待機。連続失敗ごとに倍増、上限 8 倍（§5.3）。0 超でなければならない
-      matchNodeRequirements:   # placeholder が複製する候補ノードの requirement（§3.3「ステートフル／ゾーン制約の
-                               #   ワークロード」）。required な karpenter.sh/nodepool セレクタはここには載らない —
-                               #   常に無条件で適用される: 同一 NodePool は構造的不変条件（§3.3）でありチューニング項目ではない
-        required:              # ハード nodeAffinity。値は候補ノードからコピー。NodePool の許容 requirements と交差
-          - topology.kubernetes.io/zone   # 既定: zonal-PV（EBS）再バインドのため同一 AZ。外すと警告のみ
-          - kubernetes.io/arch
-          - karpenter.sh/capacity-type
-        preferred: []          # ソフト nodeAffinity。容量逼迫時は緩和。例: node.kubernetes.io/instance-type
-
-    prePull:                   # v2（v1 では無効）。v1 では `enabled` のみ受理
-      enabled: false
-```

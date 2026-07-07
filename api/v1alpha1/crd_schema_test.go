@@ -67,7 +67,7 @@ func TestCRDRequiresSpec(t *testing.T) {
 
 // TestCRDRejectsPrePullEnabled guards that the v1 reservation of pre-pull is
 // enforced at admission: prePull must carry a CEL rule forbidding enabled:true,
-// mirroring the ConfigMap validator (internal/policy.Validate).
+// mirroring the policy validator (internal/policy.Validate).
 func TestCRDRejectsPrePullEnabled(t *testing.T) {
 	schema := loadCRDSchema(t)
 	prePull := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)["prePull"].(map[string]any)

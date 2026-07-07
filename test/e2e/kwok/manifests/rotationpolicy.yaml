@@ -1,9 +1,8 @@
 # The live rotation policy for the KWOK e2e (issue #119): the controller resolves
-# each NodePool's governing RotationPolicy at reconcile time and no longer reads
-# the policy.yaml ConfigMap. The field values here MUST mirror the (now-ignored)
-# config.policy block in controller-values.yaml — in particular ageThreshold 4m
-# and the surge timings the Go driver (e2e_test.go) depends on. bootstrap.sh
-# applies this after the Helm install (the chart's crds/ installs the CRD first).
+# each NodePool's governing RotationPolicy at reconcile time. The field values
+# here MUST carry ageThreshold 4m and the surge timings the Go driver (e2e_test.go)
+# depends on. bootstrap.sh applies this after the Helm install (the chart's crds/
+# installs the CRD first).
 apiVersion: noderotation.io/v1alpha1
 kind: RotationPolicy
 metadata:

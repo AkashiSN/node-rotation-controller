@@ -36,7 +36,6 @@ func main() {
 	var metricsAddr string
 	var probeAddr string
 	var enableLeaderElection bool
-	var configPath string
 	var namespace string
 	var placeholderImage string
 	var priorityClassName string
@@ -47,10 +46,6 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election. Required when running replicas=2 (spec §5.1); "+
 			"disable only for local development.")
-	flag.StringVar(&configPath, "config-path", "/etc/node-rotation/policy.yaml",
-		"DEPRECATED and ignored: rotation policy is now read from RotationPolicy CRD objects "+
-			"(spec §5.4, issue #119). The flag is accepted for one release so the existing Helm "+
-			"chart keeps working; the chart drops it (and the ConfigMap) in a follow-up.")
 	flag.StringVar(&namespace, "namespace", "node-rotation-system",
 		"Namespace the surge placeholder Pods are created in.")
 	flag.StringVar(&placeholderImage, "placeholder-image", "registry.k8s.io/pause:3.10",
@@ -63,15 +58,6 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
 	setupLog := ctrl.Log.WithName("setup")
-
-	// The cluster-wide policy.yaml ConfigMap was replaced by per-NodePool
-	// RotationPolicy CRD objects (spec §5.4, issue #119); the controller resolves a
-	// NodePool's policy at reconcile time. --config-path is accepted but ignored for
-	// one release so the current Helm chart (which still mounts the ConfigMap and
-	// passes the flag) keeps working until the chart drops both in a follow-up.
-	if configPath != "" {
-		setupLog.Info("--config-path is deprecated and ignored; policy is read from RotationPolicy CRD objects (spec §5.4)", "path", configPath)
-	}
 
 	cfg := ctrl.GetConfigOrDie()
 

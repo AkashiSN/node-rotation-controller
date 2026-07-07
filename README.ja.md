@@ -118,18 +118,6 @@ chart はコントローラ（leader election 付き `replicas=2`）、その RB
 > トークンが必要だが、*Packages* 設定 UI はトークン不要。）リリースは `vX.Y.Z`
 > タグを push して切る（Release workflow を参照）。
 
-### ConfigMap からの移行（#119 以前）
-
-[#119](https://github.com/AkashiSN/node-rotation-controller/issues/119) より前の
-リリースは、単一の `node-rotation-config` ConfigMap（`config.policy.*`）で
-ポリシーを保持していた。この ConfigMap は削除され、ポリシーはクラスタスコープの
-`RotationPolicy` オブジェクトに移行した。フィールド形状は 1:1 — 旧
-`config.policy.nodepoolSelectors[]` の各エントリをそれぞれ 1 つの
-`RotationPolicy` に移し、`matchLabels` を `spec.nodePoolSelector.matchLabels` に、
-それ以外のフィールド（`ageThreshold`・`minRotationChances`・`maintenanceWindows`・
-`surge`・`prePull`）は `spec` 配下へそのままコピーする。1.0 前なので、これは
-dual-support なしの全面置換である（仕様 §5.4）。
-
 ## 参加するには
 
 本プロジェクトは pre-1.0 で活発に開発中であり、v1 のスコープは仕様書に記載の surge MVP である。設計へのフィードバックも実装の貢献も、GitHub の Issue と PR の両方で歓迎する。

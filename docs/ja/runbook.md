@@ -375,9 +375,7 @@ helm upgrade --install rot charts/node-rotation-controller \
 
 アップグレード時には 2 つが独立に動く: **コントローラの Deployment**（イメージ）と
 **`RotationPolicy` CRD スキーマ**。両者は安全性の性質が異なる。（chart の機構面 —
-Helm が CRD をどう扱うか、および
-[#119](https://github.com/AkashiSN/node-rotation-controller/issues/119) 以前からの
-一度きりの ConfigMap → `RotationPolicy` 移行 — は
+Helm が CRD をどう扱うか — は
 [chart README *Upgrading*](../../charts/node-rotation-controller/README.md#upgrading)
 にある。本節は **運用** 面、すなわち「ローテーションが進行中でも安全か」を扱う。）
 

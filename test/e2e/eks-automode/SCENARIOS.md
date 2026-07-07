@@ -1052,8 +1052,7 @@ kubectl delete -f scenarios/ff-workload.yaml -f scenarios/nrc-ff-policy.yaml -f 
 - **Policy changes are applied live (no restart).** The controller watches the
   RotationPolicy CRD (issue #119), so a `readyTimeout`/`ageThreshold`/window change
   is a `kubectl patch rotationpolicy nrc-poc …` that takes effect at the next
-  reconcile — no `helm upgrade` and no `kubectl rollout restart`. (Pre-#119 the
-  policy lived in a `policy.yaml` ConfigMap read once at startup; that path is gone.)
+  reconcile — no `helm upgrade` and no `kubectl rollout restart`.
 
 - **Metrics reset on restart.** The `completed_total` counters are in-memory; a
   controller restart zeroes them. Capture a baseline after each restart.
