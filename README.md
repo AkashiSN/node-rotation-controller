@@ -24,7 +24,7 @@ Karpenter classifies node disruption into two categories:
 
 Expiration is intentionally forceful (see the upstream [forceful-expiration design](https://github.com/kubernetes-sigs/karpenter/blob/main/designs/forceful-expiration.md)) so that AMI patches and security updates cannot be indefinitely delayed by misconfigured budgets. The upstream design explicitly lists "operators implement their own graceful rotation" as one acceptable path. EKS Auto Mode further enforces a 21-day hard cap on node lifetime that cannot be lifted.
 
-The practical consequence: nodes **will be force-drained** at some point within 21 days, regardless of PDBs, and Karpenter will only provision a replacement *after* the drain begins. This can land in peak business hours.
+The practical consequence: nodes **will be force-drained** at some point within 21 days — the drain honors PDBs only up to `terminationGracePeriod`, not indefinitely — and Karpenter will only provision a replacement *after* the drain begins. This can land in peak business hours.
 
 This controller closes that gap by:
 
@@ -94,23 +94,25 @@ helm install node-rotation-controller charts/node-rotation-controller \
   --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
 ```
 
-The chart installs the controller (`replicas=2` with leader election), its RBAC,
-the cluster-scoped `RotationPolicy` CRD (from the chart's `crds/` directory) plus
-a sample `RotationPolicy` object, and the dedicated negative-priority
-`PriorityClass` for the surge placeholder Pod (spec §3.3, §4.3, §5.1). Configure
-rotation by listing policies under `rotationPolicies` (the spec §5.4 schema) — the
-chart renders one `RotationPolicy` per entry, so you can give each NodePool a
-different window / `ageThreshold` / surge. See
-[`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml).
-The singular `rotationPolicy.spec` shown in the quickstart above still works and
-stays the default for now, but is **deprecated** (issue #153) and slated for
-removal at 1.0 — a one-entry `rotationPolicies` list is the one-to-one
-replacement. Set `rotationPolicy.create=false` with `rotationPolicies: []` to
-author your own `RotationPolicy` objects out-of-band instead (one per divergent
-policy); a NodePool matched by none is simply not rotated. See
-[`examples/`](examples/) for ready-to-adapt policies — a single catch-all,
-divergent per-NodePool policies, specificity resolution, and maintenance-window
-composition.
+- **What the chart installs.** The controller (`replicas=2` with leader
+  election), its RBAC, the cluster-scoped `RotationPolicy` CRD (from the chart's
+  `crds/` directory) plus a sample `RotationPolicy` object, and the dedicated
+  negative-priority `PriorityClass` for the surge placeholder Pod (spec §3.3,
+  §4.3, §5.1).
+- **Configuring rotation.** List policies under `rotationPolicies` (the spec §5.4
+  schema) — the chart renders one `RotationPolicy` per entry, so you can give each
+  NodePool a different window / `ageThreshold` / surge. See
+  [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml).
+- **Deprecated singular form.** The singular `rotationPolicy.spec` shown in the
+  quickstart above still works and stays the default for now, but is
+  **deprecated** (issue #153) and slated for removal at 1.0 — a one-entry
+  `rotationPolicies` list is the one-to-one replacement.
+- **Bring your own policies.** Set `rotationPolicy.create=false` with
+  `rotationPolicies: []` to author your own `RotationPolicy` objects out-of-band
+  instead (one per divergent policy); a NodePool matched by none is simply not
+  rotated. See [`examples/`](examples/) for ready-to-adapt policies — a single
+  catch-all, divergent per-NodePool policies, specificity resolution, and
+  maintenance-window composition.
 
 > **Maintainer note (first release only):** the ghcr.io image and chart
 > packages may be created **private** on first publish. Make
