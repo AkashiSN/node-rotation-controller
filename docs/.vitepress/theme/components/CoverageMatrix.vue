@@ -14,73 +14,76 @@ const groupOrder = ['surgePlacement', 'gates', 'backstop', 'dnd', 'robustness', 
 // `cells` is aligned 1:1 with `columns` above. 'p' = primary (●), 's' = secondary (◯), 'n' = none.
 // `ovl` marks the two overlapping rows (source `tr.ovl`): backstop (D⊂I) and readyTimeout rollback (C≈M-B).
 // `ext` marks the two external-guarantee rows (source `tr.ext`): Karpenter honor (N) and zonal-EBS (A).
+// `status` = 'validated' once the row's primary scenario has been re-run and observed on a real EKS
+// Auto Mode cluster (see test/e2e/eks-automode/VALIDATION.md), else 'planned' (code coverage only —
+// necessary but not sufficient). Flip a single field here when a scenario graduates.
 const rows = [
   {
-    id: 'surgeNew', group: 'surgePlacement',
+    id: 'surgeNew', group: 'surgePlacement', status: 'validated',
     cells: ['p', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 's', 'n', 'n', 'n', 'n', 'n', 'n', 's'],
   },
   {
-    id: 'surgeAbsorb', group: 'surgePlacement',
+    id: 'surgeAbsorb', group: 'surgePlacement', status: 'validated',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p', 'n', 'n', 'n', 'n', 'n', 'n'],
   },
   {
-    id: 'placementConfinement', group: 'surgePlacement',
+    id: 'placementConfinement', group: 'surgePlacement', status: 'validated',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'p', 'n', 'n', 'n', 's', 'n', 'n', 'n', 'n', 'n', 'n'],
   },
   {
-    id: 'gateLimits', group: 'gates',
+    id: 'gateLimits', group: 'gates', status: 'validated',
     cells: ['n', 'n', 'p', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 's', 'n', 'n'],
   },
   {
-    id: 'gateWindow', group: 'gates',
+    id: 'gateWindow', group: 'gates', status: 'validated',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p', 'n', 'n', 'n', 'n'],
   },
   {
-    id: 'backstop', group: 'backstop', ovl: true,
+    id: 'backstop', group: 'backstop', status: 'validated', ovl: true,
     cells: ['n', 'n', 'n', 'n', 'p', 'n', 'n', 'n', 'n', 'p', 'n', 'n', 'n', 'n', 'n', 'n', 's'],
   },
   {
-    id: 'rollback', group: 'backstop', ovl: true,
+    id: 'rollback', group: 'backstop', status: 'validated', ovl: true,
     cells: ['n', 'n', 'n', 'p', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p', 'n', 'n'],
   },
   {
-    id: 'expiredOutcome', group: 'backstop',
+    id: 'expiredOutcome', group: 'backstop', status: 'validated',
     cells: ['n', 'n', 'n', 'n', 'n', 'p', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 's'],
   },
   {
-    id: 'pdbDrain', group: 'backstop',
+    id: 'pdbDrain', group: 'backstop', status: 'validated',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'p', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 's'],
   },
   {
-    id: 'dndWrite', group: 'dnd',
+    id: 'dndWrite', group: 'dnd', status: 'validated',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n'],
   },
   {
-    id: 'dndExclude', group: 'dnd', spec: '#170',
+    id: 'dndExclude', group: 'dnd', status: 'validated', spec: '#170',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p'],
   },
   {
-    id: 'dndHonor', group: 'dnd', ext: true,
+    id: 'dndHonor', group: 'dnd', status: 'validated', ext: true,
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p', 'n'],
   },
   {
-    id: 'leaderResume', group: 'robustness',
+    id: 'leaderResume', group: 'robustness', status: 'validated',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p', 'n', 'n', 'n', 'n', 'n'],
   },
   {
-    id: 'preemption', group: 'robustness',
+    id: 'preemption', group: 'robustness', status: 'validated',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p', 'n', 'n', 'n'],
   },
   {
-    id: 'zonalEbs', group: 'robustness', ext: true,
+    id: 'zonalEbs', group: 'robustness', status: 'validated', ext: true,
     cells: ['n', 'p', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n'],
   },
   {
-    id: 'forcefulFallback', group: 'forcefulFallback', spec: '#156',
+    id: 'forcefulFallback', group: 'forcefulFallback', status: 'validated', spec: '#156',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p'],
   },
   {
-    id: 'earliestDeadline', group: 'forcefulFallback', spec: '#157',
+    id: 'earliestDeadline', group: 'forcefulFallback', status: 'validated', spec: '#157',
     cells: ['n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'n', 'p'],
   },
 ]
@@ -107,12 +110,15 @@ const T = computed(() => ja.value ? {
     primary: '主眼（primary）',
     secondary: '副次的に通過（secondary）',
     none: '対象外',
+    validated: 'validated（実 EKS で観測）',
+    planned: 'planned（コードのみ）',
     overlapChip: '重複',
     overlapText: '同一能力を2シナリオが主眼に',
     extChip: '外部',
     extText: 'Karpenter/AWS の保証',
   },
   rowheadLabel: '能力 / シナリオ →',
+  statusHead: '状態',
   colTitles: {
     '0': 'core make-before-break surge',
     A: 'zonal-EBS rebind',
@@ -197,12 +203,15 @@ const T = computed(() => ja.value ? {
     primary: 'primary focus',
     secondary: 'passes through (secondary)',
     none: 'not covered',
+    validated: 'validated (observed on real EKS)',
+    planned: 'planned (code coverage only)',
     overlapChip: 'overlap',
     overlapText: 'the same capability is the primary focus of 2 scenarios',
     extChip: 'external',
     extText: 'a Karpenter/AWS guarantee',
   },
   rowheadLabel: 'Capability / scenario →',
+  statusHead: 'Status',
   colTitles: {
     '0': 'core make-before-break surge',
     A: 'zonal-EBS rebind',
@@ -305,6 +314,8 @@ const T = computed(() => ja.value ? {
       <span class="item"><span class="dot p"></span> {{ T.legend.primary }}</span>
       <span class="item"><span class="dot s"></span> {{ T.legend.secondary }}</span>
       <span class="item"><span class="dot n"></span> {{ T.legend.none }}</span>
+      <span class="item"><span class="stat validated">✓</span> {{ T.legend.validated }}</span>
+      <span class="item"><span class="stat planned">○</span> {{ T.legend.planned }}</span>
       <span class="item"><span class="chip warn">⚠ {{ T.legend.overlapChip }}</span> {{ T.legend.overlapText }}</span>
       <span class="item"><span class="chip ext">☁ {{ T.legend.extChip }}</span> {{ T.legend.extText }}</span>
     </div>
@@ -314,12 +325,13 @@ const T = computed(() => ja.value ? {
         <thead>
           <tr>
             <th class="rowhead">{{ T.rowheadLabel }}</th>
+            <th class="statushead">{{ T.statusHead }}</th>
             <th v-for="col in columns" :key="col" :title="T.colTitles[col]">{{ col }}</th>
           </tr>
         </thead>
         <tbody>
           <template v-for="g in groupedRows" :key="g.id">
-            <tr class="grp"><td colspan="18">{{ T.groups[g.id] }}</td></tr>
+            <tr class="grp"><td colspan="19">{{ T.groups[g.id] }}</td></tr>
             <tr v-for="row in g.rows" :key="row.id" :class="{ ovl: row.ovl, ext: row.ext }">
               <td class="rl">
                 <span v-html="T.rows[row.id].label"></span><span
@@ -333,6 +345,13 @@ const T = computed(() => ja.value ? {
                   v-if="T.rows[row.id].sub"
                   class="sub"
                 >{{ T.rows[row.id].sub }}</span>
+              </td>
+              <td class="st">
+                <span
+                  class="stat"
+                  :class="row.status"
+                  :title="row.status === 'validated' ? T.legend.validated : T.legend.planned"
+                >{{ row.status === 'validated' ? '✓' : '○' }}</span>
               </td>
               <td class="c" v-for="(state, i) in row.cells" :key="i"><span class="dot" :class="state"></span></td>
             </tr>
@@ -399,6 +418,10 @@ h1{font-size:clamp(23px,3.2vw,32px);line-height:1.15;margin:0 0 12px;letter-spac
 .chip{font-family:ui-monospace,monospace;font-size:10.5px;font-weight:700;letter-spacing:.03em;padding:2px 7px;border-radius:5px}
 .chip.warn{color:var(--fig-forceful);background:var(--fig-forceful-fill)}
 .chip.ext{color:var(--fig-ext);background:var(--fig-ext-soft)}
+/* planned→validated status marker (legend swatch + in-cell) */
+.stat{display:inline-block;width:16px;text-align:center;font-size:13px;line-height:1;font-weight:700}
+.stat.validated{color:var(--fig-graceful)}
+.stat.planned{color:var(--fig-faint);font-weight:500}
 
 .section-label{font-family:ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--fig-faint);margin:32px 0 14px;display:flex;align-items:center;gap:10px}
 .section-label::after{content:"";flex:1;height:1px;background:var(--fig-line)}
@@ -412,12 +435,18 @@ table.cm-mx thead th{position:sticky;top:0;z-index:3;background:var(--fig-surfac
   height:38px;width:40px;border-bottom:1px solid var(--fig-line-strong);border-left:1px solid var(--fig-line)}
 table.cm-mx thead th.rowhead{z-index:5;left:0;text-align:left;width:262px;min-width:262px;padding-left:14px;
   font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--fig-muted)}
+table.cm-mx thead th.statushead{z-index:4;left:262px;width:52px;min-width:52px;
+  font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--fig-muted);
+  border-left:1px solid var(--fig-line-strong)}
 /* row label cells */
 td.rl{position:sticky;left:0;z-index:2;background:var(--fig-surface);text-align:left;
   width:262px;min-width:262px;padding:8px 12px;border-bottom:1px solid var(--fig-line);border-right:1px solid var(--fig-line-strong);
   font-size:13px;line-height:1.35}
 td.rl .sub{display:block;color:var(--fig-faint);font-size:11.5px;margin-top:1px}
 td.rl .spec{font-family:ui-monospace,monospace;font-size:10.5px;color:var(--fig-graceful)}
+/* status column cell (sticky, pinned right after the label column) */
+td.st{position:sticky;left:262px;z-index:2;background:var(--fig-surface);
+  width:52px;min-width:52px;border-bottom:1px solid var(--fig-line);border-right:1px solid var(--fig-line-strong)}
 /* data cells */
 td.c{width:40px;height:38px;border-bottom:1px solid var(--fig-line);border-left:1px solid var(--fig-line)}
 /* group subheader row */
@@ -425,9 +454,11 @@ tr.grp td{position:sticky;left:0;background:var(--fig-surface-2);color:var(--fig
   font-family:ui-monospace,monospace;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;
   padding:7px 12px;border-bottom:1px solid var(--fig-line);border-top:1px solid var(--fig-line-strong)}
 /* overlap + external row accents */
-tr.ovl td.rl{background:var(--fig-forceful-fill);border-right-color:var(--fig-forceful)}
+tr.ovl td.rl,tr.ovl td.st{background:var(--fig-forceful-fill)}
+tr.ovl td.st{border-right-color:var(--fig-forceful)}
 tr.ovl td.c{background:linear-gradient(0deg,var(--fig-forceful-fill),var(--fig-forceful-fill))}
-tr.ext td.rl{background:var(--fig-ext-soft);border-right-color:var(--fig-ext)}
+tr.ext td.rl,tr.ext td.st{background:var(--fig-ext-soft)}
+tr.ext td.st{border-right-color:var(--fig-ext)}
 tr.ext td.c{background:linear-gradient(0deg,var(--fig-ext-soft),var(--fig-ext-soft))}
 .tag{font-family:ui-monospace,monospace;font-size:9.5px;font-weight:700;letter-spacing:.03em;padding:1px 5px;border-radius:4px;margin-left:6px;vertical-align:middle}
 .tag.warn{color:var(--fig-forceful);background:var(--fig-forceful-fill);border:1px solid var(--fig-forceful)}
