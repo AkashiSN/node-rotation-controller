@@ -124,18 +124,6 @@ composition.
 > `read:packages` / `write:packages`; the *Packages* settings UI needs no token.)
 > Releases are cut by pushing a `vX.Y.Z` tag (see the Release workflow).
 
-### Upgrading from the ConfigMap (pre-#119)
-
-Releases before [#119](https://github.com/AkashiSN/node-rotation-controller/issues/119)
-carried policy in a single `node-rotation-config` ConfigMap (`config.policy.*`).
-That ConfigMap is removed; policy now lives in cluster-scoped `RotationPolicy`
-objects. The field shapes are 1:1 — lift each entry of the old
-`config.policy.nodepoolSelectors[]` into its own `RotationPolicy`, with
-`matchLabels` moving to `spec.nodePoolSelector.matchLabels` and every other field
-(`ageThreshold`, `minRotationChances`, `maintenanceWindows`, `surge`, `prePull`)
-copied verbatim under `spec`. Pre-1.0, this is an outright replacement with no
-dual-support path (spec §5.4).
-
 ## Getting involved
 
 This project is pre-1.0 and under active development; the v1 scope is the surge MVP described in the specification. Design feedback and implementation contributions are both welcome via GitHub Issues and PRs.

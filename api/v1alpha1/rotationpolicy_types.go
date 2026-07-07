@@ -20,11 +20,10 @@ const (
 )
 
 // RotationPolicySpec defines the rotation policy for the NodePools its selector
-// matches. The field shapes mirror the former policy.yaml ConfigMap one-to-one
-// (spec §5.4) — this is a carrier change (one ConfigMap → N CRD objects), not a
-// redefinition of the policy fields. The OpenAPI schema generated from the markers
-// below enforces the structural rules at admission time, closing the ConfigMap
-// weakness where a typo failed only at runtime.
+// matches (spec §5.4). The OpenAPI schema generated from the markers below
+// enforces the structural rules at admission time, so a typo is rejected at
+// admission rather than failing only at runtime — which matters for a controller
+// that deletes nodes.
 type RotationPolicySpec struct {
 	// nodePoolSelector selects the NodePools this policy governs. A NodePool matched
 	// by no policy is not rotated (the expireAfter backstop still applies). When
@@ -59,7 +58,7 @@ type RotationPolicySpec struct {
 
 	// prePull is the reserved v2 expansion point; only enabled:false is accepted in v1.
 	// The CEL rule enforces the v1 reservation at admission time, mirroring the
-	// ConfigMap validator (internal/policy.Validate), so enabling it is rejected
+	// policy validator (internal/policy.Validate), so enabling it is rejected
 	// rather than silently honored by a controller that deletes nodes.
 	// +kubebuilder:validation:XValidation:rule="!self.enabled",message="prePull is reserved for v2 and must be disabled (enabled: false) in v1"
 	// +optional

@@ -1,7 +1,6 @@
 {{- /*
 RotationPolicy objects (spec §5.4, issues #119 and #153). The controller resolves
-each NodePool's governing RotationPolicy at reconcile time — it no longer reads
-the former policy.yaml ConfigMap.
+each NodePool's governing RotationPolicy at reconcile time.
 
 Two ways to define policies, mutually exclusive:
   - rotationPolicies (LIST): one RotationPolicy per entry, for per-NodePool

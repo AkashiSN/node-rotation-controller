@@ -206,11 +206,10 @@ rotationPolicies: []
 #       spec: { ...this spec... }
 #
 # A sample cluster-scoped RotationPolicy (spec §5.4, issue #119). The controller
-# resolves each NodePool's governing RotationPolicy at reconcile time — it no
-# longer reads the former policy.yaml ConfigMap. Everything under `spec` is the
-# RotationPolicy spec rendered verbatim via toYaml, so --set works on any field
-# and the values schema validates the result. Set create=false to manage your own
-# RotationPolicy objects out-of-band (one per divergent policy). Ignored entirely
+# resolves each NodePool's governing RotationPolicy at reconcile time. Everything
+# under `spec` is the RotationPolicy spec rendered verbatim via toYaml, so --set
+# works on any field and the values schema validates the result. Set create=false
+# to manage your own RotationPolicy objects out-of-band (one per divergent policy). Ignored entirely
 # when `rotationPolicies` above is non-empty.
 rotationPolicy:
   # -- Install the sample RotationPolicy below. Disable to author your own.

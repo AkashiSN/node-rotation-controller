@@ -332,11 +332,11 @@ The sweep runs **exactly once, gated before the first reconcile does any work** 
 
 ## 5.4 Configuration Schema
 
-The configuration carrier is the cluster-scoped `RotationPolicy` CRD, so distinct NodePools can carry divergent policy (issue #119). The controller resolves each NodePool's governing policy from the cluster's `RotationPolicy` objects at reconcile time — it no longer reads the former single `policy.yaml` ConfigMap. The ConfigMap is documented at the end of this section for historical reference only; it is no longer consumed and has been removed from the Helm chart, which now ships the CRD and a sample `RotationPolicy`.
+The configuration carrier is the cluster-scoped `RotationPolicy` CRD, so distinct NodePools can carry divergent policy (issue #119). The controller resolves each NodePool's governing policy from the cluster's `RotationPolicy` objects at reconcile time. The Helm chart ships the CRD and a sample `RotationPolicy`.
 
 ### RotationPolicy CRD (`noderotation.io/v1alpha1`)
 
-`RotationPolicy` is cluster-scoped (NodePools are cluster-scoped; a namespaced policy would be an impedance mismatch) and carries its own `nodePoolSelector` plus the full policy block. The field shapes are lifted one-to-one from the legacy ConfigMap — this is a carrier change (one ConfigMap → N CRD objects), not a redefinition of the policy fields. The version is `v1alpha1` (pre-1.0, not frozen) and stabilizes to `v1` at the 1.0 milestone. The CRD's OpenAPI schema enforces the structural rules at admission time, closing the ConfigMap weakness where a typo failed only at runtime — which matters for a controller that deletes nodes. Cross-field rules the OpenAPI schema cannot express (a window's `end` after its `start`; the surge durations strictly positive) are still validated at reconcile time when the policy is resolved; a policy that fails them is treated as a conflict (below) rather than acted on.
+`RotationPolicy` is cluster-scoped (NodePools are cluster-scoped; a namespaced policy would be an impedance mismatch) and carries its own `nodePoolSelector` plus the full policy block. The version is `v1alpha1` (pre-1.0, not frozen) and stabilizes to `v1` at the 1.0 milestone. The CRD's OpenAPI schema enforces the structural rules at admission time, so a typo is rejected at admission rather than failing only at runtime — which matters for a controller that deletes nodes. Cross-field rules the OpenAPI schema cannot express (a window's `end` after its `start`; the surge durations strictly positive) are still validated at reconcile time when the policy is resolved; a policy that fails them is treated as a conflict (below) rather than acted on.
 
 ```yaml
 apiVersion: noderotation.io/v1alpha1
@@ -397,52 +397,3 @@ A `RotationPolicy` governs the NodePools its `nodePoolSelector` matches (a stand
 Because a single `RotationPolicy` change can alter which policy wins — or whether a tie exists — for any pool its selector touches, a create/update/delete of any `RotationPolicy` re-enqueues **every** NodePool for re-resolution.
 
 `maintenanceWindows` now lives on each policy, so the maintenance window is **per-NodePool** (resolved from its governing policy); the union semantics (§3.1) apply within one policy's list. This is why `noderotation_window_active` and `noderotation_window_period_seconds` carry a load-bearing `nodepool` label (§4.2).
-
-### ConfigMap (legacy — no longer read by the controller)
-
-The single `policy.yaml` ConfigMap below was the v0.x carrier. The controller no longer reads it; it is retained here only to document the one-to-one field mapping into a `RotationPolicy` (`nodepoolSelectors[].matchLabels` → `spec.nodePoolSelector.matchLabels`, every other field unchanged). The Helm chart no longer ships it — it installs the CRD and a sample `RotationPolicy` instead.
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: node-rotation-config
-  namespace: node-rotation-system
-data:
-  policy.yaml: |
-    nodepoolSelectors:
-      - matchLabels:
-          # example; adjust to your NodePool labels
-          workload: api
-
-    ageThreshold: auto         # derived per NodePool (§3.2); an explicit duration override is allowed but still
-                               #   validated — recomputed G < 1 is fatal, G < K warns (§3.2 layer 1)
-    minRotationChances: 2      # K; floor 1, values < 2 only warn
-
-    maintenanceWindows:        # list; the effective window is the UNION of all entries (§3.1)
-      - timezone: Asia/Tokyo
-        days: [Wed, Sat]
-        start: "02:00"
-        end:   "06:00"
-
-    surge:
-      maxUnavailable: 1        # v1 fixed at 1 (serial); > 1 reserved for a later version. The only valid explicit
-                               #   value is 1: unset defaults to 1, but an explicit 0 is REJECTED (not coerced) so a
-                               #   misconfiguration is loud and the controller matches the Helm schema's const 1
-      readyTimeout: 15m        # surge node must reach Ready within this, else state=failed; must be > 0 (validation rejects ≤ 0)
-      cooldownAfter: 10m       # settle pause between consecutive rotations in a window (not part of t_rot; affects
-                               #   throughput, §3.2); also reused as the pool-level inter-attempt pause after a
-                               #   FAILED attempt (anchored on last-failure-at, §5.2 step 2 / §4.4) — no separate knob in v1; must be > 0
-      retryBackoff: 30m        # base wait before re-selecting a failed NodeClaim; doubles per consecutive failure, capped at 8x (§5.3); must be > 0
-      matchNodeRequirements:   # which candidate-node requirements the placeholder replicates (§3.3 "Stateful and zonal
-                               #   workloads"). The required karpenter.sh/nodepool selector is NOT listed here — it is
-                               #   always applied, unconditionally: same-NodePool is a structural invariant (§3.3), not a tunable
-        required:              # hard nodeAffinity, value copied from candidate node; intersected with NodePool's allowed requirements
-          - topology.kubernetes.io/zone   # default: same-AZ for zonal-PV (EBS) rebind; removing it only warns
-          - kubernetes.io/arch
-          - karpenter.sh/capacity-type
-        preferred: []          # soft nodeAffinity; relaxed under capacity pressure. e.g. node.kubernetes.io/instance-type
-
-    prePull:                   # v2 (disabled in v1); only `enabled` is accepted in v1
-      enabled: false
-```

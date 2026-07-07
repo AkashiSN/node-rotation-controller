@@ -1,8 +1,7 @@
 // Package v1alpha1 holds the noderotation.io/v1alpha1 API types. v1alpha1 is the
-// cluster-scoped RotationPolicy CRD that replaces the single policy.yaml ConfigMap
-// (issue #119): one object per NodePool policy, so distinct NodePools can carry
-// divergent rotation policy. The version is pre-1.0 and NOT frozen — it stabilizes
-// to v1 at the 1.0 milestone (spec §6.1).
+// cluster-scoped RotationPolicy CRD (issue #119): one object per NodePool policy,
+// so distinct NodePools can carry divergent rotation policy. The version is
+// pre-1.0 and NOT frozen — it stabilizes to v1 at the 1.0 milestone (spec §6.1).
 //
 // +kubebuilder:object:generate=true
 // +groupName=noderotation.io

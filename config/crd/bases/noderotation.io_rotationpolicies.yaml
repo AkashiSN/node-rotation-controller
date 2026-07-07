@@ -176,7 +176,7 @@ spec:
                 description: |-
                   prePull is the reserved v2 expansion point; only enabled:false is accepted in v1.
                   The CEL rule enforces the v1 reservation at admission time, mirroring the
-                  ConfigMap validator (internal/policy.Validate), so enabling it is rejected
+                  policy validator (internal/policy.Validate), so enabling it is rejected
                   rather than silently honored by a controller that deletes nodes.
                 properties:
                   enabled:

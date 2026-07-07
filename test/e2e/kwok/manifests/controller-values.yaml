@@ -28,10 +28,9 @@ logging:
   development: true
 
 # The controller resolves each NodePool's governing RotationPolicy at reconcile
-# time (issue #119); it no longer reads a policy.yaml ConfigMap. The live policy
-# for the e2e is manifests/rotationpolicy.yaml (applied by bootstrap.sh after the
-# Helm install) — it carries the ageThreshold/surge timings the Go driver depends
-# on. Disable the chart's bundled sample RotationPolicy so that manifest is the
-# only policy object in the cluster.
+# time (issue #119). The live policy for the e2e is manifests/rotationpolicy.yaml
+# (applied by bootstrap.sh after the Helm install) — it carries the
+# ageThreshold/surge timings the Go driver depends on. Disable the chart's bundled
+# sample RotationPolicy so that manifest is the only policy object in the cluster.
 rotationPolicy:
   create: false

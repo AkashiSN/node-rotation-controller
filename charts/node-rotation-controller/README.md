@@ -255,14 +255,6 @@ no `RotationPolicy` objects — manage them on the primary release or out-of-ban
 
 Pre-1.0, treat every upgrade as potentially breaking and read the release notes.
 
-- **From a release before [#119](https://github.com/AkashiSN/node-rotation-controller/issues/119)
-  (the ConfigMap era):** policy used to live in a single `node-rotation-config`
-  ConfigMap (`config.policy.*`). That ConfigMap is removed; policy now lives in
-  cluster-scoped `RotationPolicy` objects. The field shapes are 1:1 — lift each
-  entry of the old `config.policy.nodepoolSelectors[]` into its own
-  `RotationPolicy`, with `matchLabels` moving to `spec.nodePoolSelector.matchLabels`
-  and every other field copied verbatim under `spec`. This is an outright
-  replacement with no dual-support path (spec §5.4).
 - **CRD updates** are not applied automatically by Helm (see the CRD note above).
   After upgrading the chart, re-apply `crds/` if the CRD changed.
 

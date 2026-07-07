@@ -391,9 +391,7 @@ the section that fixes it. The signal strings are the exact ones from
 
 Two things move independently on an upgrade: the **controller Deployment** (the
 image) and the **`RotationPolicy` CRD schema**. They have different safety
-properties. (The chart-mechanics view — what Helm does with the CRD, and the
-one-time ConfigMap → `RotationPolicy` migration from before
-[#119](https://github.com/AkashiSN/node-rotation-controller/issues/119) — lives
+properties. (The chart-mechanics view — what Helm does with the CRD — lives
 in the [chart README *Upgrading*](../charts/node-rotation-controller/README.md#upgrading);
 this section is the **operational** view: is it safe while a rotation is live.)
 

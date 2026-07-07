@@ -37,11 +37,10 @@ logging:
   development: true
 
 # The controller resolves each NodePool's governing RotationPolicy at reconcile
-# time (issue #119); it no longer reads a policy.yaml ConfigMap. The live policy
-# for the scenarios is scenarios/rotationpolicy.yaml (applied with kubectl after
-# the Helm install) — it carries the ageThreshold/window/surge knobs the scenarios
-# depend on, and the scenarios patch it live (no restart). Disable the chart's
-# bundled sample RotationPolicy so that manifest is the only policy object in the
-# cluster.
+# time (issue #119). The live policy for the scenarios is
+# scenarios/rotationpolicy.yaml (applied with kubectl after the Helm install) — it
+# carries the ageThreshold/window/surge knobs the scenarios depend on, and the
+# scenarios patch it live (no restart). Disable the chart's bundled sample
+# RotationPolicy so that manifest is the only policy object in the cluster.
 rotationPolicy:
   create: false
