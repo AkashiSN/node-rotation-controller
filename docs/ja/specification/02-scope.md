@@ -8,7 +8,7 @@
 |------|------|
 | EKS Auto Mode | 主対象（21 日 hard cap が最大の動機） |
 | EKS 上の self-managed Karpenter v1+ | サポート |
-| その他の CNCF 系（AKS NAP 等） | best-effort。CRD API は同じだがオペレータ実装のセマンティクスには差異がありうる |
+| その他の CNCF 系（AKS NAP 等） | best-effort。CRD API は同じだが、背後で動く Karpenter オペレータ（コントローラ）の挙動には差異がありうる |
 
 ### Karpenter 互換性ポリシー
 

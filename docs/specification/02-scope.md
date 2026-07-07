@@ -8,7 +8,7 @@
 |-------------|--------|
 | EKS Auto Mode | Primary target (the 21-day hard cap is the strongest motivating constraint) |
 | Self-managed Karpenter v1+ on EKS | Supported |
-| Karpenter on other CNCF distributions (AKS NAP, etc.) | Best-effort; CRD API is the same but operator semantics may differ |
+| Karpenter on other CNCF distributions (AKS NAP, etc.) | Best-effort; the CRD API is the same, but the underlying Karpenter operator's (controller's) behavior may differ |
 
 ### Karpenter compatibility policy
 
