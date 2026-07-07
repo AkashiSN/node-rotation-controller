@@ -36,6 +36,23 @@ Feedback on the design and implementation is welcome via Issues.
 - English is the default for code, comments, docs, issues, and PRs.
 - Japanese documentation lives under `docs/ja/` and mirrors the English spec.
 
+### Japanese translation conventions
+
+These conventions keep `docs/ja/` translations consistent. They record existing
+practice; apply them to new and updated translations.
+
+- **Fenced code blocks — translate comments only.** In fenced code blocks under
+  `docs/ja/`, translate the comments into Japanese, and keep everything else
+  (commands, identifiers, YAML keys and values, pseudocode, and program output)
+  verbatim so it matches the English source exactly. For example, spec §5 renders
+  `# remove the annotation` as `# アノテーション削除` while the surrounding
+  command stays unchanged.
+- **`stuck-drain` — keep the term in English, translate the prose.** Keep the
+  compound term in English where it names the metric or mechanism (`stuck-drain`,
+  `noderotation_drain_stuck`); in running Japanese prose describing the condition,
+  write "詰まった drain". The same split applies to other identifier-derived
+  terms: the identifier stays verbatim, the surrounding prose is translated.
+
 ## Specification is the source of truth
 
 The design in `docs/specification/` leads the implementation. Code and spec
