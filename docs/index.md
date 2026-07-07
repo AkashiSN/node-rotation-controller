@@ -20,5 +20,5 @@ features:
   - title: Window-bounded
     details: Derives an ageThreshold that stays below expireAfter, kept as a backstop rather than removed.
   - title: Validated on real EKS
-    details: Scenario O proves the graceful→forceful fallback split, earliest-deadline ordering, and do-not-disrupt exclusion on a shared deadline.
+    details: The real-EKS validation scenario (Scenario O) proves the graceful→forceful fallback split, earliest-deadline ordering, and do-not-disrupt exclusion on a shared deadline.
 ---

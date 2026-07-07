@@ -4,7 +4,7 @@
 
 Karpenter（および Karpenter ベースの EKS Auto Mode）ではノードの disruption を 2 種類に分類している。
 
-| 分類 | 例 | NodePool Disruption Budgets | 代替 Node の事前起動 | PDB |
+| 分類 | 例 | NodePool Disruption Budgets | 代替ノードの事前起動 | PDB |
 |------|-----|------------------------------|-----------------------|-----|
 | Graceful | Drift, Consolidation | 適用される | する（make-before-break）| 厳密に尊重 |
 | **Forceful** | **Expiration**, Spot Interruption | **適用されない** | **しない** | 尊重されるが `terminationGracePeriod` でキャップ |
@@ -22,7 +22,7 @@ EKS Auto Mode はさらに **21 日のノード最大寿命**を、ユーザが*
 | G1 | age 閾値（メンテナンススケジュールと目標ローテーション回数から NodePool ごとに導出 — §3.2）に達した `NodeClaim` をメンテナンスウィンドウ内で voluntary 経路で先回りローテーションし、**Forceful Expiration を実質発火させない** |
 | G2 | 代替の NodePool-owned ノードを先に追加して `Ready` を待ってから旧 `NodeClaim` を delete することで（ノードレベルの surge / make-before-break。Pod レベルの順序付けは PDB に委譲 — §3.3）、**Pod Pending のウィンドウをなくす** |
 | G3 | 業務影響の少ない時間帯にローテーションを **閉じ込める**（曜日 / 時刻 / タイムゾーン設定） |
-| G4 | 既存の保護機構（PDB、`topologySpreadConstraints`、preStop、Pod Readiness Gate、ALB Slow Start）と **共存して成立** する。置き換えない |
+| G4 | 既存の保護機構（PDB、`topologySpreadConstraints`、preStop、Pod Readiness Gate、ALB slow start）と **共存して成立** する。置き換えない |
 
 ## 1.3 非ゴール
 

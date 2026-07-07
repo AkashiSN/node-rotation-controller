@@ -37,8 +37,8 @@
 前段に置く NodePool。
 
 **なぜ重要か。** surge は make-before-break であり、コントローラは古いノードを drain する
-*前に* 置換ノードを追加する。ゾーン制約 PV ワークロードでは、既存ボリュームが再アタッチ
-できるよう、置換ノードは **候補の AZ に固定される** —
+*前に* 代替ノードを追加する。ゾーン制約 PV ワークロードでは、既存ボリュームが再アタッチ
+できるよう、代替ノードは **候補の AZ に固定される** —
 `topology.kubernetes.io/zone` は `surge.matchNodeRequirements` の既定 `required`
 集合に含まれる
 （[§3.3 *ステートフル／ゾーン制約のワークロード*](specification/03-design.md#33-surge-シーケンスv1)）。
@@ -390,9 +390,10 @@ Helm が CRD をどう扱うか — は
 **外部データストアはなく**、再起動で失われるものはコントローラのメモリ上に存在しない。
 `replicaCount=2` とリーダー選出により、ローリングアップグレードはリーダーを新しい Pod に
 引き継ぎ、新リーダーは **進行中のローテーションをアンカーから再開する** — リーダー交代時の
-再開は検証済みのパスである（[§7.2](specification/07-risks.md#72-検証済み前提)）。よって
-`noderotation_in_progress == 1` の状態で `helm upgrade` を実行しても、ローテーションを
-破壊・重複・孤立させることはない。
+再開は検証済みのパスである（[§7.2](specification/07-risks.md#72-検証済み前提)）。
+
+よって `noderotation_in_progress == 1` の状態で `helm upgrade` を実行しても、
+ローテーションを破壊・重複・孤立させることはない。
 
 **任意で先に quiesce する。** ローテーション進行中のアップグレードを避けたいだけなら、
 短い [freeze](#4-freeze-ワークフロー) を設定して `noderotation_in_progress` が `0` に

@@ -408,9 +408,10 @@ There is **no external datastore** and nothing in controller memory that a
 restart loses. With `replicaCount=2` and leader election, a rolling upgrade hands
 leadership to the new pod, which **resumes any in-flight rotation from the
 anchor** — leader-change resume is a validated path
-([§7.2](specification/07-risks.md#72-validated-assumptions)). So running `helm upgrade`
-while `noderotation_in_progress == 1` does not corrupt, duplicate, or orphan a
-rotation.
+([§7.2](specification/07-risks.md#72-validated-assumptions)).
+
+So running `helm upgrade` while `noderotation_in_progress == 1` does not
+corrupt, duplicate, or orphan a rotation.
 
 **Optionally quiesce first.** If you would simply rather not upgrade mid-rotation,
 set a short [freeze](#4-the-freeze-workflow) and wait for `noderotation_in_progress`
