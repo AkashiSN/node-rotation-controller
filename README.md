@@ -9,7 +9,11 @@ Designed for EKS Auto Mode and any Karpenter v1+ environment where node expirati
 
 ## Status
 
-**v0.4.0 — v1 surge MVP, released (pre-1.0).** The v1 make-before-break rotation state machine (spec §5.2), `ageThreshold`/candidate derivation (§3.2), surge placeholder (§3.3), metrics and Warning Events (§4.2), the Helm chart, and the Karpenter v1 startup preflight (§5.1) are implemented, with unit tests and an envtest smoke test in CI. The core surge path is validated on EKS Auto Mode across a full rotation regression suite; a multi-hour tight-race soak remains the open item before v1.0 (see the [roadmap](docs/specification/06-release.md#62-roadmap)). Still **pre-1.0** — the configuration surface may change between minor releases. [docs/specification/](docs/specification/) remains the source of truth for the design; see [Compatibility](#compatibility) for the Karpenter contract.
+**v0.4.0 — v1 surge MVP, released (pre-1.0).** The v1 make-before-break rotation state machine (spec §5.2), `ageThreshold`/candidate derivation (§3.2), surge placeholder (§3.3), metrics and Warning Events (§4.2), the Helm chart, and the Karpenter v1 startup preflight (§5.1) are implemented, with unit tests and an envtest smoke test in CI.
+
+The core surge path is validated on EKS Auto Mode across a full rotation regression suite; a multi-hour tight-race soak remains the open item before v1.0 (see the [roadmap](docs/specification/06-release.md#62-roadmap)).
+
+Still **pre-1.0** — the configuration surface may change between minor releases. [docs/specification/](docs/specification/) remains the source of truth for the design; see [Compatibility](#compatibility) for the Karpenter contract.
 
 日本語版: [README.ja.md](README.ja.md) / [docs/ja/specification/](docs/ja/specification/)
 

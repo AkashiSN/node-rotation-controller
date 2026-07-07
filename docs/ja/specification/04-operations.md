@@ -8,7 +8,7 @@
 | `readyReplicas` が希望数を一時的に下回る | Eviction API 経路での構造的制約。surge しても新 Pod は即時 Ready にはならない。緩和はアプリ層（余剰レプリカ + PDB）の責務でスコープ外 |
 | 並列 surge 数 | v1 は `surge.maxUnavailable = 1` を **NodePool ごと** に固定（NodePool 内は直列、異なる NodePool 同士は並行 surge し得る）。代替ノードは placeholder Pod 経由で誘発される **NodePool-owned** ノード（§3.3）。`maxUnavailable > 1` は将来バージョン用の予約で、その場合ノード `m` 台分の余裕が要る。単一ノード分の surge 予算がどう強制されるかは下の Note を参照 |
 
-> **Note — 単一ノード分の surge 予算がどう強制されるか。** `spec.limits` は **リソース予算**（`{cpu, memory, …}`）であって**ノード台数ではない** — 実際の前提条件は、placeholder の requests（surge ノードのリソースフットプリント、§3.3）が NodePool の*残り*予算（`limits − 既プロビジョニング分`）に収まることであり、加えて外部の EC2 vCPU クォータも要る。直感的には「ベースライン +1 ノード」だが、これは台数ではなく**リソース**チェックとして強制される。コントローラは **ローテーション開始前にこのヘッドルームを事前確認** し（§5.2 ステップ3 — placeholder の requests は選定された候補が定義するため、候補選定の後）、残り予算がノード 1 台分のリソースを収められなければ警告してスキップする。
+> **Note — 単一ノード分の surge 予算がどう強制されるか。** `spec.limits` は **リソース予算**（`{cpu, memory, …}`）であって**ノード台数ではない** — 実際の前提条件は、placeholder の requests（surge ノードのリソースフットプリント、§3.3）が NodePool の*残り*予算（`limits − 既プロビジョニング分`）に収まることであり、加えて外部の EC2 vCPU クォータも要る。直感的には「ベースライン +1 ノード」だが、これは台数ではなく**リソース**チェックとして強制される。コントローラは **ローテーション開始前にこのヘッドルームを事前確認** し（§5.2 ステップ 3 — placeholder の requests は選定された候補が定義するため、候補選定の後）、残り予算がノード 1 台分のリソースを収められなければ警告してスキップする。
 
 ## 4.2 観測性
 
@@ -42,7 +42,7 @@
 | サーフェス | オブジェクト | reason | 発火タイミング |
 |-----------|------------|--------|--------------|
 | 非致命的 schedule 所見（§3.2 レイヤ 1–2） | NodePool | 所見コード（例: `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `ThroughputZero`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `OverrideGBelowK`） | その所見が NodePool で有効になったとき |
-| short-lead NodeClaim（§3.2 レイヤ 3） | NodeClaim | `ShortLead` | claim 自身の `expireAfter` が `K` 回の機会を保証できなくなったとき |
+| short-lead NodeClaim（§3.2 レイヤ 3） | NodeClaim | `ShortLead` | claim 自身の `expireAfter` が `K` 回のローテーションを保証できなくなったとき |
 | surge-less forceful fallback（§3.3） | NodePool | `ForcefulFallback` | 候補の deadline 前に graceful な surge を完了できないため surge-less なウィンドウ有界ローテーションを開始するとき（opt-in の `surge.forcefulFallback`）|
 
 Event は**条件に入った遷移時に発行することでデデュープ**される: 一度解消され
@@ -132,4 +132,4 @@ v2（image pre-pull）の Job は新ノード上の Pod として動き、その
 
 **失敗した** surge 試行も surge ノードを短時間（最大 `readyTimeout`。その後、**まだ無人であれば**明示的に回収 — §3.3 *ロールバック*。その間に無関係な preemptor が着地した surge ノードは意図的に回収*せず*、NodePool の通常キャパシティとしてそのまま残る — リークではなく転用である）課金し得る。
 
-失敗がこのコストを繰り返す速さは 2 つの機構が抑える: エスカレーションする `retryBackoff`（§5.3）が *同一* claim のリトライを抑え、**NodePool レベルの試行間休止**（`last-failure-at` + `cooldownAfter`、§5.2 ステップ2）が候補の*巡回*を抑える — 後者がなければ、触れる claim をことごとく失敗させる系統的原因（執拗な placeholder preempt、持続的な同一 AZ 容量不足）は 1 分程度で次の候補へ移り、候補ごとに `readyTimeout` 分の失敗 surge 課金を焼き続けることになる。休止があれば、系統的失敗下の NodePool が走らせるのは最大でも **`readyTimeout + cooldownAfter` あたり 1 試行**（既定値で約 25m）であり、そのパターンには `noderotation_retry_count` がアラートする（§4.2）。
+失敗がこのコストを繰り返す速さは 2 つの機構が抑える: エスカレーションする `retryBackoff`（§5.3）が *同一* claim のリトライを抑え、**NodePool レベルの試行間休止**（`last-failure-at` + `cooldownAfter`、§5.2 ステップ 2）が候補の*巡回*を抑える — 後者がなければ、触れる claim をことごとく失敗させる系統的原因（執拗な placeholder preempt、持続的な同一 AZ 容量不足）は 1 分程度で次の候補へ移り、候補ごとに `readyTimeout` 分の失敗 surge 課金を焼き続けることになる。休止があれば、系統的失敗下の NodePool が走らせるのは最大でも **`readyTimeout + cooldownAfter` あたり 1 試行**（既定値で約 25m）であり、そのパターンには `noderotation_retry_count` がアラートする（§4.2）。

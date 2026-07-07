@@ -20,5 +20,5 @@ features:
   - title: ウィンドウ有界
     details: expireAfter を下回る ageThreshold を導出し、expireAfter はバックストップとして温存する（撤廃しない）。
   - title: 実 EKS で検証済み
-    details: Scenario O が graceful→forceful fallback の分岐、最早期限順、do-not-disrupt 除外を同一デッドライン上で実証。
+    details: 実 EKS の検証シナリオ（Scenario O）が graceful→forceful fallback の分岐、最早期限順、do-not-disrupt 除外を同一デッドライン上で実証。
 ---
