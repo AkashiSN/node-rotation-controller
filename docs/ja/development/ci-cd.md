@@ -2,7 +2,7 @@
 
 本リポジトリは 3 つの GitHub Actions ワークフローと、ドキュメントデプロイ用の
 ワークフローを運用する。このページでは、必須ステータスチェックを高速に保ちつつ、
-チェックが `pending` のまま固まることを決してなくす変更検知ゲーティングの仕組みを
+チェックを `pending` のまま固まらせないための変更検知ゲーティングの仕組みを
 解説する。
 
 ## ワークフロー一覧
@@ -11,7 +11,7 @@
 |---|---|---|
 | `ci.yaml` | `main` への push、全 PR | 必須チェック: `lint`、`test`、`build`、`chart`（および後述の `changes`） |
 | `e2e.yaml` | `main` への push、全 PR | surge メカニズム向けの KWOK ベース Karpenter e2e、単一の `e2e` ジョブ |
-| `release.yaml` | `v*` タグの push | マルチアーキのコントローライメージと Helm chart（OCI）を `ghcr.io` にビルド・push し、GitHub Release を作成 |
+| `release.yaml` | `v*` タグの push | マルチアーキのコントローライメージと Helm chart（OCI）を `ghcr.io` にビルド・push した後、GitHub Release を作成 |
 | `pages.yaml` | `main` への push（ドキュメント関連パス）、手動実行 | 本 VitePress サイトをビルドし GitHub Pages にデプロイ |
 
 ## `pending` の罠
@@ -27,7 +27,7 @@
 正しい解決策は、*ジョブ* は常に実行しつつ、その中の高コストな *ステップ* だけを
 関係する変更がない場合にスキップすることである。重要な各ステップにステップ単位の
 `if:` を付けることで、ジョブ自体は入力が変わっていなければ数秒で実際の結論
-（成功）に到達し、変わっていればフルの作業を実行する。
+（成功）に到達し、変わっていれば処理をすべて実行する。
 
 ## `ci.yaml`: `changes` ジョブ
 
@@ -43,10 +43,10 @@
 シェルスクリプト（`git` も GitHub Actions のコンテキストも使わない）である。
 `ci.yaml` は pull request では `git diff --name-only "$BASE_SHA" HEAD` の
 出力をこれに渡し、`main` への直接 push では全フラグを `true` として扱う（PR
-のベースとの diff が存在せず、`main` への push では常に全ジョブを走らせるべき
+のベースとの diff が存在せず、`main` への push では常にすべて（全ステップ）を実行すべき
 であるため）。`.github/scripts/detect-ci-changes.test.sh` はサンプルとなる
-パス集合の表に対して分類器をユニットテストし、CI の毎回の呼び出しで実行される
-ため、ゲーティングロジック自体がサイレントに劣化することはない。
+パス集合の表に対して分類器をユニットテストし、CI が実行されるたびに走る
+ため、ゲーティングロジック自体が気づかれないうちに壊れることはない。
 
 ### パス → フラグ → ジョブ
 
@@ -73,7 +73,7 @@
 あり、`e2e` という名前の単一の必須チェックに対応する。変更検知は別ジョブで
 なくジョブの*最初のステップ*として実行される。なぜなら、`changes` 方式の別
 ジョブを導入すると、他に消費者のいない単一ジョブのワークフローにジョブ間
-`needs` 依存を追加するだけで DRY の恩恵がないからである（`ci.yaml` は分類結果を
+`needs` 依存という余計な間接化を持ち込むだけで、ここでは DRY の恩恵がないからである（`ci.yaml` は分類結果を
 4 ジョブで共有するが、`e2e.yaml` のジョブは 1 つしかない）。検知ステップは diff
 を e2e に関係するパス（`internal/`、`cmd/`、`charts/`、`test/e2e/`、
 `go.mod`/`go.sum`、`Makefile`、`Dockerfile`、`aqua.yaml`、
@@ -86,7 +86,7 @@
 ## `release.yaml`: タグ駆動の OCI 公開
 
 `release.yaml` は `v*` タグの push のみでトリガーされ、通常の push では動かない
-ため `pending` 必須チェックのリスクを持たない — release 系ワークフローはブランチ
+ため `pending` 必須チェックのリスクがない — release 系ワークフローはブランチ
 保護の対象外である。逐次実行される 4 つのジョブから成る: `guard` は push された
 タグが `Chart.yaml` のバージョンと食い違っていれば即座に失敗する; `image` は
 マルチアーキ（`linux/amd64`、`linux/arm64`）のコントローライメージを
@@ -94,7 +94,7 @@
 プレリリースタグ（例: `v0.4.0-rc.1`）でない限り `latest` タグも付与する;
 `chart` は Helm chart をパッケージし `oci://ghcr.io/akashisn/charts` へ OCI
 アーティファクトとして push する; `release` はパッケージ済み chart を
-ダウンロードして GitHub Release を作成し、`image` ジョブが `latest` を
+ダウンロードし、それを添付した GitHub Release を作成し、`image` ジョブが `latest` を
 スキップするのと同じハイフン付きタグに対してはプレリリースとしてマークする。
 
 ## `pages.yaml`: ドキュメントデプロイ
@@ -104,5 +104,5 @@
 `README.md`/`README.ja.md`（ビルド時に Getting Started ページへコピーされる）、
 `package.json`、`package-lock.json`、またはワークフロー自身のファイルに触れる
 `main` への push、および手動実行（`workflow_dispatch`）である。上述の必須チェック集合には
-含まれない — ドキュメントを公開するものでありマージをゲートしないため — この
+含まれない（ドキュメントを公開するだけで、マージをゲートしないため）。したがって、この
 ページで説明した変更検知ゲーティングは不要である。

@@ -3,7 +3,7 @@ layout: home
 hero:
   name: node-rotation-controller
   text: Karpenter のための Make-before-break Node ローテーション
-  tagline: メンテナンスウィンドウ内で Node を先回り置換し、Karpenter の expireAfter 発火そのものを起こさない。
+  tagline: メンテナンスウィンドウ内で Karpenter 管理ノードを先回り置換し、expireAfter の発火を実質起こさせない。
   actions:
     - theme: brand
       text: はじめに
