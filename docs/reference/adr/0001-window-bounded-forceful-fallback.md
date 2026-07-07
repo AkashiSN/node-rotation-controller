@@ -25,7 +25,7 @@ The fallback is **disabled by default** (working name `surge.forcefulFallback.en
 **Positive**
 
 - The forceful disruption that was otherwise inevitable (`C·A < N·P`) happens at a **controlled time inside the maintenance window** instead of at the random `expireAfter` deadline, restoring the spirit of G1 (predictable, low-traffic disruption) even when a graceful guarantee is unreachable.
-- It **relieves the capacity deficit**: dropping the surge removes `readyTimeout` and the provisioning wait from `t_rot` (it collapses to roughly `tGP + Buffer`) and removes the surge-capacity constraint, so `C` rises sharply (and, combined with the reserved surge-parallelism work, the surge-less deletes could later run concurrently) — making `K·C ≥ N` achievable where a serial graceful surge cannot.
+- It **relieves the capacity deficit**: dropping the surge removes `readyTimeout` and the provisioning wait from `t_rot` (it collapses to roughly `tGP + buffer`) and removes the surge-capacity constraint, so `C` rises sharply (and, combined with the reserved surge-parallelism work, the surge-less deletes could later run concurrently) — making `K·C ≥ N` achievable where a serial graceful surge cannot.
 - The "never bypass Karpenter" and PDB-respect (G4) invariants are **preserved**; the change is narrowly scoped to one of the four invariants and to an opt-in path.
 
 **Negative / trade-offs**
