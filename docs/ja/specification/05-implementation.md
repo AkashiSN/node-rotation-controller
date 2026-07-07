@@ -121,7 +121,7 @@ advance(np, name):
       else:                                  # pending から消滅（例: surge 中の force-expire、§3.3
           emit_metrics(expired); alert       #   残存リスク）: 何もローテーションしていない — cooldown も不要
       clear(np, active-rotation, active-rotation-state, draining-at, rotation-mode)  # 同一オブジェクト → 1 回の update。ゲート解放は最後（rotation-mode は forceful fallback 時のみ存在、§5.3）
-      return Requeue(1m)                     # cooldown はステップ 2の start ゲートで enforce
+      return Requeue(1m)                     # cooldown はステップ 2 の start ゲートで enforce
 
   switch cand.state:
   case (none) | pending:                     # 冪等: このフェーズに必要なものを毎回（再）表明する
@@ -272,7 +272,7 @@ advance(np, name):
 
 drain が `drain_bound`（= `tGP + buffer`。`tGP` 未設定時は固定の既定値、例 `1h` — §3.2 レイヤ 1の警告参照）を超えたら stuck-drain アラート（`noderotation_drain_stuck`、§4.2 — ライブ状態から各 reconcile で再計算する 0/1 ゲージで、drain 完了時にラッチせず 0 へ戻る）を発火するが、**直列ゲートは意図的に保持し続ける**: `draining` のローテーションはロールバックできず（旧 NodeClaim には既に `deletionTimestamp` が付いている）、ゲートを解放すれば 1 台目がまだ半分 drain された状態のまま 2 台目の disruption を開始することになり、`maxUnavailable = 1` に違反する。是正は運用者側 — ブロックしている PDB かスタックした finalizer を解消する。`tGP` が設定されていれば最終的に Karpenter 自身が drain を強制する。
 
-ステップ 2の `cooldownAfter` ゲートは、成功完了ごとに **NodePool** へ書く `noderotation.io/last-rotation-at` をアンカーにする。旧 NodeClaim には載せない: ローテーションごとの state を担うその object はローテーション完了時に削除されるため、それをキーにした requeue は no-op になる（旧来の「削除済み claim への `Requeue(cooldown=…)`」が実際には休止を enforce せず、次の Tick で即ローテーションを開始し得たのはこのため）。生存する NodePool にアンカーすることで、完了境界とリーダー交代をまたいで休止が持続する。ゲートは NodePool ごとに評価され、NodePool ごと直列のモデルと整合する（別 NodePool は引き続き並行ローテーション可）。
+ステップ 2 の `cooldownAfter` ゲートは、成功完了ごとに **NodePool** へ書く `noderotation.io/last-rotation-at` をアンカーにする。旧 NodeClaim には載せない: ローテーションごとの state を担うその object はローテーション完了時に削除されるため、それをキーにした requeue は no-op になる（旧来の「削除済み claim への `Requeue(cooldown=…)`」が実際には休止を enforce せず、次の Tick で即ローテーションを開始し得たのはこのため）。生存する NodePool にアンカーすることで、完了境界とリーダー交代をまたいで休止が持続する。ゲートは NodePool ごとに評価され、NodePool ごと直列のモデルと整合する（別 NodePool は引き続き並行ローテーション可）。
 
 ## 5.3 状態モデル
 
@@ -392,7 +392,7 @@ spec:
 status:                           # 観測／導出のみ — 権威ある実行時状態ではない（§5.3）
   observedGeneration: 3           # このステータスの算出元となった spec の generation
   matchedNodePools: 2             # セレクタの specificity でこのポリシーが勝っている NodePool 数
-  rotatingNodePools: 1            # そのうち 進行中のローテーションを持つ NodePool 数
+  rotatingNodePools: 1            # そのうち進行中のローテーションを持つ NodePool 数
   conditions:
     - type: Ready
       status: "True"
