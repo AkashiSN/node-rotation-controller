@@ -36,7 +36,11 @@
 
 > **なぜ surge 機構ではなく「能力」として記録するか。** standalone NodeClaim の結果は、コントローラが作成した NodeClaim を Karpenter が尊重することを示し、プロジェクトのリスクを下げる。しかし surge 設計（§3.3）は意図的にこれを**使わない**: standalone ノードは NodePool に owned されず、Pod が NodePool 会計・expiry・drift・budget の外のノードに載り続け、意図的な NodePool 分離を壊すため。placeholder 方式が成立しない場合の **fallback** として文書化しておく。
 >
-> **現在の検証状況（PoC スコープ）:** 本命の placeholder Pod surge 機構、新規プロビジョニング経路、同一 AZ zonal-PV 再バインド、`readyTimeout` ロールバック + クリーンアップ、NodePool `limits` ゲート、複数 NodePool の閉じ込め、voluntary な PDB 尊重 drain、新旧両 surge ノードの `do-not-disrupt` マーカー、強制失効の `expired` outcome、スケール版 R6 soak、capacity-absorb 経路、placeholder の preemption（被害者 + `readyTimeout` 有界 rollback）、ウィンドウ境界の開始/停止、leader 交代の再開、voluntary disruption に対する `do-not-disrupt` の honor は上の検証済み行に記録済みである。v0.4 以降の追加 — ウィンドウ有界の **surge-less forceful fallback**（#156）、**最早期限**の候補順序付け（#157）、候補選択からの **`do-not-disrupt` 除外**（#170）— は 2026-07-04 の 3 行に記録済みで、`expireAfter` を固定したまま（トリックなし）graceful + forceful の混在として実 EKS 上で end-to-end に検証した。実クラウドで未了: 本物の同一 AZ **キャパシティ不足（ICE）** による rollback 誘発（オンデマンドで決定的に再現できないため短い `readyTimeout` で代替）、そしてフルな数時間の *接戦* `expireAfter` soak（日次ウィンドウでは到達不能）。RBAC の十分性と `karpenter.sh/v1` CRD デコードは暗黙に検証済み — コントローラは surge オブジェクトの create/patch/delete と実 `NodeClaim` の reconcile をエラーなく実施。
+> **現在の検証状況（PoC スコープ）:** 本命の placeholder Pod surge 機構、新規プロビジョニング経路、同一 AZ zonal-PV 再バインド、`readyTimeout` ロールバック + クリーンアップ、NodePool `limits` ゲート、複数 NodePool の閉じ込め、voluntary な PDB 尊重 drain、新旧両 surge ノードの `do-not-disrupt` マーカー、強制失効の `expired` outcome、スケール版 R6 soak、capacity-absorb 経路、placeholder の preemption（被害者 + `readyTimeout` 有界 rollback）、ウィンドウ境界の開始/停止、leader 交代の再開、voluntary disruption に対する `do-not-disrupt` の honor は上の検証済み行に記録済みである。
+>
+> v0.4 以降の追加 — ウィンドウ有界の **surge-less forceful fallback**（#156）、**最早期限**の候補順序付け（#157）、候補選択からの **`do-not-disrupt` 除外**（#170）— は 2026-07-04 の 3 行に記録済みで、`expireAfter` を固定したまま（トリックなし）graceful + forceful の混在として実 EKS 上で end-to-end に検証した。
+>
+> 実クラウドで未了: 本物の同一 AZ **キャパシティ不足（ICE）** による rollback 誘発（オンデマンドで決定的に再現できないため短い `readyTimeout` で代替）、そしてフルな数時間の *接戦* `expireAfter` soak（日次ウィンドウでは到達不能）。RBAC の十分性と `karpenter.sh/v1` CRD デコードは暗黙に検証済み — コントローラは surge オブジェクトの create/patch/delete と実 `NodeClaim` の reconcile をエラーなく実施。
 
 ## 7.3 未決事項
 
