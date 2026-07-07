@@ -85,7 +85,7 @@ EKS Auto Mode はさらに **21 日のノード最大寿命**を、ユーザが*
 
 ### Disruption Budgets では不十分な理由
 
-`NodePool.spec.disruption.budgets` は `schedule + duration` をサポートし、表面的にはメンテナンスウィンドウに見える。実際には 2 つの構造的制約がある。
+`NodePool.spec.disruption.budgets` は `schedule + duration` をサポートし、表面的にはメンテナンスウィンドウに見える。実際には 2 つの構造的制約 — 下表の 2 つの ✗ 行 — がある（1 行目の要件（△）は不格好な方法でしか実現できない）。
 
 | 要件 | Karpenter 単体で実現可能か |
 |------|----------------------------|

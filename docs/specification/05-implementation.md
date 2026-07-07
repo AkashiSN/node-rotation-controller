@@ -92,15 +92,27 @@ reconcile_nodepool(np):
   # ── 3. Start a new rotation: pick the candidate, gate on ITS headroom, then anchor ──
   cand := pick_earliest_deadline_eligible(np) # empty state, or failed past its escalated backoff
   if cand == nil: return Requeue(1m)
-  if not surge_headroom(np, cand):           # cand's reschedulable-Pod request sum (= the placeholder's
-                                             #   requests, §3.3) vs (spec.limits − provisioned): the gate is
-                                             #   candidate-dependent by definition, so it runs AFTER selection
+  surgeless := forceful_fallback(np, cand)   # opt-in (§3.3, ADR-0001): surge.forcefulFallback.enabled AND a
+                                             #   graceful surge started now cannot finish before cand's own
+                                             #   deadline (deadline − now < t_rot) — a surge would only lose the
+                                             #   race, so rotate surge-less. A claim with no deadline never qualifies
+  if not surgeless and not surge_headroom(np, cand):   # cand's reschedulable-Pod request sum (= the placeholder's
+                                             #   requests, §3.3) vs (spec.limits − provisioned): candidate-dependent,
+                                             #   so it runs AFTER selection — and only for a surge (a surge-less
+                                             #   fallback provisions no placeholder to size)
       warn("insufficient limits headroom; cannot surge"); return Requeue(1m)
   annotate(np, active-rotation=cand.name)    # anchor BEFORE any other side effect. Conflict-checked,
                                              #   only-if-absent write (optimistic lock on resourceVersion /
                                              #   SSA): Ticks and NodeClaim events queue under different keys,
                                              #   so two reconciles can race on one NodePool — the loser's
                                              #   write fails, and it does nothing but requeue
+  if surgeless:                              # surge-less window-bounded forceful fallback (§3.3): no placeholder,
+      annotate(np, rotation-mode=forceful-fallback,     #   no readyTimeout, no node freeze — no surge pair to
+               active-rotation-state=draining, draining-at=now)   #   protect. rotation-mode lives on the ANCHOR so
+      annotate(cand, state=draining)         #   it survives cand's deletion; draining-at (write-once) anchors §4.2
+      emit_metrics(forceful_fallback); event # §4.2 counter + a ForcefulFallback Warning event on the NodePool
+      delete(cand)                           # voluntary path (PDBs apply); completion reuses advance()'s draining
+      return Requeue(30s)                    #   handler above, which clears rotation-mode with the anchor
   return advance(np, cand.name)              # falls into the idempotent pending handler below
 
 # advance() runs one step for the in-flight rotation, keyed by the anchor:
@@ -119,7 +131,7 @@ advance(np, name):
                                              #   this anchor existed) — uncounted beats mis-anchored
       else:                                  # vanished out of pending (e.g. force-expired mid-surge,
           emit_metrics(expired); alert       #   §3.3 residual risk): nothing was rotated — no cooldown
-      clear(np, active-rotation, active-rotation-state, draining-at)  # same object → one update; release the gate LAST
+      clear(np, active-rotation, active-rotation-state, draining-at, rotation-mode)  # same object → one update; release the gate LAST (rotation-mode present only for a forceful fallback, §5.3)
       return Requeue(1m)                     # cooldown is enforced at the step-2 start gate
 
   switch cand.state:
@@ -303,6 +315,7 @@ The old NodeClaim's `noderotation.io/state` drives the machine in §5.2, anchore
 ```mermaid
 stateDiagram-v2
     [*] --> pending: selected in window
+    [*] --> draining: forceful fallback (surge-less, §3.3)
     pending --> draining: surge_ready
     pending --> failed: readyTimeout elapsed
     pending --> expired: old NodeClaim force-expiring
@@ -321,15 +334,16 @@ The diagram is the structure; the table below is the authoritative **side effect
 
 | From | Event | To | Side effects |
 |------|-------|----|--------------|
-| *(none)* | selected in window | `pending` | write NodePool `active-rotation` anchor (first; conflict-checked, only-if-absent — §5.2); freeze old node (`do-not-disrupt` + `do-not-disrupt-owned` marker + `surge-for`, unless the node already carries an operator's active `do-not-disrupt: true`); cordon old node (+ `cordoned` marker); create placeholder (required `karpenter.sh/nodepool` selector; pod-level `do-not-disrupt`; **soft** preferred hostname `NotIn` exclusion of the old node and near-deadline hosts — candidate hard-excluded by the cordon above, §3.3 / #96) |
+| *(none)* | selected in window | `pending` | write NodePool `active-rotation` anchor (first; conflict-checked, only-if-absent — §5.2); freeze old node (`surge-for` always; plus `do-not-disrupt` + `do-not-disrupt-owned` marker, skipped only when the node already carries an operator's active `do-not-disrupt: true`); cordon old node (+ `cordoned` marker); create placeholder (required `karpenter.sh/nodepool` selector; pod-level `do-not-disrupt`; **soft** preferred hostname `NotIn` exclusion of the old node and near-deadline hosts — candidate hard-excluded by the cordon above, §3.3 / #96) |
+| *(none)* | selected in window, a graceful surge cannot complete before the candidate's deadline (`deadline − now < t_rot`), and `surge.forcefulFallback` is enabled (§3.3, ADR-0001) | `draining` | write NodePool `active-rotation` anchor (first) **plus** `rotation-mode=forceful-fallback` + `active-rotation-state=draining` + `draining-at=now` (one anchor object); write old NodeClaim `state=draining`; `delete` old NodeClaim — **surge-less: no placeholder, no freeze, no `readyTimeout`** (drains via the voluntary path, PDBs apply); emit the forceful-fallback counter (§4.2) + a `ForcefulFallback` event. Completes through the `draining → *(completed)*` row below, where `rotation-mode` clears with the anchor |
 | `pending` | each reconcile (recovery) | `pending` | re-assert old-node freeze + cordon and persist `surge-claim` as soon as the placeholder's bind target is observable — passive steps that run **even while the NodePool is frozen**; recreate missing placeholder (only while `readyTimeout` has not elapsed — the timeout is checked first, §5.2; exclusion lists recomputed) — placeholder (re)creation and escalation are **held** during a freeze (§3.1) |
-| `pending` | placeholder Running **and not terminating** (`deletionTimestamp` unset) on Ready host ≠ old node, host in the same NodePool | `draining` | freeze surge target (`do-not-disrupt` + `do-not-disrupt-owned` marker + `surge-for`, unless the node already carries an operator's active `do-not-disrupt: true`); write NodePool `active-rotation-state=draining` + `draining-at=now` (write-once, before the delete — the §4.2 drain-duration anchor); `delete` old NodeClaim |
+| `pending` | placeholder Running **and not terminating** (`deletionTimestamp` unset) on Ready host ≠ old node, host in the same NodePool | `draining` | freeze surge target (`surge-for` always; plus `do-not-disrupt` + `do-not-disrupt-owned` marker, skipped only when the node already carries an operator's active `do-not-disrupt: true`); write NodePool `active-rotation-state=draining` + `draining-at=now` (write-once, before the delete — the §4.2 drain-duration anchor); `delete` old NodeClaim |
 | `pending` | `readyTimeout` elapsed | `failed` | reap the induced claim from `surge-claim` (persisted during `pending`; when unset, re-resolved from a still-present placeholder or as the pool's claim created after `started-at` with no registered Node; guards: created after `started-at` **and** hosting only the placeholder — no registered Node passes trivially — §3.3 *Rollback*); delete placeholder; unfreeze + uncordon node(s) carrying this rotation's markers; one update: `state=failed`, `failed-at`, `retry-count += 1`, clear `started-at` + `surge-claim`; emit failure + alert; one NodePool update (last): write `last-failure-at`, clear anchor + `active-rotation-state` |
 | `pending` | old NodeClaim force-expiring (`deletionTimestamp` observed — checked first in the handler, §5.2) | `expired` (terminal) | delete placeholder; unfreeze + uncordon node(s) carrying the markers; write `state=expired` (clear `started-at` + `surge-claim`) **before** the pool clear — blocks re-selection (with the §3.2 `deletionTimestamp` exclusion) and keeps the sweep invariant; emit `expired` + alert (once); **no** `last-rotation-at` (nothing was rotated → no cooldown); clear anchor + `active-rotation-state` (last) |
 | `pending` | old NodeClaim already **gone** with no `draining` mirror (§3.3) | *(aborted)* | delete placeholder; unfreeze + uncordon node(s) carrying the markers; emit `expired` + alert; **no** `last-rotation-at` (no cooldown); clear anchor + `active-rotation-state` (last) |
 | `draining` | old NodeClaim has no `deletionTimestamp` (recovery) | `draining` | re-issue the idempotent `delete` (a missing `draining-at` is left unset — the drain stays uncounted rather than mis-anchored, §4.2) |
 | `draining` | drain exceeds `tGP + buffer` | `draining` (stuck) | stuck-drain signal via the `noderotation_drain_stuck` 0/1 gauge — recomputed each reconcile (so it clears when the drain completes), not a one-shot emission; the serial gate stays held on purpose — see §5.2 |
-| `draining` | old NodeClaim gone | *(completed)* | delete placeholder; unfreeze (+ uncordon by marker) node(s) carrying `surge-for`; write `last-rotation-at`; emit success + the `drain`-phase duration (`now − draining-at`, when anchored); clear anchor + `active-rotation-state` + `draining-at` (last) |
+| `draining` | old NodeClaim gone | *(completed)* | delete placeholder; unfreeze (+ uncordon by marker) node(s) carrying `surge-for`; write `last-rotation-at`; emit success + the `drain`-phase duration (`now − draining-at`, when anchored); clear anchor + `active-rotation-state` + `draining-at` + `rotation-mode` (last; `rotation-mode` present only for a forceful fallback) |
 | `failed` | escalated backoff elapsed **and every start gate passes** — the step-2 set (window / freeze / cooldown / failure pause) plus `surge_headroom` for this claim (§5.2) | `pending` | the `failed` case of `advance()` resets `state` to `pending` (§5.2) — `retry-count` retained, `started-at` re-stamped by the new attempt. A re-entry is a **new** attempt, not an in-flight continuation, so it honors everything a fresh start would; the `expireAfter` backstop covers repeated failure |
 | `failed` | `deletionTimestamp` observed while anchored (re-selection or crash recovery, §5.2) | `expired` (terminal) | the backstop reached a rolled-back claim — the failure path already cleaned the runtime objects; write `state=expired`; emit `expired` + alert; clear anchor + `active-rotation-state` |
 | `expired` | each reconcile while still anchored (crash between the terminal write and the pool clear, §5.2) | `expired` | re-run the cleanup idempotently (placeholder delete; unfreeze + uncordon by markers); clear anchor + `active-rotation-state`; the metric/alert are **not** re-emitted |
@@ -392,7 +406,7 @@ status:                           # observational/derived only — never authori
   conditions:
     - type: Ready
       status: "True"
-      reason: Accepted            # or False/Invalid (unparseable spec), False/Conflict (equal-specificity tie)
+      reason: Accepted            # or False/Invalid (failed reconcile-time validation), False/Conflict (equal-specificity tie)
       message: "policy is valid and governs 2 NodePool(s)"
 ```
 

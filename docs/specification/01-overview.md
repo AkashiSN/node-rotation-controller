@@ -85,7 +85,7 @@ This controller is option 3. Because upstream has explicitly identified user-sid
 
 ### Why Disruption Budgets are not sufficient
 
-Karpenter's `NodePool.spec.disruption.budgets` supports `schedule + duration`, which superficially looks like a maintenance window. In practice it has two structural limitations:
+Karpenter's `NodePool.spec.disruption.budgets` supports `schedule + duration`, which superficially looks like a maintenance window. In practice it has two structural limitations — the two ✗ rows below; the first requirement (△) is achievable only awkwardly:
 
 | Requirement | Achievable with vanilla Karpenter? |
 |-------------|------------------------------------|
