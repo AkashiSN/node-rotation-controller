@@ -44,8 +44,8 @@
 
 | メカニズム | 関係 |
 |-----------|------|
-| Karpenter Consolidation / Drift | **共存**。本コントローラは Expiration 経路のみを肩代わり。Consolidation / Drift の voluntary 置換は Karpenter にそのまま委ねる |
+| Karpenter Consolidation / Drift | **共存**。本コントローラは Expiration 経路のみを肩代わり。Consolidation / Drift の voluntary な disruption は Karpenter にそのまま委ねる |
 | NodePool `expireAfter` | **共存**（バックストップ）。導出された `ageThreshold` は導出式の性質上つねに `expireAfter` を下回り（`A = E − (K·P + t_rot)`、§3.2）、設定されたローテーション回数をスケジュールが保証できない場合は検証が **fatal** で失敗する — 両者のギャップは手動チューニングしない |
 | NodePool `terminationGracePeriod` | **依存**。コントローラが旧 `NodeClaim` を delete した後、Karpenter の termination controller が PDB を尊重して drain し、`terminationGracePeriod` で上限が課される |
 | PodDisruptionBudget | **依存**。NodeClaim delete 後の drain は voluntary 経路で PDB が厳密に効く |
-| `topologySpreadConstraints` | **依存**。surge しても旧 Node 上の全 Pod は drain 時に同時に消える。引き続き分散は必須 |
+| `topologySpreadConstraints` | **依存**。surge しても旧ノード上の全 Pod は drain 時に同時に消える。引き続き分散は必須 |
