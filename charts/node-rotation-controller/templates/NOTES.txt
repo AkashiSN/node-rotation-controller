@@ -3,8 +3,8 @@ node-rotation-controller {{ .Chart.AppVersion }} is installed in namespace {{ .R
 It rotates Karpenter-managed nodes make-before-break within your maintenance
 window, before Karpenter's forceful expireAfter fires (spec §3).
 
-Rotation policy is now a cluster-scoped RotationPolicy CRD (spec §5.4) — one
-object per divergent policy. The former policy.yaml ConfigMap has been removed.
+Rotation policy is a cluster-scoped RotationPolicy CRD (spec §5.4) — one
+object per divergent policy.
 
 Next steps:
 
