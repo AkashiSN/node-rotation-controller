@@ -90,8 +90,8 @@ jobs:
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         run: |
           make generate manifests
-          git diff --exit-code -- api config || { \
-            echo "::error::deepcopy/CRD manifests are stale — run 'make generate manifests' and commit the result"; \
+          git diff --exit-code -- api config charts/node-rotation-controller/crds || { \
+            echo "::error::deepcopy/CRD manifests are stale (including the chart CRD copy) — run 'make generate manifests' and commit the result"; \
             exit 1; \
           }
 
