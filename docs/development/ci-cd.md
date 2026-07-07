@@ -42,10 +42,13 @@ script before it trusts its output — so it can never contribute a stuck
 
 The classifier is `.github/scripts/detect-ci-changes.sh`: a small, pure shell
 script (no `git`, no GitHub Actions context) that reads a newline-separated
-list of changed paths on stdin and prints four booleans. `ci.yaml` feeds it
+list of changed paths on stdin and prints four booleans.
+
+`ci.yaml` feeds it
 `git diff --name-only "$BASE_SHA" HEAD` on a pull request, or treats every
 flag as `true` on a direct push to `main` (there is no PR base to diff
 against, and a push to `main` should always run everything).
+
 `.github/scripts/detect-ci-changes.test.sh` unit-tests the classifier against
 a table of sample path sets and runs on every CI invocation, so the gating
 logic itself cannot silently rot.
@@ -91,15 +94,19 @@ suite always runs.
 
 `release.yaml` triggers only on `v*` tags, not on every push, so it has no
 `pending`-required-check exposure — release workflows are not part of branch
-protection. It runs four sequential jobs: `guard` fails fast if the pushed
-tag disagrees with `Chart.yaml`'s version; `image` builds and pushes the
-multi-arch (`linux/amd64`, `linux/arm64`) controller image to
-`ghcr.io/akashisn/node-rotation-controller`, tagging `latest` unless the tag
-is a hyphenated pre-release (e.g. `v0.4.0-rc.1`); `chart` packages the Helm
-chart and pushes it as an OCI artifact to `oci://ghcr.io/akashisn/charts`;
-and `release` downloads the packaged chart and creates a GitHub Release from
-it, marked as a pre-release for the same hyphenated tags the image job skips
-for `latest`.
+protection. It runs four sequential jobs:
+
+- `guard` — fails fast if the pushed tag disagrees with `Chart.yaml`'s
+  version;
+- `image` — builds and pushes the multi-arch (`linux/amd64`,
+  `linux/arm64`) controller image to
+  `ghcr.io/akashisn/node-rotation-controller`, tagging `latest` unless the
+  tag is a hyphenated pre-release (e.g. `v0.4.0-rc.1`);
+- `chart` — packages the Helm chart and pushes it as an OCI artifact to
+  `oci://ghcr.io/akashisn/charts`;
+- `release` — downloads the packaged chart and creates a GitHub Release
+  from it, marked as a pre-release for the same hyphenated tags the image
+  job skips for `latest`.
 
 ## `pages.yaml`: docs deploy
 

@@ -41,10 +41,13 @@
 分類器は `.github/scripts/detect-ci-changes.sh` であり、変更されたパスの
 改行区切りリストを標準入力から読み、4 つの真偽値を出力する、小さく純粋な
 シェルスクリプト（`git` も GitHub Actions のコンテキストも使わない）である。
+
 `ci.yaml` は pull request では `git diff --name-only "$BASE_SHA" HEAD` の
 出力をこれに渡し、`main` への直接 push では全フラグを `true` として扱う（PR
 のベースとの diff が存在せず、`main` への push では常にすべて（全ステップ）を実行すべき
-であるため）。`.github/scripts/detect-ci-changes.test.sh` はサンプルとなる
+であるため）。
+
+`.github/scripts/detect-ci-changes.test.sh` はサンプルとなる
 パス集合の表に対して分類器をユニットテストし、CI が実行されるたびに走る
 ため、ゲーティングロジック自体が気づかれないうちに壊れることはない。
 
@@ -87,15 +90,19 @@
 
 `release.yaml` は `v*` タグの push のみでトリガーされ、通常の push では動かない
 ため `pending` 必須チェックのリスクがない — release 系ワークフローはブランチ
-保護の対象外である。逐次実行される 4 つのジョブから成る: `guard` は push された
-タグが `Chart.yaml` のバージョンと食い違っていれば即座に失敗する; `image` は
-マルチアーキ（`linux/amd64`、`linux/arm64`）のコントローライメージを
-`ghcr.io/akashisn/node-rotation-controller` へビルド・push し、ハイフン付きの
-プレリリースタグ（例: `v0.4.0-rc.1`）でない限り `latest` タグも付与する;
-`chart` は Helm chart をパッケージし `oci://ghcr.io/akashisn/charts` へ OCI
-アーティファクトとして push する; `release` はパッケージ済み chart を
-ダウンロードし、それを添付した GitHub Release を作成し、`image` ジョブが `latest` を
-スキップするのと同じハイフン付きタグに対してはプレリリースとしてマークする。
+保護の対象外である。逐次実行される 4 つのジョブから成る:
+
+- `guard` は push されたタグが `Chart.yaml` のバージョンと食い違っていれば
+  即座に失敗する;
+- `image` はマルチアーキ（`linux/amd64`、`linux/arm64`）のコントローラ
+  イメージを `ghcr.io/akashisn/node-rotation-controller` へビルド・push し、
+  ハイフン付きのプレリリースタグ（例: `v0.4.0-rc.1`）でない限り `latest`
+  タグも付与する;
+- `chart` は Helm chart をパッケージし `oci://ghcr.io/akashisn/charts` へ
+  OCI アーティファクトとして push する;
+- `release` はパッケージ済み chart をダウンロードし、それを添付した GitHub
+  Release を作成し、`image` ジョブが `latest` をスキップするのと同じハイフン
+  付きタグに対してはプレリリースとしてマークする。
 
 ## `pages.yaml`: ドキュメントデプロイ
 
