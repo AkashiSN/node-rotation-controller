@@ -49,7 +49,7 @@ The consequence is a **hard constraint**: a same-AZ capacity shortage **cannot
 fall back to another zone**. If the candidate's AZ has no schedulable capacity
 for a same-zone replacement, the surge cannot complete. The placeholder Pod
 never goes `Running`, `readyTimeout` fires, and the rotation rolls back to the
-`expireAfter` baseline ([§3.3 *Rollback*](specification/03-design.md#33-surge-sequence-v1)).
+`expireAfter` baseline ([§3.3 *Rollback behavior*](specification/03-design.md#33-surge-sequence-v1)).
 Repeated same-AZ shortages surface as an escalating `noderotation_retry_count`
 (risk [R3](specification/07-risks.md#71-risks)).
 

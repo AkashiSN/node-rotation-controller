@@ -239,7 +239,7 @@ The configuration schema in §5.4 already includes a placeholder field for v2.
 
 If the controller is unavailable, the following safety net engages in order:
 
-1. Karpenter Consolidation / Drift may still rotate some nodes (e.g., on AMI drift)
+1. Karpenter Consolidation / Drift may still rotate some nodes via the voluntary path (e.g., on AMI drift)
 2. NodePool `expireAfter` triggers Forceful drain on overdue nodes
 3. NodePool `terminationGracePeriod` bounds the drain
 4. The Auto Mode 21-day hard cap is the final ceiling
