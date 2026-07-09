@@ -320,20 +320,40 @@ func TestDeriveShortWindowStillEvaluatesThroughput(t *testing.T) {
 	absent(t, r, "ThroughputZero")
 	has(t, r, "ThroughputBelowArrival", Warn)   // C·A = 167.5h < N·P = 432h
 	has(t, r, "ThroughputBurstShortfall", Warn) // N=3 > K·C = 2
-	has(t, r, "RotationSpansNextWindow", Warn)  // tRot 24h30m > idle gap 22h30m
+	has(t, r, "RotationSpansNextWindow", Warn)  // tRot 24h30m + cooldown 10m > idle gap 22h30m
 }
 
-// TestDeriveRotationSpansNextWindow pins D3 (issue #211). The check is a strict
-// `t_rot > idleGap`: a rotation that finishes exactly as the next occurrence
-// opens has released the serial gate and does not consume it.
+// TestDeriveRotationSpansNextWindow pins D3 (issue #211). The gate a rotation
+// holds is t_rot + cooldownAfter — the same denom that spaces starts inside an
+// occurrence — and the check is a strict `denom > idleGap`: a gate that frees
+// exactly as the next occurrence opens does not consume it.
 func TestDeriveRotationSpansNextWindow(t *testing.T) {
-	in := baseAuto() // tRot = 90m
+	in := baseAuto() // denom = tRot 90m + cooldown 10m = 100m
 
-	in.IdleGap = new(89 * time.Minute)
+	in.IdleGap = new(99 * time.Minute)
 	has(t, Derive(in), "RotationSpansNextWindow", Warn)
 
-	in.IdleGap = new(90 * time.Minute) // exactly t_rot: the gate is free again
+	in.IdleGap = new(100 * time.Minute) // exactly denom: the gate is free again
 	absent(t, Derive(in), "RotationSpansNextWindow")
+}
+
+// TestDeriveRotationSpansNextWindowCountsCooldown guards the false negative a
+// t_rot-only predicate leaves: cooldownAfter is stamped at *completion* and keeps
+// the per-NodePool start gate shut afterwards, so a rotation whose drain finishes
+// before the next occurrence opens can still block that occurrence's first start.
+// Here t_rot = 90m ends 10m before the window reopens, but the 30m cooldown runs
+// 20m into it — no start is legal there, yet t_rot alone would stay silent.
+func TestDeriveRotationSpansNextWindowCountsCooldown(t *testing.T) {
+	in := baseAuto()
+	in.Cooldown = 30 * time.Minute
+	in.RetryBackoff = 30 * time.Minute // keep RetryBackoffShort out of the picture
+	in.IdleGap = new(100 * time.Minute)
+
+	r := Derive(in)
+	if r.TRot > *in.IdleGap {
+		t.Fatalf("precondition: t_rot %v must not exceed the idle gap %v on its own", r.TRot, *in.IdleGap)
+	}
+	has(t, r, "RotationSpansNextWindow", Warn)
 }
 
 // TestDeriveRotationSpansNextWindowSkippedWhenGapUndefined: a continuously-open

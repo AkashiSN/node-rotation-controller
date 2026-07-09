@@ -68,9 +68,9 @@ func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 
 // TestDerivedThresholdsPassesIdleGap covers the issue #211 wiring: the carry-over
 // check fires only when the reconciler supplies the schedule's shortest idle gap.
-// The 23h59m daily window closes for one minute, which t_rot = 1h plainly spans;
-// a nil gap (a continuously-open window, where nothing can carry into a "next"
-// occurrence) must silence the check instead.
+// The 23h59m daily window closes for one minute, which the 70m serial gate
+// (t_rot 1h + cooldown 10m) plainly spans; a nil gap (a continuously-open window,
+// where nothing can carry into a "next" occurrence) must silence the check instead.
 func TestDerivedThresholdsPassesIdleGap(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	r := newReconciler(t, testNow, nil, pool)
@@ -82,7 +82,7 @@ func TestDerivedThresholdsPassesIdleGap(t *testing.T) {
 
 	got := r.derivedThresholds(pool, res, p, d, &gap, 3)
 	if !hasFinding(got.Findings, "RotationSpansNextWindow") {
-		t.Errorf("RotationSpansNextWindow expected: t_rot 1h > idle gap %v; findings=%+v", gap, got.Findings)
+		t.Errorf("RotationSpansNextWindow expected: t_rot 1h + cooldown 10m > idle gap %v; findings=%+v", gap, got.Findings)
 	}
 
 	none := r.derivedThresholds(pool, res, p, d, nil, 3)

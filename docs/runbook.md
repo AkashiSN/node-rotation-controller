@@ -94,10 +94,10 @@ With the stock `tGP = 24h`, `t_rot ≈ 24.5h`, so a typical 4-hour window comput
 window gates only rotation *starts*, and an in-flight rotation continues past the
 window's close — but it makes `K · C` the entire budget a synchronized batch has
 before its shared deadline. On the defaults (`K = 2`) that budget is **two nodes**,
-so a pool of any realistic size warns with `ThroughputBurstShortfall`, and a
-`t_rot` that exceeds the interval between occurrences additionally warns with
-`RotationSpansNextWindow` (the rotation still holds the serial gate when the next
-window opens).
+so a pool of any realistic size warns with `ThroughputBurstShortfall`. And when
+`t_rot + cooldownAfter` exceeds the interval the window stays *closed*,
+`RotationSpansNextWindow` additionally warns: the rotation still holds the serial
+start gate when the next window opens.
 
 **Guidance.** Lowering `tGP` is a legitimate operational choice — for the
 stuck-drain bound and the 21-day cap below — but treat it as **tuning a safety
@@ -394,7 +394,7 @@ the section that fixes it. The signal strings are the exact ones from
 | Surge node never appears; the placeholder Pod stays `Pending` and rotations end in `failure` | `noderotation_duration_seconds{phase="surge_wait"}` climbing; `noderotation_completed_total{outcome="failure"}` | No schedulable **same-AZ** capacity for the replacement (zonal-PV pin) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) |
 | `noderotation_candidates` never trends to `0` across two windows | `NodeRotationCandidatesNotDraining` ([R2](specification/07-risks.md#71-risks)) | Throughput too low for the window, **or** rotation wedged for one of the causes below | [§2](#2-lowering-auto-mode-terminationgraceperiod), then scan the rows below |
 | `ThroughputBurstShortfall` warning on **every** window | `ThroughputBurstShortfall` Warning Event | `K · C` is smaller than the pool's node count — the window is too short (or `tGP` too large) to rotate a synchronized batch before its shared deadline | [§2](#2-lowering-auto-mode-terminationgraceperiod) |
-| `RotationSpansNextWindow` warning | `RotationSpansNextWindow` Warning Event | `t_rot` exceeds the interval the window stays closed, so one rotation holds the serial gate into the following occurrence and `K · C` overstates capacity | [§2](#2-lowering-auto-mode-terminationgraceperiod) |
+| `RotationSpansNextWindow` warning | `RotationSpansNextWindow` Warning Event | `t_rot + cooldownAfter` exceeds the interval the window stays closed, so one rotation holds the serial start gate into the following occurrence and `K · C` overstates capacity | [§2](#2-lowering-auto-mode-terminationgraceperiod) |
 | A drain hangs past `tGP + buffer` | `noderotation_drain_stuck == 1`; `NodeRotationDrainStuck` | Unsatisfiable PDB or a stuck Pod finalizer | [§5](#5-handling-a-stuck-drain) |
 | `noderotation_in_progress` stuck at `1` with no new completions | `NodeRotationStalledInWindow` | Either the surge is not coming up (→ §1) or the drain is stuck (→ §5) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) / [§5](#5-handling-a-stuck-drain) |
 | A NodePool never rotates; candidates frozen and no rotation starts | `noderotation_policy_conflict == 1`; `PolicyConflict` Warning Event | An equal-specificity `RotationPolicy` selector tie, or a runtime-invalid governing policy | [§3](#3-interpreting-the-noderotation_-metrics) metric row, [spec §5.4](specification/05-implementation.md#54-configuration-schema) |

@@ -93,8 +93,9 @@
 （ウィンドウはローテーションの *開始* のみをゲートし、実行中のものはウィンドウの終端を越えて
 継続する）が、共有 deadline を持つ同期バッチに与えられる枠は `K · C` がすべてになる。既定
 （`K = 2`）ではそれは **2 台** であり、現実的な規模のプールは `ThroughputBurstShortfall` で
-警告される。さらに `t_rot` がウィンドウ機会の間隔を超えると `RotationSpansNextWindow` も
-警告される（次のウィンドウが開いた時点でもローテーションが直列ゲートを握ったままになる）。
+警告される。さらに `t_rot + cooldownAfter` がウィンドウの*閉じている*区間を超えると
+`RotationSpansNextWindow` も警告される（次のウィンドウが開いた時点でもローテーションが
+直列の start ゲートを握ったままになる）。
 
 **指針。** `tGP` を下げるのは正当な運用判断である — 下記の stuck-drain 判定と 21 日キャップの
 ためには。ただしそれは **安全側の上限のチューニングであって、スループット警告を黙らせる手段
@@ -376,7 +377,7 @@ helm upgrade --install rot charts/node-rotation-controller \
 | surge ノードが現れない。placeholder Pod が `Pending` のままでローテーションが `failure` で終わる | `noderotation_duration_seconds{phase="surge_wait"}` の増大、`noderotation_completed_total{outcome="failure"}` | 置換用の **同一 AZ** スケジュール可能容量がない（ゾーン制約 PV のピン） | [§1](#1-ゾーン制約-pv-ワークロード向けの-az-ごとの-surge-ヘッドルーム) |
 | `noderotation_candidates` が 2 ウィンドウにわたり `0` に向かわない | `NodeRotationCandidatesNotDraining`（[R2](specification/07-risks.md#71-リスク)） | ウィンドウに対しスループットが低すぎる、**または** 下記いずれかの原因でローテーションが詰まっている | [§2](#2-auto-mode-の-terminationgraceperiod-を下げる)、その後で下の行を確認 |
 | **毎ウィンドウ** `ThroughputBurstShortfall` 警告 | `ThroughputBurstShortfall` Warning イベント | `K · C` がプールのノード台数を下回る — 共有 deadline までに同期バッチを回すにはウィンドウが短すぎる（あるいは `tGP` が大きすぎる） | [§2](#2-auto-mode-の-terminationgraceperiod-を下げる) |
-| `RotationSpansNextWindow` 警告 | `RotationSpansNextWindow` Warning イベント | `t_rot` がウィンドウの閉じている区間を超え、1 件のローテーションが次の機会まで直列ゲートを握るため `K · C` が容量を過大評価する | [§2](#2-auto-mode-の-terminationgraceperiod-を下げる) |
+| `RotationSpansNextWindow` 警告 | `RotationSpansNextWindow` Warning イベント | `t_rot + cooldownAfter` がウィンドウの閉じている区間を超え、1 件のローテーションが次の機会まで直列の start ゲートを握るため `K · C` が容量を過大評価する | [§2](#2-auto-mode-の-terminationgraceperiod-を下げる) |
 | drain が `tGP + buffer` を超えて詰まる | `noderotation_drain_stuck == 1`、`NodeRotationDrainStuck` | 満たせない PDB か詰まった Pod finalizer | [§5](#5-drain-が詰まったときの対処) |
 | `noderotation_in_progress` が `1` のまま新規完了がない | `NodeRotationStalledInWindow` | surge が立ち上がっていない（→ §1）か drain が詰まっている（→ §5） | [§1](#1-ゾーン制約-pv-ワークロード向けの-az-ごとの-surge-ヘッドルーム) / [§5](#5-drain-が詰まったときの対処) |
 | ある NodePool が一切ローテーションせず、候補が固まり開始もしない | `noderotation_policy_conflict == 1`、`PolicyConflict` Warning イベント | 同一 specificity の `RotationPolicy` セレクタ同点、またはランタイム不正な統治ポリシー | [§3](#3-noderotation_-メトリクスの読み方) のメトリクス行、[spec §5.4](specification/05-implementation.md#54-設定スキーマ) |

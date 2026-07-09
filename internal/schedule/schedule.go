@@ -228,14 +228,17 @@ func layer2(in Inputs, r Result) []Finding {
 
 	// spec §3.2 layer-2 (carry-over): C counts the legal starts within one occurrence
 	// but does not establish that consecutive occurrences are independent. Because the
-	// window gates only starts (§3.1), a rotation begun near an occurrence's close runs
-	// for up to t_rot and still holds the per-NodePool serial gate (§5.2 step 2) when
-	// the next occurrence opens, consuming part or all of it. K·C above therefore reads
-	// as an upper bound whenever this warns. IdleGap is nil when the union never closes
-	// (a continuously-open window has no next occurrence to carry into).
-	if in.IdleGap != nil && r.TRot > *in.IdleGap {
+	// window gates only starts (§3.1), a rotation begun near an occurrence's close
+	// holds the per-NodePool serial gate (§5.2 step 2) for t_rot + cooldownAfter — the
+	// same denom that spaces starts inside an occurrence: cooldownAfter is counted from
+	// completion, so it keeps blocking starts after t_rot elapses. When that exceeds the
+	// interval the window stays closed, the gate is still held as the next occurrence
+	// opens and consumes part or all of it, so K·C above reads as an upper bound.
+	// IdleGap is nil when the union never closes (a continuously-open window has no
+	// next occurrence to carry into).
+	if denom := r.TRot + in.Cooldown; in.IdleGap != nil && denom > *in.IdleGap {
 		fs = append(fs, Finding{Severity: Warn, Code: "RotationSpansNextWindow",
-			Message: fmt.Sprintf("t_rot %v exceeds the %v the maintenance window stays closed between occurrences: a rotation started near a window's close still holds the serial rotation gate when the next occurrence opens, so adjacent occurrences do not each deliver a full C=%d — read K·C as an upper bound; space the occurrences further apart or lower terminationGracePeriod", r.TRot, *in.IdleGap, r.C)})
+			Message: fmt.Sprintf("a rotation holds the serial start gate for t_rot %v + cooldown %v = %v, longer than the %v the maintenance window stays closed between occurrences: a rotation started near a window's close still holds the gate when the next occurrence opens, so adjacent occurrences do not each deliver a full C=%d — read K·C as an upper bound; space the occurrences further apart, or lower terminationGracePeriod or cooldownAfter", r.TRot, in.Cooldown, denom, *in.IdleGap, r.C)})
 	}
 
 	return fs

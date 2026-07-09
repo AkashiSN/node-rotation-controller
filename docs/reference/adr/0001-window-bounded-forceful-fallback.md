@@ -4,6 +4,8 @@
 - Date: 2026-06-30
 - Issue: [#156](https://github.com/AkashiSN/node-rotation-controller/issues/156)
 
+> **Note (2026-07-09, [#211](https://github.com/AkashiSN/node-rotation-controller/issues/211)).** This ADR records the layer-2 throughput model as it stood when the decision was made. Layer 2 now counts rotation *starts* with `C = m·ceil(D / (t_rot + cooldownAfter))`, and the `ThroughputZero` finding it could produce no longer exists — see [§3.2](../../specification/03-design.md#32-candidate-selection) for the current model. The `floor` formula quoted in *Context* below is the pre-#211 one. The decision itself is unaffected: it turns on capacity falling below demand (`C·A < N·P`), not on how `C` rounds.
+
 ## Context
 
 The controller's core promise (G1) is to **prevent Forceful Expiration from firing in practice** by replacing nodes gracefully, in a maintenance window, before each node's `expireAfter` deadline. Two architectural invariants encode *how*: the controller **never bypasses Karpenter** (it deletes the old `NodeClaim` and lets the termination controller drain via the voluntary path, where PDBs apply — G4), and **v1 is surge-only** (every replacement is a node-level make-before-break: a placeholder Pod induces replacement capacity that must be `Ready` before the old node is drained).
