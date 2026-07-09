@@ -55,7 +55,8 @@
         },
         "drainStuck": { "$ref": "#/definitions/alertTuning" },
         "shortLeadNodes": { "$ref": "#/definitions/alertTuning" },
-        "retryCountHigh": { "$ref": "#/definitions/alertTuning" }
+        "retryCountHigh": { "$ref": "#/definitions/alertTuning" },
+        "forcefulFallback": { "$ref": "#/definitions/alertTuning" }
       }
     },
     "podDisruptionBudget": {

@@ -96,7 +96,7 @@ metrics:
 # (especially the window-period-dependent ones) without editing the template.
 # See the production runbook (docs/runbook.md) for how to read the metrics.
 prometheusRule:
-  # -- Create a PrometheusRule with the six §4.2 alerts.
+  # -- Create a PrometheusRule with the seven §4.2 alerts.
   enabled: false
   # -- Extra labels for the PrometheusRule (e.g. a Prometheus release selector).
   labels: {}
@@ -134,6 +134,13 @@ prometheusRule:
   retryCountHigh:
     for: 0m
     severity: warning
+  # A window-bounded forceful fallback fired (spec §3.3, ADR-0001). Per ADR-0001
+  # a single fallback is the designed outcome for a synchronized batch too large
+  # to rotate gracefully, so this ships as an info-level visibility signal, not a
+  # page. Tighten it for your environment (e.g. a sustained rate at `warning`).
+  forcefulFallback:
+    for: 0m
+    severity: info
 
 podDisruptionBudget:
   # -- Create a PodDisruptionBudget for the controller. With replicaCount=2 and

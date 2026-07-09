@@ -76,8 +76,9 @@ Suggested alerts:
 - `noderotation_drain_stuck == 1` (drain blocked past `tGP + buffer` — blocking PDB or stuck finalizer; §5.2)
 - `noderotation_short_lead_nodes > 0` (NodeClaims whose stamped `expireAfter` can no longer guarantee `K` chances; §3.2 layer 3)
 - `noderotation_retry_count >= 3` (the same rotation keeps failing — systematic cause such as sustained placeholder preemption or same-AZ capacity shortage; §5.3)
+- `increase(noderotation_forceful_fallback_total[1h]) > 0` (a window-bounded forceful fallback fired — a graceful surge lost the race to the deadline; §3.3, ADR-0001. A single fallback is by design, so this ships at `severity: info`; tighten it to a sustained rate for your environment)
 
-> The Helm chart ships these six alerts as an **optional** `PrometheusRule`, gated behind `prometheusRule.enabled` (default `false`). The schedule-dependent ranges (two-window and full-window) are chart values, since `P`/`D` come from the operator's `maintenanceWindows`. See the [production runbook](../runbook.md) for how to read each metric and tune the alerts.
+> The Helm chart ships these seven alerts as an **optional** `PrometheusRule`, gated behind `prometheusRule.enabled` (default `false`). The schedule-dependent ranges (two-window and full-window) are chart values, since `P`/`D` come from the operator's `maintenanceWindows`. See the [production runbook](../runbook.md) for how to read each metric and tune the alerts.
 
 ## 4.3 RBAC and Cloud Permissions
 

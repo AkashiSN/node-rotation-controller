@@ -109,4 +109,22 @@ spec:
               {{`{{ $value }}`}} times — a systematic cause such as sustained
               placeholder preemption or a same-AZ capacity shortage (spec §5.3,
               R3). See docs/runbook.md.
+        # A window-bounded forceful fallback (ADR-0001) fired: a candidate that
+        # could not finish a graceful surge before its own deadline was rotated
+        # surge-less (spec §3.3). Per ADR-0001 a *single* fallback is the designed
+        # outcome for a synchronized batch too large to rotate gracefully, so this
+        # is an info-level visibility signal, not a page. Tighten it for your
+        # environment (e.g. a sustained rate at `warning`).
+        - alert: NodeRotationForcefulFallback
+          expr: increase(noderotation_forceful_fallback_total[1h]) > 0
+          for: {{ .Values.prometheusRule.forcefulFallback.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.forcefulFallback.severity }}
+          annotations:
+            summary: node-rotation-controller performed a forceful fallback
+            description: >-
+              {{`{{ $value }}`}} window-bounded forceful fallback(s) on NodePool
+              {{`{{ $labels.nodepool }}`}} in the last hour — graceful surges are
+              losing the race to the deadline (spec §3.3, ADR-0001). See
+              docs/runbook.md.
 {{- end }}
