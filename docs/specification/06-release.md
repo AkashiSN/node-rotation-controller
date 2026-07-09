@@ -11,6 +11,13 @@
   Helm chart (`oci://ghcr.io/akashisn/charts/node-rotation-controller`). The
   release pipeline guards that the tag matches `Chart.yaml` `version`==`appVersion`
   before publishing; the tag is the source of truth.
+- **Supply-chain attestations.** Both OCI artifacts are published with a keyless
+  cosign signature and a GitHub build-provenance (SLSA) attestation bound to the
+  release workflow's OIDC identity — no key material. The image also carries an
+  in-registry SBOM and SLSA provenance from the build, and each GitHub Release
+  attaches a downloadable SPDX SBOM. Attestation and signing run for pre-release
+  tags too. Verification instructions (`cosign verify`, `gh attestation verify`)
+  live in [`SECURITY.md`](https://github.com/AkashiSN/node-rotation-controller/blob/main/SECURITY.md#verifying-releases).
 - Install: `helm install ... oci://ghcr.io/akashisn/charts/node-rotation-controller --version X.Y.Z`.
 
 ## 6.2 Roadmap

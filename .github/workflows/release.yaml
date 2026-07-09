@@ -6,21 +6,29 @@ on:
     tags:
       - 'v*'
 
-# contents: write -> create the GitHub Release; packages: write -> push to ghcr.
+# Least-privilege baseline: jobs get only what they need via per-job
+# `permissions:` below. `contents: write` is narrowed to the `release` job that
+# creates the GitHub Release; only the publishing jobs get `id-token`/
+# `attestations`/`packages`.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 env:
   IMAGE: ghcr.io/akashisn/node-rotation-controller
   CHART_DIR: charts/node-rotation-controller
   CHART_OCI: oci://ghcr.io/akashisn/charts
+  CHART_IMAGE: ghcr.io/akashisn/charts/node-rotation-controller
+  # cosign is only needed by this release pipeline (not local dev), so it is
+  # pinned here rather than in aqua.yaml.
+  COSIGN_VERSION: v3.1.1
 
 jobs:
   # Fail fast if the tag disagrees with Chart.yaml. The git tag is the source of
   # truth; Chart.yaml is the human-readable record and must match it.
   guard:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
@@ -34,6 +42,11 @@ jobs:
   image:
     needs: guard
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # push the image to ghcr.io
+      id-token: write      # keyless cosign signing + attestation OIDC
+      attestations: write  # actions/attest-build-provenance
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-qemu-action@v3
@@ -54,6 +67,7 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
       - name: Build and push (multi-arch)
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -61,10 +75,60 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Emit an in-registry SBOM and full-mode SLSA provenance next to the
+          # manifest. For a multi-arch build the push is already an OCI image
+          # index; these add attestation manifests referenced from that index,
+          # and `steps.build.outputs.digest` is the index digest we attest/sign.
+          sbom: true
+          provenance: mode=max
+      # GitHub-native build provenance for the pushed image, attesting the
+      # immutable index digest and storing it in the registry alongside the
+      # manifest (verifiable with `gh attestation verify`).
+      - name: Attest image build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      # Pinned to an exact tag, unlike the major-pinned actions above: this is
+      # the latest cosign-installer, and upstream publishes no `v4` moving tag
+      # (only v4.0.0 … v4.1.2), so `@v4` would not resolve.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      # Keyless signature over the same index digest, using the workflow's OIDC
+      # identity (no key material). Runs for prerelease tags too.
+      - name: Sign image (keyless)
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+      # A downloadable SBOM for the GitHub Release, so consumers can inspect the
+      # image contents without a registry/OCI client. syft writes `output-file`
+      # but does not create its parent directory, and nothing else in this job
+      # produces `dist/`.
+      - name: Create output directory
+        run: mkdir -p dist
+      - name: Generate SBOM (SPDX JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: dist/node-rotation-controller-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-sbom
+          path: dist/node-rotation-controller-sbom.spdx.json
 
   chart:
     needs: [guard, image]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # push the chart to ghcr.io (Helm OCI)
+      id-token: write      # keyless cosign signing + attestation OIDC
+      attestations: write  # actions/attest-build-provenance
     steps:
       - uses: actions/checkout@v6
       - uses: aquaproj/aqua-installer@v4.0.4
@@ -77,9 +141,48 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+      # `helm registry login` writes only Helm's own credential store
+      # (~/.config/helm/registry/config.json). cosign and the attestation action
+      # authenticate through the Docker keychain (~/.docker/config.json), so
+      # without this step both would hit ghcr.io unauthenticated and fail to
+      # push the signature and the attestation.
+      - name: Log in to ghcr.io (Docker keychain, for cosign + attestation)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push chart to OCI registry
+        id: push
         run: |
-          helm push "dist/node-rotation-controller-${{ needs.guard.outputs.version }}.tgz" "${CHART_OCI}"
+          set -euo pipefail
+          # helm push prints "Digest: sha256:..." to stderr; capture it so we can
+          # attest and sign the exact OCI manifest that `helm install` pulls.
+          helm push "dist/node-rotation-controller-${{ needs.guard.outputs.version }}.tgz" "${CHART_OCI}" 2>&1 | tee push.out
+          digest="$(awk '/Digest:/ {print $2}' push.out)"
+          if [ -z "${digest}" ]; then
+            echo "::error::could not parse chart OCI digest from helm push output"
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+      # Attest the pushed OCI manifest digest (not the .tgz): it is the immutable
+      # artifact `helm pull/install oci://...` resolves, so verification anchors
+      # to what users actually run.
+      - name: Attest chart build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.CHART_IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      # Pinned to an exact tag, unlike the major-pinned actions above: this is
+      # the latest cosign-installer, and upstream publishes no `v4` moving tag
+      # (only v4.0.0 … v4.1.2), so `@v4` would not resolve.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - name: Sign chart (keyless)
+        run: cosign sign --yes "${CHART_IMAGE}@${{ steps.push.outputs.digest }}"
       - name: Upload packaged chart artifact
         uses: actions/upload-artifact@v4
         with:
@@ -89,16 +192,25 @@ jobs:
   release:
     needs: [guard, chart]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the GitHub Release
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: chart-tgz
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: image-sbom
+          path: dist
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: dist/*.tgz
+          # Ship the chart .tgz and a downloadable SBOM as release assets.
+          files: |
+            dist/*.tgz
+            dist/node-rotation-controller-sbom.spdx.json
           # Mark hyphenated SemVer pre-release tags (e.g. v0.4.0-rc.1, -beta, -alpha)
           # as prereleases so they do not surface as "Latest"; GA tags (v0.3.0)
           # publish as normal. Mirrors the image job, which skips the `latest` tag
