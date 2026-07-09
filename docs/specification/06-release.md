@@ -19,6 +19,11 @@
 |-----------|---------|
 | v0.1 (spec) | This document |
 | v0.2 (skeleton) | Project layout, controller-runtime bootstrap, leader election, CI |
-| v0.3 (MVP, v1 surge) | Reconcile + surge + drain + metrics + Helm chart |
-| v0.4 | Pre-pull (v2 feature) |
-| v1.0 | Stable `RotationPolicy` CRD (`v1`), documented production runbook, soak-tested on a real EKS Auto Mode cluster |
+| v0.3 (MVP, v1 surge) | Reconcile + surge + drain + metrics + Helm chart; the cluster-scoped `RotationPolicy` CRD (§5.4) supersedes the ConfigMap |
+| v0.4 | The chart renders one `RotationPolicy` per `rotationPolicies` entry, so a single install can give each NodePool its own window, `ageThreshold`, and surge |
+| v0.5 | Opt-in window-bounded surge-less forceful fallback (§3.3, ADR-0001); earliest-deadline candidate ordering (§3.2); operator-owned `karpenter.sh/do-not-disrupt` excludes a node from candidate selection (§3.2); `ThroughputBurstShortfall` detection for synchronized batches (§3.2); the published documentation site |
+| v1.0 | Stable `RotationPolicy` CRD (`v1`), documented production runbook, soak-tested on a real EKS Auto Mode cluster. Two items from §7.2 remain open: a genuine same-AZ capacity shortage (ICE) driving rollback, and a full multi-hour tight-race `expireAfter` soak |
+
+Image **pre-pull** is not scheduled against a milestone. It remains a reserved v2
+expansion point behind a disabled config flag (§3.4); the v1 parser accepts only
+`prePull.enabled`, which must be `false`.

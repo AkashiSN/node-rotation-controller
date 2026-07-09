@@ -1,7 +1,7 @@
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.4.0_released_(pre--1.0)-blue.svg)](docs/specification/)
+[![Status](https://img.shields.io/badge/status-v0.5.0_released_(pre--1.0)-blue.svg)](docs/specification/)
 
 A Kubernetes controller that proactively rotates Karpenter-managed nodes within a defined maintenance window, using **make-before-break (surge)** semantics, before Karpenter's forceful `expireAfter` triggers.
 
@@ -9,9 +9,11 @@ Designed for EKS Auto Mode and any Karpenter v1+ environment where node expirati
 
 ## Status
 
-**v0.4.0 — v1 surge MVP, released (pre-1.0).** The v1 make-before-break rotation state machine (spec §5.2), `ageThreshold`/candidate derivation (§3.2), surge placeholder (§3.3), metrics and Warning Events (§4.2), the Helm chart, and the Karpenter v1 startup preflight (§5.1) are implemented, with unit tests and an envtest smoke test in CI.
+**v0.5.0 — v1 surge MVP, released (pre-1.0).** The v1 make-before-break rotation state machine (spec §5.2), `ageThreshold`/candidate derivation (§3.2), surge placeholder (§3.3), metrics and Warning Events (§4.2), the Helm chart, and the Karpenter v1 startup preflight (§5.1) are implemented, with unit tests and an envtest smoke test in CI.
 
-The core surge path is validated on EKS Auto Mode across a full rotation regression suite; a multi-hour tight-race soak remains the open item before v1.0 (see the [roadmap](docs/specification/06-release.md#62-roadmap)).
+v0.5.0 adds three things on top of that. An **opt-in, window-bounded surge-less forceful fallback** (`surge.forcefulFallback`, default off; ADR-0001): when a candidate cannot finish a graceful surge before its own `expireAfter` deadline, the controller deletes its `NodeClaim` inside the window — still via Karpenter's voluntary, PDB-respecting path — rather than leaving it to be force-expired at an uncontrolled time. Candidates are now ordered by **earliest deadline** rather than oldest first, so the node closest to expiry rotates next. And a node carrying an **operator-owned `karpenter.sh/do-not-disrupt`** annotation is excluded from candidate selection.
+
+The core surge path is validated on EKS Auto Mode across a full rotation regression suite, including a trick-free forceful-fallback run on a synchronized batch. A genuine same-AZ capacity shortage (ICE) driving rollback, and a multi-hour tight-race soak, remain the open items before v1.0 (see the [roadmap](docs/specification/06-release.md#62-roadmap)).
 
 Still **pre-1.0** — the configuration surface may change between minor releases. [docs/specification/](docs/specification/) remains the source of truth for the design; see [Compatibility](#compatibility) for the Karpenter contract.
 
