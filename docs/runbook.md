@@ -433,6 +433,21 @@ A `RotationPolicy` that uses a field the installed CRD does not yet know is
 rejected at admission, so applying the CRD first avoids a window where the new
 policy cannot be written.
 
+**Which releases changed the CRD.** The table is newest first. Find the version
+you are on and read every row above it: if any of them changed the schema, the
+`kubectl apply` above is needed once, before `helm upgrade`.
+
+| Release | `RotationPolicy` schema change | Action when upgrading into it |
+| --- | --- | --- |
+| `v0.5.0` | `surge.forcefulFallback` added (additive; defaults to `enabled: false`) | Apply `crds/` first |
+| `v0.4.0` | None | None |
+| `v0.3.0` | `RotationPolicy` (`noderotation.io/v1alpha1`) introduced | First release — `helm install` creates the CRD from `crds/` |
+
+An additive field does not invalidate the `RotationPolicy` objects you already
+have: one that leaves `surge.forcefulFallback` unset keeps validating against the
+older CRD, and the controller defaults it to off. What applying the new schema
+buys you is the ability to **author** the field at all.
+
 **Rolling back.** Rolling the **image** back is symmetric and equally safe — the
 older controller resumes from the same on-object state. The real hazard is
 rolling back **across a CRD schema change**: a `RotationPolicy` authored against

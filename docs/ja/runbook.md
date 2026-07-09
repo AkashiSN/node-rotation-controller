@@ -414,6 +414,21 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 インストール済み CRD がまだ知らないフィールドを使う `RotationPolicy` は admission で
 拒否されるため、CRD を先に適用すれば新しいポリシーを書けない期間を避けられる。
 
+**どのリリースが CRD を変更したか。** 表は新しい順である。現在使っているバージョンを
+見つけ、それより上の行をすべて読むこと: そのうち 1 つでもスキーマを変更していれば、
+`helm upgrade` の前に上記の `kubectl apply` を一度実行する必要がある。
+
+| リリース | `RotationPolicy` スキーマの変更 | このリリースへ上げるときの作業 |
+| --- | --- | --- |
+| `v0.5.0` | `surge.forcefulFallback` を追加（追加のみ、既定は `enabled: false`） | 先に `crds/` を適用する |
+| `v0.4.0` | なし | なし |
+| `v0.3.0` | `RotationPolicy`（`noderotation.io/v1alpha1`）の初出 | 最初のリリース — `helm install` が `crds/` から CRD を作成する |
+
+フィールドの追加は、既存の `RotationPolicy` オブジェクトを無効にはしない:
+`surge.forcefulFallback` を設定していないポリシーは古い CRD に対しても検証を通り、
+コントローラはそれを off として扱う。新しいスキーマを適用して初めて得られるのは、
+そのフィールドを **書けるようになる** ことである。
+
 **ロールバック。** **イメージ** を戻すのは対称で同じく安全 — 古いコントローラも同じ
 オブジェクト上の状態から再開する。本当の危険は **CRD スキーマ変更をまたいだ** ロール
 バックである: 新スキーマ向けに書かれた `RotationPolicy` は古いコントローラの reconcile 時
