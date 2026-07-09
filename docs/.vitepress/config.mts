@@ -124,10 +124,13 @@ export default withMermaid(defineConfig({
           { text: '開発者向け', collapsed: false, items: [
             { text: 'CI/CD 設計', link: '/ja/development/ci-cd' },
           ]},
-          // ADR/perf are EN-only; link out to the English reference pages.
-          { text: 'リファレンス（英語）', collapsed: false, items: [
-            { text: 'ADR インデックス', link: '/reference/adr/' },
-            { text: 'Perf: pod cache scalability', link: '/reference/perf/pod-cache-scalability' },
+          // Perf notes are user-facing and translated; ADRs are English-only by
+          // design (dated decision records addressed to maintainers), so the ADR
+          // entries link out to the English pages and are labelled （英語）.
+          { text: 'リファレンス', collapsed: false, items: [
+            { text: 'Perf: pod cache scalability', link: '/ja/reference/perf/pod-cache-scalability' },
+            { text: 'ADR インデックス（英語）', link: '/reference/adr/' },
+            { text: 'ADR-0001 forceful fallback（英語）', link: '/reference/adr/0001-window-bounded-forceful-fallback' },
           ]},
         ],
       },
