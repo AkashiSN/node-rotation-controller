@@ -17,7 +17,7 @@
   in-registry SBOM and SLSA provenance from the build, and each GitHub Release
   attaches a downloadable SPDX SBOM. Attestation and signing run for pre-release
   tags too. Verification instructions (`cosign verify`, `gh attestation verify`)
-  live in [`SECURITY.md`](../../SECURITY.md#verifying-releases).
+  live in [`SECURITY.md`](https://github.com/AkashiSN/node-rotation-controller/blob/main/SECURITY.md#verifying-releases).
 - Install: `helm install ... oci://ghcr.io/akashisn/charts/node-rotation-controller --version X.Y.Z`.
 
 ## 6.2 Roadmap
