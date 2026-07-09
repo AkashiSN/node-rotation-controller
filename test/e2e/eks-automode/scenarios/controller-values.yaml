@@ -42,5 +42,4 @@ logging:
 # carries the ageThreshold/window/surge knobs the scenarios depend on, and the
 # scenarios patch it live (no restart). Disable the chart's bundled sample
 # RotationPolicy so that manifest is the only policy object in the cluster.
-rotationPolicy:
-  create: false
+rotationPolicies: []

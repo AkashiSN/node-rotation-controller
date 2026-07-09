@@ -1,7 +1,7 @@
 suite: RotationPolicy sample (spec §5.4, issue #119)
 # Asserts the chart ships a cluster-scoped RotationPolicy carrying the sample
-# policy, gated by rotationPolicy.create. The CRD itself lives in crds/ (applied
-# by Helm before templates); this suite covers only the sample CR object.
+# policy, from the single-entry rotationPolicies default. The CRD itself lives in
+# crds/ (applied by Helm before templates); this suite covers only the CR objects.
 templates:
   - templates/rotationpolicy.yaml
 tests:
@@ -39,17 +39,39 @@ tests:
           path: spec.prePull.enabled
           value: false
 
-  - it: is not rendered when rotationPolicy.create is false
+  # Issue #196: the removed singular `rotationPolicy` must fail loudly. The values
+  # schema does not seal the root object, so without the guard a stale key would be
+  # silently ignored — and a user who had set create=false would get the default
+  # sample policy installed over a cluster that deliberately had none.
+  - it: fails loudly on the removed singular rotationPolicy
     set:
-      rotationPolicy.create: false
+      rotationPolicy:
+        create: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'values: `rotationPolicy` was removed in chart 0.5.0 (issue #196); use the `rotationPolicies` list instead — `rotationPolicy: {create: true, name: X, spec: {...}}` becomes `rotationPolicies: [{name: X, spec: {...}}]`, and `rotationPolicy: {create: false}` becomes `rotationPolicies: []`'
+
+  # Bring-your-own-policies: an empty list renders nothing, so the user's own
+  # out-of-band RotationPolicy objects are the only ones in the cluster.
+  - it: is not rendered when rotationPolicies is empty
+    set:
+      rotationPolicies: []
     asserts:
       - hasDocuments:
           count: 0
 
-  - it: honors an explicit rotationPolicy.name
+  - it: honors an explicit name on a single-entry list
     set:
-      rotationPolicy.name: api
+      rotationPolicies:
+        - name: api
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - { timezone: Asia/Tokyo, days: [Sat], start: "02:00", end: "06:00" }
     asserts:
+      - hasDocuments:
+          count: 1
       - equal:
           path: metadata.name
           value: api
@@ -106,16 +128,12 @@ tests:
           value: 168h
         documentIndex: 1
 
-  # rotationPolicies (plural) wins when both are set; the singular sample is
-  # ignored so existing values keep working only when the list is empty.
-  - it: rotationPolicies takes precedence over the singular rotationPolicy
+  # An entry that omits `name` falls back to the chart fullname — the property the
+  # default single-entry list relies on, pinned here against an explicit list.
+  - it: falls back to the chart fullname when an entry omits name
     set:
-      rotationPolicy:
-        create: true
-        name: legacy
       rotationPolicies:
-        - name: only
-          spec:
+        - spec:
             nodePoolSelector:
               matchLabels: { workload: api }
             maintenanceWindows:
@@ -125,9 +143,9 @@ tests:
           count: 1
       - equal:
           path: metadata.name
-          value: only
+          value: RELEASE-NAME-node-rotation-controller
 
-  # A per-entry create:false skips just that entry (parity with the singular).
+  # A per-entry create:false skips just that entry.
   - it: skips a rotationPolicies entry with create false
     set:
       rotationPolicies:

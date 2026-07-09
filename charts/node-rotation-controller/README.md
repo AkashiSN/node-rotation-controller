@@ -30,21 +30,22 @@ Install the published chart from the GitHub Container Registry (OCI):
 ```sh
 helm install node-rotation-controller \
   oci://ghcr.io/akashisn/charts/node-rotation-controller \
-  --version 0.4.0 \
   --namespace node-rotation-system --create-namespace \
-  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
+  --set-json 'rotationPolicies=[{"spec":{"nodePoolSelector":{"matchLabels":{"workload":"api"}},"maintenanceWindows":[{"timezone":"Asia/Tokyo","days":["Wed","Sat"],"start":"02:00","end":"06:00"}]}}]'
 ```
 
-> The chart version has **no** leading `v` (the release guard strips it from the
-> `vX.Y.Z` git tag). Pre-1.0, the chart `version` and `appVersion` move together
-> (spec §6.1).
+> The commands above install the latest published chart. Pin a release with
+> `--version X.Y.Z` — the chart version has **no** leading `v` (the release guard
+> strips it from the `vX.Y.Z` git tag). Pre-1.0, the chart `version` and
+> `appVersion` move together (spec §6.1), and the values surface may change
+> between minor releases: `rotationPolicies` as shown here needs chart 0.5.0+.
 
 Or install from a local checkout of this repository:
 
 ```sh
 helm install node-rotation-controller charts/node-rotation-controller \
   --namespace node-rotation-system --create-namespace \
-  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
+  --set-json 'rotationPolicies=[{"spec":{"nodePoolSelector":{"matchLabels":{"workload":"api"}},"maintenanceWindows":[{"timezone":"Asia/Tokyo","days":["Wed","Sat"],"start":"02:00","end":"06:00"}]}}]'
 ```
 
 After install, `NOTES.txt` prints the next steps and the commands to confirm the
@@ -57,7 +58,7 @@ controller is healthy and which replica holds the leader Lease.
 | `Deployment` | The controller (`replicaCount=2` with leader election) | — |
 | `ServiceAccount` + `ClusterRole`/`ClusterRoleBinding` + namespaced `Role`/`RoleBinding` | RBAC for the controller (spec §4.3) | `serviceAccount.create` |
 | `RotationPolicy` CRD | Cluster-scoped policy schema (`noderotation.io/v1alpha1`), from the chart's `crds/` directory | always |
-| `RotationPolicy` (sample, or one per `rotationPolicies` entry) | Governing policies you point at your NodePools | `rotationPolicy.create` / `rotationPolicies` |
+| `RotationPolicy` (one per `rotationPolicies` entry) | Governing policies you point at your NodePools | `rotationPolicies` |
 | `PriorityClass` | Dedicated negative-priority class for the surge placeholder Pod (spec §3.3) | `placeholder.priorityClass.create` |
 | `PodDisruptionBudget` | Keeps a leader replica alive during a node drain (R1, spec §7.1) | `podDisruptionBudget.enabled` |
 | `Service` (`/metrics`) | Exposes the controller metrics (spec §4.2) | `metrics.service.enabled` |
@@ -74,14 +75,16 @@ controller is healthy and which replica holds the leader Lease.
 
 Rotation policy lives in **cluster-scoped `RotationPolicy` objects** (spec §5.4),
 not in chart values directly — the controller resolves each NodePool's governing
-policy at reconcile time. The chart can install one sample policy for you
-(`rotationPolicy.create=true`), rendered verbatim from `rotationPolicy.spec`, so
-`--set`/`--set-json` works on any field and the values schema validates it.
+policy at reconcile time. The chart renders one object per `rotationPolicies`
+entry, and the default values ship a single-entry sample. An entry's `spec` is
+rendered verbatim and the values schema validates it before anything reaches the
+cluster.
 
-> **The singular `rotationPolicy` is deprecated** (issue #153) and slated for
-> removal at the 1.0 milestone. It still works and remains the default, but for
-> new installs prefer the [`rotationPolicies` list](#multiple-policies-per-nodepool)
-> below — even for a single policy, a one-entry list is the one-to-one replacement.
+> **`rotationPolicies` is a list, and Helm replaces list values whole.** A
+> `--set-json 'rotationPolicies[0].spec.x=y'` does not merge into the default
+> sample — it replaces the entry, dropping the rest of the spec. Pass the entry
+> entire (as the install commands above do) or use `-f values.yaml`. The schema
+> catches a partial entry at render time rather than installing a half-policy.
 
 A complete `RotationPolicy`:
 
@@ -136,13 +139,12 @@ spec:
 ### Multiple policies (per-NodePool)
 
 When different NodePools need different rotation behavior — a different window,
-`ageThreshold`, or surge per pool — list them under `rotationPolicies` and the
-chart renders one `RotationPolicy` per entry (no need to install the chart, and
-the controller Deployment, more than once). Each entry is `{name, spec, [create]}`
-and its `spec` is the same shape as `rotationPolicy.spec` above; `name` is
-required and must be unique. When `rotationPolicies` is non-empty it **supersedes**
-the singular `rotationPolicy` sample, so existing single-policy values keep working
-unchanged when the list is left empty.
+`ageThreshold`, or surge per pool — add an entry per policy and the chart renders
+one `RotationPolicy` each (no need to install the chart, and the controller
+Deployment, more than once). Each entry is `{name, spec, [create]}` and its `spec`
+is the shape shown above. These objects are cluster-scoped, so `name` must be
+unique; the single-entry default omits it and falls back to the chart fullname,
+which a multi-entry list cannot do.
 
 ```yaml
 rotationPolicies:
@@ -165,8 +167,8 @@ Selector overlap needs no chart-side guard: the controller resolves a single
 governing policy per NodePool by selector specificity and treats an
 equal-specificity tie as a hard `PolicyConflict` (spec §5.4).
 
-To manage your own policies outside the chart instead, set `rotationPolicy.create=false`
-(and leave `rotationPolicies` empty) and `kubectl apply` one `RotationPolicy` per
+To manage your own policies outside the chart instead, set `rotationPolicies: []`
+and `kubectl apply` one `RotationPolicy` per
 divergent policy. The full schema, conflict resolution, and the `status`
 subresource are documented in
 [specification §5.4](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/specification/05-implementation.md#54-configuration-schema).
@@ -178,7 +180,7 @@ Prometheus Operator installed you can let the chart wire scraping and alerting:
 
 ```sh
 helm upgrade --install node-rotation-controller \
-  oci://ghcr.io/akashisn/charts/node-rotation-controller --version 0.4.0 \
+  oci://ghcr.io/akashisn/charts/node-rotation-controller \
   --namespace node-rotation-system \
   --set metrics.serviceMonitor.enabled=true \
   --set prometheusRule.enabled=true
@@ -233,10 +235,10 @@ for how to read each metric and respond.
 | `placeholder.priorityClass.name` | `noderotation-placeholder` | PriorityClass name. Must match the controller's `--priority-class` flag. |
 | `placeholder.priorityClass.value` | `-10` | Priority value. Negative so the placeholder is the deliberate preemption victim (spec §3.3). |
 | `logging.development` | `false` | Development-mode (human-readable) logging. Production uses JSON. |
-| `rotationPolicies` | `[]` | List of RotationPolicy objects, one per entry (`{name, spec, [create]}`), for per-NodePool differentiation. Supersedes the singular `rotationPolicy` when non-empty (see [Multiple policies](#multiple-policies-per-nodepool)). |
-| `rotationPolicy.create` | `true` | **Deprecated** (see `rotationPolicies`). Install the sample RotationPolicy. Disable to author your own. Ignored when `rotationPolicies` is non-empty. |
-| `rotationPolicy.name` | `""` | **Deprecated.** RotationPolicy object name. Cluster-scoped; defaults to the chart fullname when empty. |
-| `rotationPolicy.spec` | see `values.yaml` | **Deprecated.** The RotationPolicy spec, rendered verbatim (see [Configuring rotation](#configuring-rotation-rotationpolicy)). |
+| `rotationPolicies` | a one-entry sample; see `values.yaml` | List of RotationPolicy objects, one per entry (`{name, spec, [create]}`), for per-NodePool differentiation (see [Multiple policies](#multiple-policies-per-nodepool)). Set to `[]` to author your own out-of-band. |
+| `rotationPolicies[].name` | chart fullname | RotationPolicy object name. Cluster-scoped, so it must be unique across entries; omit it to fall back to the chart fullname. |
+| `rotationPolicies[].create` | `true` | Set `false` to skip just that entry. |
+| `rotationPolicies[].spec` | see `values.yaml` | The RotationPolicy spec, rendered verbatim (see [Configuring rotation](#configuring-rotation-rotationpolicy)). |
 
 The chart ships a [`values.schema.json`](values.schema.json) that validates
 values at install time as a fast first line of defense; the CRD and controller
@@ -248,8 +250,8 @@ v1 assumes a **single install per cluster**. The `PriorityClass` and the sample
 `RotationPolicy` are **cluster-scoped objects with fixed names**, so a second
 release would collide on them. To run an additional release, set
 `placeholder.priorityClass.create=false` (share the one PriorityClass) and
-`rotationPolicy.create=false` with `rotationPolicies: []` (so the release renders
-no `RotationPolicy` objects — manage them on the primary release or out-of-band).
+`rotationPolicies: []` (so the release renders no `RotationPolicy` objects —
+manage them on the primary release or out-of-band).
 
 ## Upgrading
 

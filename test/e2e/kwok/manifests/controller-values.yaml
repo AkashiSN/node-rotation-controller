@@ -32,5 +32,4 @@ logging:
 # (applied by bootstrap.sh after the Helm install) — it carries the
 # ageThreshold/surge timings the Go driver depends on. Disable the chart's bundled
 # sample RotationPolicy so that manifest is the only policy object in the cluster.
-rotationPolicy:
-  create: false
+rotationPolicies: []

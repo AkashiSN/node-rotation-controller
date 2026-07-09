@@ -208,18 +208,39 @@ jobs:
           # sanity: the defaults MUST render (guards against a broken assertion harness)
           helm template rot "$chart" >/dev/null
           echo "ok: defaults render"
+
+          # rotationPolicies is a LIST, and Helm replaces list values whole: a
+          # --set of one leaf drops the rest of the entry, so every case below
+          # would be "rejected" for a missing required property no matter what the
+          # rule under test says. Build a COMPLETE valid entry and perturb exactly
+          # one field, so each rejection is attributable to the rule it pins.
+          valid='"nodePoolSelector":{"matchLabels":{"workload":"api"}},"maintenanceWindows":[{"timezone":"UTC","days":["Sat"],"start":"02:00","end":"06:00"}]'
+          entry() { printf '[{"spec":{%s%s}}]' "$valid" "${1-}"; }
+          # sanity: the unperturbed entry MUST render, else every assertion below is vacuous
+          helm template rot "$chart" --set-json "rotationPolicies=$(entry)" >/dev/null
+          echo "ok: unperturbed policy entry renders"
+
           assert_rejected "surge.maxUnavailable=2 (v1 is serial, const 1)" \
-            --set rotationPolicy.spec.surge.maxUnavailable=2
+            --set-json "rotationPolicies=$(entry ',"surge":{"maxUnavailable":2}')"
           assert_rejected "surge.readyTimeout=0s (must be a positive duration)" \
-            --set rotationPolicy.spec.surge.readyTimeout=0s
+            --set-json "rotationPolicies=$(entry ',"surge":{"readyTimeout":"0s"}')"
           assert_rejected "prePull.enabled=true (v2 feature, const false in v1)" \
-            --set rotationPolicy.spec.prePull.enabled=true
+            --set-json "rotationPolicies=$(entry ',"prePull":{"enabled":true}')"
           assert_rejected "placeholder.priorityClass.value=0 (must be negative, max -1)" \
             --set placeholder.priorityClass.value=0
           # An unknown policy key must be rejected at render time, so a typo never
           # reaches the cluster as a RotationPolicy the CRD's OpenAPI schema would
-          # reject at admission (or worse, prune silently). rotationPolicy.spec is
-          # additionalProperties:false, mirroring the CRD's structural rules — this
-          # guards against a silent regression.
-          assert_rejected "rotationPolicy.spec.<unknown> (additionalProperties:false)" \
-            --set rotationPolicy.spec.unknownKey=1
+          # reject at admission (or worse, prune silently). A policy entry's `spec`
+          # is additionalProperties:false, mirroring the CRD's structural rules —
+          # this guards against a silent regression.
+          assert_rejected "rotationPolicies[].spec.<unknown> (additionalProperties:false)" \
+            --set-json "rotationPolicies=$(entry ',"unknownKey":1')"
+          # The entry itself is additionalProperties:false too, so a misspelled entry
+          # key cannot pass through unnoticed.
+          assert_rejected "rotationPolicies[].<unknown> (additionalProperties:false)" \
+            --set-json "rotationPolicies=[{\"unknownKey\":1,\"spec\":{$valid}}]"
+          # Issue #196: the removed singular `rotationPolicy` is not sealed away by
+          # the schema (the root object allows unknown properties), so the template
+          # fails on it explicitly rather than silently ignoring it.
+          assert_rejected "the removed singular rotationPolicy (template fail)" \
+            --set rotationPolicy.create=false

@@ -136,7 +136,7 @@ helm install node-rotation-controller ../../../charts/node-rotation-controller \
   --wait --timeout 8m
 
 # Apply the live RotationPolicy (issue #119). The chart's crds/ installed the CRD
-# first, and controller-values.yaml set rotationPolicy.create=false, so this is
+# first, and controller-values.yaml set rotationPolicies: [], so this is
 # the only policy object. The controller WATCHES it, so later scenarios change
 # knobs with `kubectl patch rotationpolicy nrc-poc …` — no restart.
 kubectl apply -f scenarios/rotationpolicy.yaml
@@ -1088,7 +1088,7 @@ Remove the scenario objects, the controller, then the whole stack:
 kubectl delete -f scenarios/statefulset-ebs.yaml --ignore-not-found
 kubectl delete -f scenarios/workload.yaml --ignore-not-found
 kubectl delete -f scenarios/nodepool.yaml --ignore-not-found
-# The RotationPolicy is applied with kubectl (rotationPolicy.create=false), so it
+# The RotationPolicy is applied with kubectl (rotationPolicies: []), so it
 # is NOT owned by the release — `helm uninstall` won't remove it. Delete it
 # explicitly so reruns start from a clean, policy-free cluster.
 kubectl delete -f scenarios/rotationpolicy.yaml --ignore-not-found
