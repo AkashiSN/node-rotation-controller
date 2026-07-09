@@ -36,6 +36,16 @@ Feedback on the design and implementation is welcome via Issues.
 - English is the default for code, comments, docs, issues, and PRs.
 - Japanese documentation lives under `docs/ja/` and mirrors the English spec.
 
+**Which docs are translated.** The EN/JA sync obligation covers
+[`docs/specification/`](docs/specification/) and the user-facing performance
+notes in [`docs/reference/perf/`](docs/reference/perf/): update the English page
+and its `docs/ja/` mirror in the same PR. The ADRs in
+[`docs/reference/adr/`](docs/reference/adr/) are **English-only by design** and
+intentionally not translated — they are dated decision records addressed to
+maintainers, and a translation that drifts from the original is worse than none.
+The Japanese docs-site sidebar therefore links to the English ADR pages
+explicitly rather than omitting them.
+
 ### Japanese translation conventions
 
 These conventions keep `docs/ja/` translations consistent. They record existing
