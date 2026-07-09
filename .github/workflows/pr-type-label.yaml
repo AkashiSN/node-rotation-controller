@@ -68,6 +68,6 @@ jobs:
             if (current.includes(want)) {
               core.info(`Type label already present: ${want}`);
             } else {
-              await github.rest.issues.addLabel({ ...common, labels: [want] });
+              await github.rest.issues.addLabels({ ...common, labels: [want] });
               core.info(`Added type label: ${want}`);
             }
