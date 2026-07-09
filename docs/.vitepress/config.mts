@@ -128,7 +128,7 @@ export default withMermaid(defineConfig({
           // design (dated decision records addressed to maintainers), so the ADR
           // entries link out to the English pages and are labelled （英語）.
           { text: 'リファレンス', collapsed: false, items: [
-            { text: 'Perf: pod cache scalability', link: '/ja/reference/perf/pod-cache-scalability' },
+            { text: 'Perf: Pod キャッシュ / list スケーラビリティ', link: '/ja/reference/perf/pod-cache-scalability' },
             { text: 'ADR インデックス（英語）', link: '/reference/adr/' },
             { text: 'ADR-0001 forceful fallback（英語）', link: '/reference/adr/0001-window-bounded-forceful-fallback' },
           ]},
