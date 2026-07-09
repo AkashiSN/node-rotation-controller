@@ -411,8 +411,14 @@ kubectl apply -f charts/node-rotation-controller/crds/
 helm upgrade --install node-rotation-controller charts/node-rotation-controller ...
 ```
 
-インストール済み CRD がまだ知らないフィールドを使う `RotationPolicy` は admission で
-拒否されるため、CRD を先に適用すれば新しいポリシーを書けない期間を避けられる。
+インストール済み CRD がまだ知らないフィールドを設定した `RotationPolicy` は決して効かないが、
+*どう* 失敗するかはクライアントによる。CRD スキーマは structural であり
+`x-kubernetes-preserve-unknown-fields` を持たないため、リクエストが strict な field validation を
+要求しない限り、API サーバは未知のフィールドを **prune する**: `kubectl apply` は要求するので
+そのまま拒否されるが、field validation をサーバ既定のままにするクライアント — Helm の apply も
+その 1 つ — では、**フィールドが黙って落とされたままオブジェクトが受理される**。危険なのは後者で、
+ポリシーは適用されたように見えるのに、コントローラはその設定なしで動く。CRD を先に適用すれば
+どちらも避けられる。
 
 **どのリリースが CRD を変更したか。** 表は新しい順である。現在使っているバージョンを
 見つけ、それより上の行をすべて読むこと: そのうち 1 つでもスキーマを変更していれば、
@@ -427,7 +433,8 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 フィールドの追加は、既存の `RotationPolicy` オブジェクトを無効にはしない:
 `surge.forcefulFallback` を設定していないポリシーは古い CRD に対しても検証を通り、
 コントローラはそれを off として扱う。新しいスキーマを適用して初めて得られるのは、
-そのフィールドを **書けるようになる** ことである。
+そのフィールドを設定して **永続させられる** ことである — 適用前は、上記のとおり
+拒否されるか黙って落とされるかのいずれかになる。
 
 **ロールバック。** **イメージ** を戻すのは対称で同じく安全 — 古いコントローラも同じ
 オブジェクト上の状態から再開する。本当の危険は **CRD スキーマ変更をまたいだ** ロール

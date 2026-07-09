@@ -429,9 +429,15 @@ kubectl apply -f charts/node-rotation-controller/crds/
 helm upgrade --install node-rotation-controller charts/node-rotation-controller ...
 ```
 
-A `RotationPolicy` that uses a field the installed CRD does not yet know is
-rejected at admission, so applying the CRD first avoids a window where the new
-policy cannot be written.
+A `RotationPolicy` that sets a field the installed CRD does not yet know never
+takes effect, and *how* it fails depends on the client. The CRD schema is
+structural and sets no `x-kubernetes-preserve-unknown-fields`, so the API server
+**prunes** the unknown field unless the request asks for strict field validation:
+`kubectl apply` does ask, and is rejected outright, while a client that leaves
+validation at the server default — Helm's apply among them — has the object
+**accepted with the field silently dropped**. The silent case is the dangerous
+one: the policy looks applied, and the controller runs without the setting.
+Applying the CRD first avoids both.
 
 **Which releases changed the CRD.** The table is newest first. Find the version
 you are on and read every row above it: if any of them changed the schema, the
@@ -446,7 +452,8 @@ you are on and read every row above it: if any of them changed the schema, the
 An additive field does not invalidate the `RotationPolicy` objects you already
 have: one that leaves `surge.forcefulFallback` unset keeps validating against the
 older CRD, and the controller defaults it to off. What applying the new schema
-buys you is the ability to **author** the field at all.
+buys you is the ability to set the field and have it **persist** — before that,
+per the paragraph above, it is either rejected or dropped.
 
 **Rolling back.** Rolling the **image** back is symmetric and equally safe — the
 older controller resumes from the same on-object state. The real hazard is
