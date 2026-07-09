@@ -1,7 +1,7 @@
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.4.0_released_(pre--1.0)-blue.svg)](docs/ja/specification/)
+[![Status](https://img.shields.io/badge/status-v0.5.0_released_(pre--1.0)-blue.svg)](docs/ja/specification/)
 
 Karpenter 配下のノードを、設定可能なメンテナンスウィンドウ内で **make-before-break（surge）** 型に先回り置換し、Karpenter の Forceful な `expireAfter` 発火を実質起こさないようにする Kubernetes コントローラ。
 
@@ -9,9 +9,11 @@ EKS Auto Mode をはじめ、ノードの Expiration が Forceful で Disruption
 
 ## ステータス
 
-**v0.4.0 — v1 surge MVP、リリース済み（pre-1.0）。** v1 の make-before-break ローテーションステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。
+**v0.5.0 — v1 surge MVP、リリース済み（pre-1.0）。** v1 の make-before-break ローテーションステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。
 
-コアの surge 経路は EKS Auto Mode 上でフルローテーション回帰スイートを通して検証済みであり、v1.0 に向けて残る項目は数時間規模の tight-race soak である（[ロードマップ](docs/ja/specification/06-release.md#62-ロードマップ)を参照）。
+v0.5.0 ではこれに 3 つが加わった。**opt-in のウィンドウ有界 surge-less forceful fallback**（`surge.forcefulFallback`、既定 off。ADR-0001）: 候補が自身の `expireAfter` 期限までに graceful な surge を完了できないとき、コントローラは制御できない時刻に Forceful な expiration が起きるのを待たず、その `NodeClaim` をウィンドウ内で削除する（経路は Karpenter の voluntary な、PDB を尊重するものと同じ）。候補の順序付けは最古優先ではなく **deadline の早い順** になり、失効に最も近いノードが次にローテーションされる。また、運用者が付けた **`karpenter.sh/do-not-disrupt`** アノテーションを持つノードは候補選定から除外される。
+
+コアの surge 経路は EKS Auto Mode 上でフルローテーション回帰スイートを通して検証済みであり、同期したバッチに対するトリックなしの forceful fallback 実行も含まれる。v1.0 に向けて残る項目は、同一 AZ の実際の容量不足（ICE）によるロールバックと、数時間規模の tight-race soak である（[ロードマップ](docs/ja/specification/06-release.md#62-ロードマップ)を参照）。
 
 なお依然として **pre-1.0** であり、設定スキーマは minor リリース間で変わりうる。設計の一次情報（source of truth）は [docs/specification/](docs/specification/) であり、[docs/ja/specification/](docs/ja/specification/) は同期された日本語訳である。Karpenter の契約は[互換性](#互換性)を参照。
 
