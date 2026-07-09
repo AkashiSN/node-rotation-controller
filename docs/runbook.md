@@ -330,7 +330,7 @@ Fix the underlying PDB/finalizer and let the drain complete.
 
 ## 6. Alerting (PrometheusRule)
 
-The Helm chart ships an **optional** `PrometheusRule` with the six
+The Helm chart ships an **optional** `PrometheusRule` with the seven
 [§4.2](specification/04-operations.md#42-observability) alerts. It is **off by default** (so
 existing installs and clusters without the Prometheus Operator are unaffected).
 Enable it with:
@@ -348,6 +348,7 @@ helm upgrade --install rot charts/node-rotation-controller \
 | `NodeRotationDrainStuck` | `noderotation_drain_stuck == 1` | Drain blocked past `tGP + buffer` — see [§5](#5-handling-a-stuck-drain). |
 | `NodeRotationShortLeadNodes` | `noderotation_short_lead_nodes > 0` | NodeClaims whose stamped `expireAfter` can no longer guarantee `K` chances. |
 | `NodeRotationRetryCountHigh` | `noderotation_retry_count >= 3` | The same rotation keeps failing — systematic cause ([R3](specification/07-risks.md#71-risks)). |
+| `NodeRotationForcefulFallback` | `increase(noderotation_forceful_fallback_total[1h]) > 0` | A graceful surge lost the race to a node's deadline and the rotation went surge-less ([ADR-0001](reference/adr/0001-window-bounded-forceful-fallback.md)). Ships at `severity: info`, because a single fallback is the designed outcome; see [§3](#3-interpreting-the-noderotation_-metrics) for remediation. |
 
 **Tune the schedule-dependent ranges.** Two alerts depend on your window
 period `P` and window duration `D`; their ranges are **chart values**, not

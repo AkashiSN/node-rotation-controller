@@ -63,7 +63,7 @@ controller is healthy and which replica holds the leader Lease.
 | `PodDisruptionBudget` | Keeps a leader replica alive during a node drain (R1, spec §7.1) | `podDisruptionBudget.enabled` |
 | `Service` (`/metrics`) | Exposes the controller metrics (spec §4.2) | `metrics.service.enabled` |
 | `ServiceMonitor` | Prometheus Operator scrape config | `metrics.serviceMonitor.enabled` |
-| `PrometheusRule` | The six §4.2 alerts | `prometheusRule.enabled` |
+| `PrometheusRule` | The seven §4.2 alerts | `prometheusRule.enabled` |
 
 > **CRDs are installed from the chart's `crds/` directory.** Per Helm's CRD
 > handling, they are created on first install but **not** upgraded or deleted by
@@ -199,7 +199,7 @@ helm upgrade --install node-rotation-controller \
   --set prometheusRule.enabled=true
 ```
 
-The `PrometheusRule` ships six alerts. Several depend on your window cadence —
+The `PrometheusRule` ships seven alerts. Several depend on your window cadence —
 tune `prometheusRule.candidatesNotDraining.windowRange` to roughly two window
 periods (2·P) and `prometheusRule.stalledInWindow.completionRange` to roughly one
 window's duration, and adjust each alert's `for`/`severity` as needed. See the
