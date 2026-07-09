@@ -87,7 +87,7 @@ helm install node-rotation-controller \
   oci://ghcr.io/akashisn/charts/node-rotation-controller \
   --version 0.4.0 \
   --namespace node-rotation-system --create-namespace \
-  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
+  --set-json 'rotationPolicies=[{"spec":{"nodePoolSelector":{"matchLabels":{"workload":"api"}},"maintenanceWindows":[{"timezone":"Asia/Tokyo","days":["Wed","Sat"],"start":"02:00","end":"06:00"}]}}]'
 ```
 
 またはこのリポジトリのローカルチェックアウトからインストールする:
@@ -95,7 +95,7 @@ helm install node-rotation-controller \
 ```sh
 helm install node-rotation-controller charts/node-rotation-controller \
   --namespace node-rotation-system --create-namespace \
-  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
+  --set-json 'rotationPolicies=[{"spec":{"nodePoolSelector":{"matchLabels":{"workload":"api"}},"maintenanceWindows":[{"timezone":"Asia/Tokyo","days":["Wed","Sat"],"start":"02:00","end":"06:00"}]}}]'
 ```
 
 - **chart が入れるもの。** コントローラ（leader election 付き `replicas=2`）、
@@ -105,17 +105,15 @@ helm install node-rotation-controller charts/node-rotation-controller \
 - **置換の設定。** `rotationPolicies` 配下にポリシーを列挙する（仕様 §5.4 の
   スキーマ）— chart はエントリごとに 1 つの `RotationPolicy` をレンダリングする
   ため、NodePool ごとに異なるウィンドウ / `ageThreshold` / surge を与えられる。
+  デフォルト値は 1 エントリのサンプルを同梱しており、上のクイックスタートは
+  それを自分の NodePool に向けている。
   [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml)
   を参照。
-- **非推奨の単数形。** 上のクイックスタートに示した単数形の `rotationPolicy.spec`
-  も引き続き動作し、当面はデフォルトのままだが、**非推奨**（issue #153）であり
-  1.0 で削除予定 — 1 エントリの `rotationPolicies` リストが 1:1 の置き換えである。
-- **自前のポリシーを使う。** `rotationPolicy.create=false` と
-  `rotationPolicies: []` を設定すれば、自前の `RotationPolicy` オブジェクト
-  （分岐するポリシーごとに 1 つ）を別管理できる。どのポリシーにもマッチしない
-  NodePool は単に置換されない。すぐ流用できるポリシー — 単一の catch-all、
-  NodePool ごとに分岐するポリシー、specificity 解決、メンテナンスウィンドウの
-  合成 — は [`examples/`](examples/) を参照。
+- **自前のポリシーを使う。** `rotationPolicies: []` を設定すれば、自前の
+  `RotationPolicy` オブジェクト（分岐するポリシーごとに 1 つ）を別管理できる。
+  どのポリシーにもマッチしない NodePool は単に置換されない。すぐ流用できる
+  ポリシー — 単一の catch-all、NodePool ごとに分岐するポリシー、specificity
+  解決、メンテナンスウィンドウの合成 — は [`examples/`](examples/) を参照。
 
 > **メンテナー向けメモ（初回リリース時のみ）:** ghcr.io のイメージと chart の
 > パッケージは初回公開時に **private** で作成されることがある。未認証の

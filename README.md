@@ -87,7 +87,7 @@ helm install node-rotation-controller \
   oci://ghcr.io/akashisn/charts/node-rotation-controller \
   --version 0.4.0 \
   --namespace node-rotation-system --create-namespace \
-  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
+  --set-json 'rotationPolicies=[{"spec":{"nodePoolSelector":{"matchLabels":{"workload":"api"}},"maintenanceWindows":[{"timezone":"Asia/Tokyo","days":["Wed","Sat"],"start":"02:00","end":"06:00"}]}}]'
 ```
 
 Or install from a local checkout of this repository:
@@ -95,7 +95,7 @@ Or install from a local checkout of this repository:
 ```sh
 helm install node-rotation-controller charts/node-rotation-controller \
   --namespace node-rotation-system --create-namespace \
-  --set-json 'rotationPolicy.spec.nodePoolSelector.matchLabels={"workload":"api"}'
+  --set-json 'rotationPolicies=[{"spec":{"nodePoolSelector":{"matchLabels":{"workload":"api"}},"maintenanceWindows":[{"timezone":"Asia/Tokyo","days":["Wed","Sat"],"start":"02:00","end":"06:00"}]}}]'
 ```
 
 - **What the chart installs.** The controller (`replicas=2` with leader
@@ -105,18 +105,14 @@ helm install node-rotation-controller charts/node-rotation-controller \
   §4.3, §5.1).
 - **Configuring rotation.** List policies under `rotationPolicies` (the spec §5.4
   schema) — the chart renders one `RotationPolicy` per entry, so you can give each
-  NodePool a different window / `ageThreshold` / surge. See
+  NodePool a different window / `ageThreshold` / surge. The default values ship a
+  single-entry sample, which the quickstart above points at your NodePools. See
   [`charts/node-rotation-controller/values.yaml`](charts/node-rotation-controller/values.yaml).
-- **Deprecated singular form.** The singular `rotationPolicy.spec` shown in the
-  quickstart above still works and stays the default for now, but is
-  **deprecated** (issue #153) and slated for removal at 1.0 — a one-entry
-  `rotationPolicies` list is the one-to-one replacement.
-- **Bring your own policies.** Set `rotationPolicy.create=false` with
-  `rotationPolicies: []` to author your own `RotationPolicy` objects out-of-band
-  instead (one per divergent policy); a NodePool matched by none is simply not
-  rotated. See [`examples/`](examples/) for ready-to-adapt policies — a single
-  catch-all, divergent per-NodePool policies, specificity resolution, and
-  maintenance-window composition.
+- **Bring your own policies.** Set `rotationPolicies: []` to author your own
+  `RotationPolicy` objects out-of-band instead (one per divergent policy); a
+  NodePool matched by none is simply not rotated. See [`examples/`](examples/) for
+  ready-to-adapt policies — a single catch-all, divergent per-NodePool policies,
+  specificity resolution, and maintenance-window composition.
 
 > **Maintainer note (first release only):** the ghcr.io image and chart
 > packages may be created **private** on first publish. Make

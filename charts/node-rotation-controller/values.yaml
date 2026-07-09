@@ -168,19 +168,24 @@ logging:
   # -- Enable development-mode (human-readable) logging. Production uses JSON.
   development: false
 
-# Multiple cluster-scoped RotationPolicy objects (spec §5.4, issue #153). Use
-# this when different NodePools need different rotation behavior — a different
-# maintenance window, ageThreshold, or surge per pool — without installing the
-# chart (and the controller Deployment) more than once. Each entry renders one
-# RotationPolicy; `spec` is the same shape as `rotationPolicy.spec` below. When
-# this list is non-empty it WINS and the singular `rotationPolicy` sample below
-# is ignored; leave it empty (the default) to keep using the singular sample.
+# Cluster-scoped RotationPolicy objects (spec §5.4, issues #119 and #153). The
+# controller resolves each NodePool's governing RotationPolicy at reconcile time.
+# One entry renders one RotationPolicy, so different NodePools can get different
+# rotation behavior — a different maintenance window, ageThreshold, or surge per
+# pool — without installing the chart (and the controller Deployment) more than
+# once. Everything under an entry's `spec` is the RotationPolicy spec rendered
+# verbatim via toYaml, so --set works on any field and the values schema
+# validates the result. Set this to [] to author your own RotationPolicy objects
+# out-of-band (one per divergent policy).
 # Selector overlap needs no chart-side guard: the controller picks a single
 # governing policy per NodePool by selector specificity and treats an
 # equal-specificity tie as a hard PolicyConflict (spec §5.4).
 # -- List of RotationPolicy objects, one per entry. Each is
-# `{name, spec, [create]}`; an explicit `create: false` skips that entry. `name`
-# is required and must be unique (these objects are cluster-scoped). Example:
+# `{name, spec, [create]}`; an explicit `create: false` skips that entry. These
+# objects are cluster-scoped, so `name` must be unique; an entry that omits it
+# falls back to the chart fullname, which only a single-entry list can rely on.
+# The default below is a sample single-entry list — point it at your NodePools.
+# Example of the multi-policy form:
 #   rotationPolicies:
 #     - name: api
 #       spec:
@@ -195,73 +200,51 @@ logging:
 #         ageThreshold: 168h
 #         maintenanceWindows:
 #           - { timezone: Asia/Tokyo, days: [Sun], start: "03:00", end: "05:00" }
-rotationPolicies: []
+rotationPolicies:
+  - spec:
+      # NodePools this policy governs, matched by label (spec §3.2, §5.4). A
+      # standard label selector (matchLabels and/or matchExpressions). A NodePool
+      # matched by no RotationPolicy is not rotated (its expireAfter backstop still
+      # applies); an equal-specificity tie between policies is a hard error.
+      nodePoolSelector:
+        matchLabels:
+          # example; adjust to your NodePool labels
+          workload: api
 
-# DEPRECATED (issue #153): the singular `rotationPolicy` is superseded by the
-# `rotationPolicies` list above and is slated for removal at the 1.0 milestone.
-# It still works and stays the default for now; prefer `rotationPolicies` for new
-# installs — a single-entry list is the one-to-one replacement:
-#   rotationPolicies:
-#     - name: <fullname-or-your-name>
-#       spec: { ...this spec... }
-#
-# A sample cluster-scoped RotationPolicy (spec §5.4, issue #119). The controller
-# resolves each NodePool's governing RotationPolicy at reconcile time. Everything
-# under `spec` is the RotationPolicy spec rendered verbatim via toYaml, so --set
-# works on any field and the values schema validates the result. Set create=false
-# to manage your own RotationPolicy objects out-of-band (one per divergent policy). Ignored entirely
-# when `rotationPolicies` above is non-empty.
-rotationPolicy:
-  # -- Install the sample RotationPolicy below. Disable to author your own.
-  create: true
-  # -- RotationPolicy object name. Cluster-scoped (not release-namespaced);
-  # defaults to the chart fullname when empty. A second release in the same
-  # cluster must set create=false to avoid colliding on this name.
-  name: ""
-  spec:
-    # NodePools this policy governs, matched by label (spec §3.2, §5.4). A
-    # standard label selector (matchLabels and/or matchExpressions). A NodePool
-    # matched by no RotationPolicy is not rotated (its expireAfter backstop still
-    # applies); an equal-specificity tie between policies is a hard error.
-    nodePoolSelector:
-      matchLabels:
-        # example; adjust to your NodePool labels
-        workload: api
+      # Derived per NodePool (spec §3.2). An explicit Go duration override is
+      # allowed but still validated (recomputed G < 1 is fatal, G < K warns).
+      ageThreshold: auto
+      # K; floor 1, values < 2 only warn (spec §3.2).
+      minRotationChances: 2
 
-    # Derived per NodePool (spec §3.2). An explicit Go duration override is
-    # allowed but still validated (recomputed G < 1 is fatal, G < K warns).
-    ageThreshold: auto
-    # K; floor 1, values < 2 only warn (spec §3.2).
-    minRotationChances: 2
+      # The effective window is the UNION of all entries (spec §3.1), per policy.
+      maintenanceWindows:
+        - timezone: Asia/Tokyo
+          days: [Wed, Sat]
+          start: "02:00"
+          end: "06:00"
 
-    # The effective window is the UNION of all entries (spec §3.1), per policy.
-    maintenanceWindows:
-      - timezone: Asia/Tokyo
-        days: [Wed, Sat]
-        start: "02:00"
-        end: "06:00"
+      surge:
+        # v1 fixed at 1 (serial); > 1 reserved for a later version.
+        maxUnavailable: 1
+        # Surge node must reach Ready within this, else the attempt fails.
+        readyTimeout: 15m
+        # Settle pause between rotations; also the post-failure inter-attempt
+        # pause (spec §5.2 / §4.4).
+        cooldownAfter: 10m
+        # Base wait before re-selecting a failed NodeClaim; doubles per
+        # consecutive failure, capped at 8x (spec §5.3).
+        retryBackoff: 30m
+        # Which candidate-node requirements the placeholder replicates (spec §3.3).
+        # The karpenter.sh/nodepool selector is always applied and is NOT listed.
+        matchNodeRequirements:
+          required:
+            - topology.kubernetes.io/zone
+            - kubernetes.io/arch
+            - karpenter.sh/capacity-type
+          preferred: []
 
-    surge:
-      # v1 fixed at 1 (serial); > 1 reserved for a later version.
-      maxUnavailable: 1
-      # Surge node must reach Ready within this, else the attempt fails.
-      readyTimeout: 15m
-      # Settle pause between rotations; also the post-failure inter-attempt
-      # pause (spec §5.2 / §4.4).
-      cooldownAfter: 10m
-      # Base wait before re-selecting a failed NodeClaim; doubles per
-      # consecutive failure, capped at 8x (spec §5.3).
-      retryBackoff: 30m
-      # Which candidate-node requirements the placeholder replicates (spec §3.3).
-      # The karpenter.sh/nodepool selector is always applied and is NOT listed.
-      matchNodeRequirements:
-        required:
-          - topology.kubernetes.io/zone
-          - kubernetes.io/arch
-          - karpenter.sh/capacity-type
-        preferred: []
-
-    # v2 (disabled in v1). The v1 parser accepts only `enabled` here; the
-    # images list lands when pre-pull ships in v0.4.
-    prePull:
-      enabled: false
+      # v2 (disabled in v1). The v1 parser accepts only `enabled` here; the
+      # images list lands when pre-pull ships in v0.4.
+      prePull:
+        enabled: false

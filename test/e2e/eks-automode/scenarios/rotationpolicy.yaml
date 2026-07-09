@@ -1,7 +1,7 @@
 # The live rotation policy for the EKS Auto Mode PoC scenarios (issue #119): the
 # controller resolves each NodePool's governing RotationPolicy at reconcile time.
 # Apply this after the Helm install (the chart's crds/ installs the CRD first);
-# controller-values.yaml sets rotationPolicy.create=false so this is the only
+# controller-values.yaml sets rotationPolicies: [] so this is the only
 # policy object in the cluster.
 #
 # Because the controller WATCHES the RotationPolicy, every knob here is changed
