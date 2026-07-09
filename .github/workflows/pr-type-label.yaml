@@ -1,0 +1,73 @@
+# Derives a Conventional Commit *type* label (feat/fix/docs/chore/refactor/test/
+# perf) from the PR title and applies it, so .github/release.yml can categorize
+# the auto-generated release notes. GitHub keys categorization on labels, and the
+# project already mandates Conventional Commit titles, so the label is a pure
+# function of the title.
+name: PR Type Label
+
+on:
+  # pull_request_target (not pull_request) so the job runs with a token that can
+  # write labels even for PRs opened from forks; pull_request's token is
+  # read-only for fork PRs. This is safe ONLY because we never check out or
+  # execute PR head code below -- we read solely the PR title from the trusted
+  # event payload.
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+# Minimal privilege: label writes and nothing else.
+permissions:
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            // The full set of type labels this workflow manages. A PR carries at
+            // most one of these at a time.
+            const managed = ['feat', 'fix', 'docs', 'chore', 'refactor', 'test', 'perf'];
+
+            const pr = context.payload.pull_request;
+            const title = pr.title || '';
+
+            // Conventional Commit header: type(optional scope)(optional ! break):
+            // e.g. "feat: x", "fix(window): y", "chore(chart)!: z".
+            const match = title.match(/^(feat|fix|docs|chore|refactor|test|perf)(\([^)]*\))?!?:/);
+
+            if (!match) {
+              // The project mandates Conventional Commit titles, so a
+              // non-matching title is a mistake worth surfacing. Fail loudly and
+              // apply no label rather than guessing a category.
+              core.setFailed(
+                `PR title is not a Conventional Commit: "${title}". ` +
+                `Expected "type(scope): subject" with type one of: ${managed.join(', ')}. ` +
+                `No type label applied.`
+              );
+              return;
+            }
+
+            const want = match[1];
+            const current = (pr.labels || []).map((l) => l.name);
+            const common = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+            };
+
+            // Remove any stale managed label (e.g. the title was edited from
+            // "feat:" to "fix:"), otherwise the PR lands in two categories.
+            for (const name of current) {
+              if (managed.includes(name) && name !== want) {
+                await github.rest.issues.removeLabel({ ...common, name });
+                core.info(`Removed stale type label: ${name}`);
+              }
+            }
+
+            if (current.includes(want)) {
+              core.info(`Type label already present: ${want}`);
+            } else {
+              await github.rest.issues.addLabel({ ...common, labels: [want] });
+              core.info(`Added type label: ${want}`);
+            }

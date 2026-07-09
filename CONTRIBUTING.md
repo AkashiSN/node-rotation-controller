@@ -65,6 +65,15 @@ in the same PR.
 - Pre-1.0 (`v0.x.y`) while the configuration schema and CRD shape stabilize.
 - The compatibility surface is: the `RotationPolicy` CRD schema, Prometheus
   metric names, and annotation keys.
+- **The GitHub Release page is the changelog.** There is intentionally no
+  `CHANGELOG.md`: each release's auto-generated notes (grouped into Features /
+  Fixes / Documentation / Maintenance via `.github/release.yml`) are sufficient
+  for a pre-1.0 project with infrequent releases, and an unmaintained changelog
+  file is worse than none.
+- **The release-note category is derived automatically from your PR title.** A
+  workflow reads the Conventional Commit type (`feat`, `fix`, `docs`, `chore`,
+  `refactor`, `test`, `perf`) and applies the matching label, so you do not need
+  to add it by hand — just keep the title well-formed.
 
 ## Scope reminder
 

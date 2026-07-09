@@ -1,0 +1,33 @@
+# Groups the auto-generated release notes (release.yaml -> action-gh-release
+# with generate_release_notes: true) into user-meaningful sections instead of a
+# flat list. GitHub keys categorization on PR *labels*, not title prefixes; the
+# pr-type-label workflow derives each label from the Conventional Commit type in
+# the PR title, so contributors need not add it by hand.
+#
+# NOTE: GitHub resolves this file relative to the *tag ref* being released (the
+# commit the tag points to), not the default branch, whenever that tag already
+# exists at generation time. Since the release job runs on tag push, this file
+# must be present in the commit a release tag points at, or the notes fall back
+# to a flat list.
+changelog:
+  categories:
+    - title: Features
+      labels:
+        - feat
+    - title: Fixes
+      labels:
+        - fix
+    - title: Documentation
+      labels:
+        - docs
+    - title: Maintenance
+      labels:
+        - chore
+        - refactor
+        - test
+        - perf
+    # Catch-all: anything not matched above (e.g. an unlabeled PR) still shows
+    # up rather than being silently dropped. Must be last.
+    - title: Other Changes
+      labels:
+        - '*'
