@@ -10,7 +10,7 @@ required status checks fast without ever leaving one stuck `pending`.
 |---|---|---|
 | `ci.yaml` | push to `main`, every PR | Required checks: `lint`, `test`, `build`, `chart` (plus `changes`, see below) |
 | `e2e.yaml` | push to `main`, every PR | KWOK-based Karpenter e2e for the surge mechanism, single `e2e` job |
-| `release.yaml` | push of a `v*` tag | Builds and pushes the multi-arch controller image and the Helm chart (OCI) to `ghcr.io`, then creates a GitHub Release |
+| `release.yaml` | push of a `v*` tag | Builds and pushes the multi-arch controller image and the Helm chart (OCI) to `ghcr.io`, attests and signs both, then creates a GitHub Release |
 | `pages.yaml` | push to `main` (docs-relevant paths), manual dispatch | Builds this VitePress site and deploys it to GitHub Pages |
 
 ## The `pending` trap
@@ -101,12 +101,23 @@ protection. It runs four sequential jobs:
 - `image` — builds and pushes the multi-arch (`linux/amd64`,
   `linux/arm64`) controller image to
   `ghcr.io/akashisn/node-rotation-controller`, tagging `latest` unless the
-  tag is a hyphenated pre-release (e.g. `v0.4.0-rc.1`);
+  tag is a hyphenated pre-release (e.g. `v0.4.0-rc.1`), with an in-registry
+  SBOM and SLSA provenance from the build; it then attests the pushed index
+  digest, keyless-signs it with cosign, and emits an SPDX SBOM for the
+  Release;
 - `chart` — packages the Helm chart and pushes it as an OCI artifact to
-  `oci://ghcr.io/akashisn/charts`;
-- `release` — downloads the packaged chart and creates a GitHub Release
-  from it, marked as a pre-release for the same hyphenated tags the image
-  job skips for `latest`.
+  `oci://ghcr.io/akashisn/charts`, then attests and keyless-signs the pushed
+  manifest digest;
+- `release` — downloads the packaged chart and the SPDX SBOM and creates a
+  GitHub Release with both attached, marked as a pre-release for the same
+  hyphenated tags the image job skips for `latest`.
+
+Attestation and signing run for pre-release tags too — an `-rc` that cannot
+be verified would defeat the purpose of publishing it. `permissions` are
+scoped per job rather than at the workflow level: only `image` and `chart`
+get `id-token`/`attestations`/`packages: write`, and only `release` gets
+`contents: write`. See [`SECURITY.md`](https://github.com/AkashiSN/node-rotation-controller/blob/main/SECURITY.md#verifying-releases)
+for how consumers verify the results.
 
 ## `pages.yaml`: docs deploy
 

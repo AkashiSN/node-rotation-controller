@@ -11,7 +11,7 @@
 |---|---|---|
 | `ci.yaml` | `main` への push、全 PR | 必須チェック: `lint`、`test`、`build`、`chart`（および後述の `changes`） |
 | `e2e.yaml` | `main` への push、全 PR | surge メカニズム向けの KWOK ベース Karpenter e2e、単一の `e2e` ジョブ |
-| `release.yaml` | `v*` タグの push | マルチアーキのコントローライメージと Helm chart（OCI）を `ghcr.io` にビルド・push した後、GitHub Release を作成 |
+| `release.yaml` | `v*` タグの push | マルチアーキのコントローライメージと Helm chart（OCI）を `ghcr.io` にビルド・push し、双方に attestation と署名を付与した後、GitHub Release を作成 |
 | `pages.yaml` | `main` への push（ドキュメント関連パス）、手動実行 | 本 VitePress サイトをビルドし GitHub Pages にデプロイ |
 
 ## `pending` の罠
@@ -97,12 +97,23 @@
 - `image` はマルチアーキ（`linux/amd64`、`linux/arm64`）のコントローラ
   イメージを `ghcr.io/akashisn/node-rotation-controller` へビルド・push し、
   ハイフン付きのプレリリースタグ（例: `v0.4.0-rc.1`）でない限り `latest`
-  タグも付与する;
+  タグも付与する。ビルドはレジストリ内 SBOM と SLSA provenance を併せて
+  publish し、その後 push された index ダイジェストに attestation を付与、
+  cosign で keyless 署名し、Release 用の SPDX SBOM を生成する;
 - `chart` は Helm chart をパッケージし `oci://ghcr.io/akashisn/charts` へ
-  OCI アーティファクトとして push する;
-- `release` はパッケージ済み chart をダウンロードし、それを添付した GitHub
-  Release を作成し、`image` ジョブが `latest` をスキップするのと同じハイフン
-  付きタグに対してはプレリリースとしてマークする。
+  OCI アーティファクトとして push した後、push されたマニフェストの
+  ダイジェストに attestation を付与し keyless 署名する;
+- `release` はパッケージ済み chart と SPDX SBOM をダウンロードし、その両方を
+  添付した GitHub Release を作成し、`image` ジョブが `latest` をスキップする
+  のと同じハイフン付きタグに対してはプレリリースとしてマークする。
+
+attestation と署名はプレリリースタグに対しても実行する — 検証できない `-rc`
+を publish しても意味がないためである。`permissions` はワークフロー全体ではなく
+ジョブ単位に絞ってあり、`id-token`/`attestations`/`packages: write` を持つのは
+`image` と `chart` のみ、`contents: write` を持つのは `release` のみである。
+利用者側の検証手順は
+[`SECURITY.md`](https://github.com/AkashiSN/node-rotation-controller/blob/main/SECURITY.md#verifying-releases)
+を参照。
 
 ## `pages.yaml`: ドキュメントデプロイ
 

@@ -105,8 +105,10 @@ cosign verify \
 
 ### With the GitHub CLI (build provenance)
 
-`gh attestation verify` resolves the attestation from the registry and checks it
-was produced by this repository:
+`gh attestation verify` checks the artifact was built by this repository. By
+default it fetches the attestation from the GitHub API using `--repo`; the
+release also pushes it to the registry, so `--bundle-from-oci` verifies without
+GitHub in the path:
 
 ```sh
 # Controller image
@@ -118,6 +120,12 @@ gh attestation verify \
 gh attestation verify \
   oci://ghcr.io/akashisn/charts/node-rotation-controller:0.5.0 \
   --repo AkashiSN/node-rotation-controller
+
+# …or read the bundle straight from ghcr.io rather than the GitHub API
+gh attestation verify \
+  oci://ghcr.io/akashisn/node-rotation-controller:0.5.0 \
+  --repo AkashiSN/node-rotation-controller \
+  --bundle-from-oci
 ```
 
 Add `--signer-workflow AkashiSN/node-rotation-controller/.github/workflows/release.yaml`
