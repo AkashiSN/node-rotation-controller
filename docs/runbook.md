@@ -99,6 +99,14 @@ so a pool of any realistic size warns with `ThroughputBurstShortfall`. And when
 `RotationSpansNextWindow` additionally warns: the rotation still holds the serial
 start gate when the next window opens.
 
+> **Near-continuous schedules warn too.** `RotationSpansNextWindow` fires on any
+> closed interval shorter than `t_rot + cooldownAfter`, however small — a daily
+> `00:00`–`23:59` window closes for one minute at each midnight, and a rotation
+> genuinely does hold the gate across it. The warning is correct, but on such a
+> schedule the amount by which `K · C` overstates capacity is tiny. If you mean
+> 24/7, write `00:00`–`24:00`: that union never closes, so there is no next
+> occurrence to carry into and the check does not apply.
+
 **Guidance.** Lowering `tGP` is a legitimate operational choice — for the
 stuck-drain bound and the 21-day cap below — but treat it as **tuning a safety
 bound, not as silencing a throughput warning**. Because PDB-respecting drains
