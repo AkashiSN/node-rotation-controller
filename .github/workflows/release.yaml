@@ -20,7 +20,7 @@ env:
   CHART_IMAGE: ghcr.io/akashisn/charts/node-rotation-controller
   # cosign is only needed by this release pipeline (not local dev), so it is
   # pinned here rather than in aqua.yaml.
-  COSIGN_VERSION: v2.4.1
+  COSIGN_VERSION: v3.1.1
 
 jobs:
   # Fail fast if the tag disagrees with Chart.yaml. The git tag is the source of
@@ -90,10 +90,11 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-      # Pinned to the v3 moving major tag: cosign-installer publishes no `v4`
-      # tag (only v4.0.0 … v4.1.2), so `@v4` does not resolve.
+      # Pinned to an exact tag, unlike the major-pinned actions above: this is
+      # the latest cosign-installer, and upstream publishes no `v4` moving tag
+      # (only v4.0.0 … v4.1.2), so `@v4` would not resolve.
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
       # Keyless signature over the same index digest, using the workflow's OIDC
@@ -173,10 +174,11 @@ jobs:
           subject-name: ${{ env.CHART_IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
-      # Pinned to the v3 moving major tag: cosign-installer publishes no `v4`
-      # tag (only v4.0.0 … v4.1.2), so `@v4` does not resolve.
+      # Pinned to an exact tag, unlike the major-pinned actions above: this is
+      # the latest cosign-installer, and upstream publishes no `v4` moving tag
+      # (only v4.0.0 … v4.1.2), so `@v4` would not resolve.
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
       - name: Sign chart (keyless)
