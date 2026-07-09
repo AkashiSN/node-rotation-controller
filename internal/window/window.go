@@ -216,7 +216,7 @@ func (s *Schedule) WorstCasePeriod() (time.Duration, bool) {
 // (§3.1) — so adjacent or overlapping entries that form one continuous window are
 // counted as a single occurrence, not split into raw entry pieces. The shortest
 // occurrence is the conservative worst case (a shorter D fits fewer rotations,
-// C = floor(D/(t_rot+cooldown))) without that false pessimism. The second return
+// C = m·ceil(D/(t_rot+cooldown))) without that false pessimism. The second return
 // is false when the schedule has no occurrences.
 func (s *Schedule) ShortestWindow() (time.Duration, bool) {
 	occs := s.mergedOccurrences()
@@ -229,6 +229,49 @@ func (s *Schedule) ShortestWindow() (time.Duration, bool) {
 			shortest = o.length
 		}
 	}
+	return shortest, true
+}
+
+// ShortestIdleGap returns the shortest interval over the weekly cycle during
+// which the effective maintenance window is *closed*: the span from the end of
+// one occurrence to the start of the next. It is the bound the layer-2
+// carry-over check compares t_rot against (spec §3.2): a rotation started near
+// an occurrence's close runs for up to t_rot and holds the per-NodePool serial
+// gate into the following occurrence whenever t_rot exceeds this gap.
+//
+// Unlike WorstCasePeriod (which measures start-to-start and takes the maximum),
+// this measures end-to-start and takes the minimum — the two answer opposite
+// questions. Occurrences are the merged union (§3.1), so adjacent entries form
+// one occurrence and never manufacture a zero-length gap between themselves.
+//
+// The second return is false when the gap is undefined: a schedule with no
+// occurrences, or a continuously-open union, which never closes and therefore
+// has no "next occurrence" to carry into (cf. WorstCasePeriod, issue #62).
+func (s *Schedule) ShortestIdleGap() (time.Duration, bool) {
+	occs := s.mergedOccurrences()
+	if len(occs) == 0 {
+		return 0, false
+	}
+	if len(occs) == 1 && occs[0].length >= week {
+		return 0, false
+	}
+	// mergedOccurrences anchors a week-wrapping occurrence at its true (late-week)
+	// start and returns it first, so sort before pairing neighbours.
+	slices.SortFunc(occs, func(a, b occurrence) int { return cmp.Compare(a.start, b.start) })
+
+	shortest := time.Duration(-1)
+	gap := func(from, to time.Duration) {
+		if shortest < 0 || to-from < shortest {
+			shortest = to - from
+		}
+	}
+	for i := 1; i < len(occs); i++ {
+		gap(occs[i-1].start+occs[i-1].length, occs[i].start)
+	}
+	// The cycle is weekly: the last occurrence's end (which may extend past the week
+	// boundary, having wrapped) meets the first occurrence's start one week on.
+	last := occs[len(occs)-1]
+	gap(last.start+last.length, occs[0].start+week)
 	return shortest, true
 }
 

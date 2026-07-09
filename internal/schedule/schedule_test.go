@@ -36,12 +36,15 @@ func absent(t *testing.T, r Result, code string) {
 }
 
 // baseAuto is the §3.2 worked example: a healthy auto-derived configuration.
+// The window is {Wed,Sat} 02:00–06:00, so occurrence starts are 3d/4d apart and
+// the shortest interval the window stays closed is 3d − 4h = 68h.
 func baseAuto() Inputs {
 	return Inputs{
 		E:              14 * 24 * time.Hour, // 336h
 		TGP:            time.Hour,
 		P:              4 * 24 * time.Hour, // 96h
 		WindowLen:      4 * time.Hour,
+		IdleGap:        new(68 * time.Hour),
 		ReadyTimeout:   15 * time.Minute,
 		Cooldown:       10 * time.Minute,
 		RetryBackoff:   30 * time.Minute,
@@ -62,8 +65,8 @@ func TestDeriveWorkedExample(t *testing.T) {
 	if r.G != 2 {
 		t.Errorf("G = %d, want 2", r.G)
 	}
-	if r.C != 2 {
-		t.Errorf("C = %d, want 2", r.C)
+	if r.C != 3 { // ceil(4h / 100m) = 3 — the near-edge start counts (§3.1)
+		t.Errorf("C = %d, want 3", r.C)
 	}
 	if len(r.Findings) != 0 {
 		t.Errorf("expected no findings, got %v", codes(r))
@@ -205,15 +208,60 @@ func TestDeriveHardCapUnderCapNoWarn(t *testing.T) {
 	absent(t, Derive(baseAuto()), "HardCapExceeded")
 }
 
-func TestDeriveThroughputZeroWarn(t *testing.T) {
+// TestDeriveCeilCountsTheNearEdgeStart pins D1 (issue #211): the window gates
+// only rotation *starts* (§3.1), so the legal starts in an occurrence of length D
+// are k·denom < D, and their count is ceil(D/denom) — the final near-edge start
+// completes past the window's close and must be counted. floor and ceil agree
+// only when D is an exact multiple of denom.
+func TestDeriveCeilCountsTheNearEdgeStart(t *testing.T) {
+	in := baseAuto() // denom = tRot 90m + cooldown 10m = 100m
+
+	in.WindowLen = 200 * time.Minute // exact multiple: starts at 0m, 100m
+	if r := Derive(in); r.C != 2 {
+		t.Errorf("C = %d, want 2 (D = 2·denom exactly)", r.C)
+	}
+
+	in.WindowLen = 201 * time.Minute // one more legal start at 200m
+	if r := Derive(in); r.C != 3 {
+		t.Errorf("C = %d, want 3 (ceil must count the near-edge start)", r.C)
+	}
+
+	in.WindowLen = time.Minute // a start at 0m is always legal in a non-empty window
+	if r := Derive(in); r.C != 1 {
+		t.Errorf("C = %d, want 1 (every non-empty occurrence admits one start)", r.C)
+	}
+}
+
+// TestDeriveAutoModeDefaultHasNoThroughputZero pins D1+D2 (issue #211): on the
+// stock Auto Mode tGP = 24h, t_rot ≈ 24.5h dwarfs any realistic window, but a
+// positive-length window still admits one rotation start. The old ThroughputZero
+// finding asserted otherwise and is gone; C = 1, not 0.
+func TestDeriveAutoModeDefaultHasNoThroughputZero(t *testing.T) {
 	in := baseAuto()
 	in.TGP = 24 * time.Hour // Auto Mode stock default → tRot ≈ 24.5h
 	r := Derive(in)
-	has(t, r, "ThroughputZero", Warn)
+	absent(t, r, "ThroughputZero")
 	absent(t, r, "ANonPositive") // A = 336 - (192 + 24.5) = 119.5h > 0
-	if r.C != 0 {
-		t.Errorf("C = %d, want 0", r.C)
+	if r.C != 1 {
+		t.Errorf("C = %d, want 1 (ceil(4h / 24h40m))", r.C)
 	}
+}
+
+// TestDeriveDegenerateWindowLenSkipsLayer2 locks the defensive guard D2 keeps: a
+// non-positive D is the one input that can still drive C below 1, and no layer-2
+// finding is meaningful there. Layer 1 owns that case (NoWindows) whenever the
+// schedule genuinely has no occurrences.
+func TestDeriveDegenerateWindowLenSkipsLayer2(t *testing.T) {
+	in := baseAuto()
+	in.WindowLen = 0
+	in.NodeCount = 100 // would trip both throughput checks at any positive C
+	r := Derive(in)
+	if r.C != 0 {
+		t.Errorf("C = %d, want 0 for a zero-length window", r.C)
+	}
+	absent(t, r, "ThroughputBelowArrival")
+	absent(t, r, "ThroughputBurstShortfall")
+	absent(t, r, "RotationSpansNextWindow")
 }
 
 func TestDeriveRetryBackoffShortWarn(t *testing.T) {
@@ -223,21 +271,93 @@ func TestDeriveRetryBackoffShortWarn(t *testing.T) {
 }
 
 func TestDeriveThroughputBelowArrival(t *testing.T) {
-	in := baseAuto() // C=2, A=142.5h, P=96h
-	in.NodeCount = 3 // N*P/A = 288/142.5 ≈ 2.02 > C(2)
+	in := baseAuto() // C=3, A=142.5h, P=96h
+	in.NodeCount = 5 // C·A = 427.5h < N·P = 480h
 	has(t, Derive(in), "ThroughputBelowArrival", Warn)
 
-	in.NodeCount = 2 // 192/142.5 ≈ 1.35 < C(2)
+	in.NodeCount = 4 // N·P = 384h < C·A = 427.5h
 	absent(t, Derive(in), "ThroughputBelowArrival")
 }
 
 func TestDeriveThroughputBurstShortfall(t *testing.T) {
-	in := baseAuto() // C=2, K=2 → K·C=4
-	in.NodeCount = 5 // a synchronized batch of 5 exceeds K·C=4
+	in := baseAuto() // C=3, K=2 → K·C=6
+	in.NodeCount = 7 // a synchronized batch of 7 exceeds K·C=6
 	has(t, Derive(in), "ThroughputBurstShortfall", Warn)
 
-	in.NodeCount = 4 // 4 == K·C: fits within the K guaranteed windows
+	in.NodeCount = 6 // 6 == K·C: fits within the K guaranteed windows
 	absent(t, Derive(in), "ThroughputBurstShortfall")
+}
+
+// TestDeriveShortWindowStillEvaluatesThroughput is the issue #211 reproduction:
+// E = 20d, tGP = 1d, {Sat,Sun} 02:00–03:30 Asia/Tokyo (P = 144h, D = 90m, idle
+// gap 22h30m). Layer 1 is clean. Before the fix, C = 0 emitted a lone
+// ThroughputZero and returned early, hiding both throughput checks — which is
+// every realistic maintenance window on stock Auto Mode. They must now evaluate.
+func TestDeriveShortWindowStillEvaluatesThroughput(t *testing.T) {
+	in := baseAuto()
+	in.E = 20 * 24 * time.Hour      // 480h
+	in.TGP = 24 * time.Hour         // tRot = 24h30m
+	in.P = 6 * 24 * time.Hour       // 144h (Sun → next Sat)
+	in.WindowLen = 90 * time.Minute // D
+	in.IdleGap = new(22*time.Hour + 30*time.Minute)
+	in.NodeCount = 3
+
+	r := Derive(in)
+	if want := 24*time.Hour + 30*time.Minute; r.TRot != want {
+		t.Fatalf("TRot = %v, want %v", r.TRot, want)
+	}
+	if want := 167*time.Hour + 30*time.Minute; r.A != want { // 480h − (288h + 24.5h)
+		t.Fatalf("A = %v, want %v", r.A, want)
+	}
+	if r.C != 1 {
+		t.Fatalf("C = %d, want 1", r.C)
+	}
+	// Layer 1 stays clean — the findings below are layer 2's alone.
+	absent(t, r, "ANonPositive")
+	absent(t, r, "AVeryAggressive") // A 167.5h > P 144h
+	absent(t, r, "HardCapExceeded") // E + tGP = 21d exactly, cap is a strict >
+
+	absent(t, r, "ThroughputZero")
+	has(t, r, "ThroughputBelowArrival", Warn)   // C·A = 167.5h < N·P = 432h
+	has(t, r, "ThroughputBurstShortfall", Warn) // N=3 > K·C = 2
+	has(t, r, "RotationSpansNextWindow", Warn)  // tRot 24h30m > idle gap 22h30m
+}
+
+// TestDeriveRotationSpansNextWindow pins D3 (issue #211). The check is a strict
+// `t_rot > idleGap`: a rotation that finishes exactly as the next occurrence
+// opens has released the serial gate and does not consume it.
+func TestDeriveRotationSpansNextWindow(t *testing.T) {
+	in := baseAuto() // tRot = 90m
+
+	in.IdleGap = new(89 * time.Minute)
+	has(t, Derive(in), "RotationSpansNextWindow", Warn)
+
+	in.IdleGap = new(90 * time.Minute) // exactly t_rot: the gate is free again
+	absent(t, Derive(in), "RotationSpansNextWindow")
+}
+
+// TestDeriveRotationSpansNextWindowSkippedWhenGapUndefined: a continuously-open
+// union never closes (window.ShortestIdleGap reports ok=false), so there is no
+// "next occurrence" to carry into and the check must not fire — not even with a
+// t_rot that dwarfs the whole week.
+func TestDeriveRotationSpansNextWindowSkippedWhenGapUndefined(t *testing.T) {
+	in := baseAuto()
+	in.IdleGap = nil
+	in.TGP = 30 * 24 * time.Hour
+	absent(t, Derive(in), "RotationSpansNextWindow")
+}
+
+// TestDeriveRotationSpansNextWindowDoesNotDiscountBurst: D3 and
+// ThroughputBurstShortfall stay orthogonal — the carry-over warn is emitted
+// alongside K·C rather than discounting it (the operator composes the two).
+// N = 6 == K·C, so the burst check stays quiet even while carry-over fires.
+func TestDeriveRotationSpansNextWindowDoesNotDiscountBurst(t *testing.T) {
+	in := baseAuto() // C=3, K=2 → K·C=6
+	in.IdleGap = new(time.Minute)
+	in.NodeCount = 6
+	r := Derive(in)
+	has(t, r, "RotationSpansNextWindow", Warn)
+	absent(t, r, "ThroughputBurstShortfall")
 }
 
 // TestDeriveOverrideNonPositive locks the defensive guard: Derive is pure and
@@ -251,19 +371,19 @@ func TestDeriveOverrideNonPositive(t *testing.T) {
 	absent(t, r, "OverrideGBelowOne") // A <= 0 short-circuits the G checks
 }
 
-// TestDeriveMaxUnavailableScalesC pins the spec §3.2 C = m·floor(...) factor:
+// TestDeriveMaxUnavailableScalesC pins the spec §3.2 C = m·ceil(...) factor:
 // m = 2 doubles the per-occurrence throughput. (v1 fixes m at 1; this guards
 // the formula for the v2 surge-parallelism expansion point.)
 func TestDeriveMaxUnavailableScalesC(t *testing.T) {
-	in := baseAuto() // C = floor(4h / 100m) = 2 at m=1
+	in := baseAuto() // C = ceil(4h / 100m) = 3 at m=1
 	in.MaxUnavailable = 2
-	if r := Derive(in); r.C != 4 {
-		t.Errorf("C = %d, want 4 (m=2 · floor(4h/100m))", r.C)
+	if r := Derive(in); r.C != 6 {
+		t.Errorf("C = %d, want 6 (m=2 · ceil(4h/100m))", r.C)
 	}
 
 	in.MaxUnavailable = 0 // unset is treated as 1
-	if r := Derive(in); r.C != 2 {
-		t.Errorf("C = %d, want 2 (m=0 treated as 1)", r.C)
+	if r := Derive(in); r.C != 3 {
+		t.Errorf("C = %d, want 3 (m=0 treated as 1)", r.C)
 	}
 }
 

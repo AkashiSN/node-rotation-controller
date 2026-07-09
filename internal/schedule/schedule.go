@@ -70,6 +70,7 @@ type Inputs struct {
 	TGPWasUnset    bool           // true when DrainFallback was substituted for tGP
 	P              time.Duration  // worst-case window period (window.WorstCasePeriod)
 	WindowLen      time.Duration  // D: window occurrence duration, for layer-2 throughput
+	IdleGap        *time.Duration // shortest interval the window stays closed between occurrences (window.ShortestIdleGap); nil skips the layer-2 carry-over check
 	ReadyTimeout   time.Duration  // surge.readyTimeout
 	Cooldown       time.Duration  // surge.cooldownAfter
 	RetryBackoff   time.Duration  // surge.retryBackoff
@@ -84,7 +85,7 @@ type Result struct {
 	TRot     time.Duration // t_rot
 	A        time.Duration // ageThreshold (derived, or the override echoed back)
 	G        int           // guaranteed chances (== K in auto mode; recomputed for an override)
-	C        int           // throughput per window occurrence (layer 2)
+	C        int           // throughput per window occurrence (layer 2); >= 1 whenever WindowLen > 0
 	Findings []Finding
 }
 
@@ -114,12 +115,15 @@ func Derive(in Inputs) Result {
 		r.G = in.K
 	}
 
-	if denom := r.TRot + in.Cooldown; denom > 0 {
-		// spec §3.2 layer-2: C = m·floor(D/(t_rot+cooldown)). m is fixed at 1 in
-		// v1 (policy validates surge.maxUnavailable == 1); kept explicit so v2
-		// surge parallelism needs no formula change.
+	if denom := r.TRot + in.Cooldown; denom > 0 && in.WindowLen > 0 {
+		// spec §3.2 layer-2: C = m·ceil(D/(t_rot+cooldown)). The window gates only
+		// rotation *starts* (§3.1), so the legal starts in an occurrence of length D
+		// are k·denom < D for k = 0, 1, …, and their count is ceil, not floor — the
+		// final near-edge start completes past the window's close (issue #211). m is
+		// fixed at 1 in v1 (policy validates surge.maxUnavailable == 1); kept explicit
+		// so v2 surge parallelism needs no formula change.
 		m := max(in.MaxUnavailable, 1)
-		r.C = m * int(in.WindowLen/denom)
+		r.C = m * int(ceilDiv(in.WindowLen, denom))
 	}
 
 	r.Findings = append(r.Findings, layer1(in, r)...)
@@ -192,10 +196,13 @@ func layer1(in Inputs, r Result) []Finding {
 func layer2(in Inputs, r Result) []Finding {
 	var fs []Finding
 
-	if r.C < 1 {
-		fs = append(fs, Finding{Severity: Warn, Code: "ThroughputZero",
-			Message: fmt.Sprintf("each window occurrence rotates 0 nodes (t_rot %v + cooldown %v exceeds window length %v); widen the window or lower terminationGracePeriod", r.TRot, in.Cooldown, in.WindowLen)})
-		return fs // the arrival comparison is meaningless at zero capacity
+	// With C = m·ceil(D/(t_rot+cooldown)), every occurrence of positive length admits
+	// at least one rotation start, so C >= 1 and the checks below always compare
+	// against a positive capacity. A non-positive D is degenerate — layer 1 reports
+	// NoWindows for a schedule with no occurrences — and is the only input that can
+	// still drive C below 1; nothing here is meaningful there (issue #211).
+	if in.WindowLen <= 0 || r.C < 1 {
+		return nil
 	}
 
 	// Candidate arrival rate exceeds capacity: C < N·P/A ⟺ C·A < N·P (A > 0).
@@ -219,6 +226,18 @@ func layer2(in Inputs, r Result) []Finding {
 			Message: fmt.Sprintf("a synchronized batch of N=%d nodes exceeds K·C=%d (K=%d windows × C=%d per window): the surplus cannot rotate gracefully before a shared deadline and may reach Forceful Expiration", in.NodeCount, in.K*r.C, in.K, r.C)})
 	}
 
+	// spec §3.2 layer-2 (carry-over): C counts the legal starts within one occurrence
+	// but does not establish that consecutive occurrences are independent. Because the
+	// window gates only starts (§3.1), a rotation begun near an occurrence's close runs
+	// for up to t_rot and still holds the per-NodePool serial gate (§5.2 step 2) when
+	// the next occurrence opens, consuming part or all of it. K·C above therefore reads
+	// as an upper bound whenever this warns. IdleGap is nil when the union never closes
+	// (a continuously-open window has no next occurrence to carry into).
+	if in.IdleGap != nil && r.TRot > *in.IdleGap {
+		fs = append(fs, Finding{Severity: Warn, Code: "RotationSpansNextWindow",
+			Message: fmt.Sprintf("t_rot %v exceeds the %v the maintenance window stays closed between occurrences: a rotation started near a window's close still holds the serial rotation gate when the next occurrence opens, so adjacent occurrences do not each deliver a full C=%d — read K·C as an upper bound; space the occurrences further apart or lower terminationGracePeriod", r.TRot, *in.IdleGap, r.C)})
+	}
+
 	return fs
 }
 
@@ -228,6 +247,16 @@ func floorDiv(a, b time.Duration) time.Duration {
 	q := a / b
 	if a%b != 0 && (a < 0) != (b < 0) {
 		q--
+	}
+	return q
+}
+
+// ceilDiv returns ceil(a/b) for a >= 0 and b > 0. It divides before adjusting
+// (rather than the (a+b-1)/b idiom) so a week-scale numerator cannot overflow.
+func ceilDiv(a, b time.Duration) time.Duration {
+	q := a / b
+	if a%b != 0 {
+		q++
 	}
 	return q
 }

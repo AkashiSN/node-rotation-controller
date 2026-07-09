@@ -82,23 +82,36 @@ that alert fires for a zonal-PV NodePool, suspect a per-AZ capacity gap first.
 **Applies to:** EKS Auto Mode NodePools (where the stock
 `terminationGracePeriod` (`tGP`) default is `24h`).
 
-**Why it matters.** The controller's throughput model
-([§3.2 layer 2](specification/03-design.md#32-candidate-selection)) must budget the full
-`tGP` as the potential drain time for *each* rotation, because that is the bound
-Karpenter can hold a drain to. The single-node rotation bound is
-`t_rot = readyTimeout + tGP + buffer`, and a window of duration `D` can rotate
-`C = floor(D / (t_rot + cooldownAfter))` nodes serially.
+**Why it matters.** `tGP` is the deadline at which Karpenter **force-completes** a
+drain — it is not the duration a healthy drain takes. The controller's throughput
+model ([§3.2 layer 2](specification/03-design.md#32-candidate-selection)) has to budget
+that full bound for *each* rotation: the single-node rotation bound is
+`t_rot = readyTimeout + tGP + buffer`, and a window of duration `D` admits
+`C = ceil(D / (t_rot + cooldownAfter))` serial rotation starts.
 
 With the stock `tGP = 24h`, `t_rot ≈ 24.5h`, so a typical 4-hour window computes
-`C = floor(4h / (24.5h + 10m)) = 0` — the controller **warns on every window**
-(`ThroughputZero`) even though PDB-respecting drains usually finish in minutes.
-The model is correct: it cannot assume the drain will be fast.
+`C = ceil(4h / (24.5h + 10m)) = 1`. One rotation per occurrence is real — the
+window gates only rotation *starts*, and an in-flight rotation continues past the
+window's close — but it makes `K · C` the entire budget a synchronized batch has
+before its shared deadline. On the defaults (`K = 2`) that budget is **two nodes**,
+so a pool of any realistic size warns with `ThroughputBurstShortfall`, and a
+`t_rot` that exceeds the interval between occurrences additionally warns with
+`RotationSpansNextWindow` (the rotation still holds the serial gate when the next
+window opens).
 
-**Guidance.** Lower the NodePool `spec.template.spec.terminationGracePeriod` to a
+**Guidance.** Lowering `tGP` is a legitimate operational choice — for the
+stuck-drain bound and the 21-day cap below — but treat it as **tuning a safety
+bound, not as silencing a throughput warning**. Because PDB-respecting drains
+finish in minutes, a lower `tGP` buys little real throughput; it only shortens the
+grace a genuinely slow drain is given. Widening the maintenance window or adding
+occurrences raises real capacity; lowering `tGP` mostly makes the *forecast* less
+pessimistic.
+
+If you do lower it, set NodePool `spec.template.spec.terminationGracePeriod` to a
 **realistic per-node drain bound** — the worked example in
 [§3.2](specification/03-design.md#32-candidate-selection) uses `1h`. With `tGP = 1h`,
-`t_rot ≈ 1.5h` and the same 4-hour window gives `C = floor(4h / (1.5h + 10m)) = 2`
-rotations per occurrence.
+`t_rot ≈ 1.5h` and the same 4-hour window gives `C = ceil(4h / (1.5h + 10m)) = 3`
+rotation starts per occurrence.
 
 Lowering `tGP` has two further effects, both beneficial here:
 
@@ -150,8 +163,8 @@ that stops reconciling does not latch its last value forever.
 `Warning` Events on the NodePool / NodeClaim
 ([§4.2](specification/04-operations.md#42-observability)), so `kubectl describe nodepool <name>`
 shows them without a metrics stack. Reasons include `KBelowTwo`,
-`AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `ThroughputZero`,
-`ThroughputBelowArrival`, `ThroughputBurstShortfall`, `OverrideGBelowK`, and `ShortLead`.
+`AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `ThroughputBelowArrival`,
+`ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK`, and `ShortLead`.
 
 **Judging reconcile liveness — use the metrics, not the warning log.** Both the
 Warning Events *and* the `INFO`-level warning **log** lines are deduplicated on
@@ -380,7 +393,8 @@ the section that fixes it. The signal strings are the exact ones from
 |------------------------|--------------|--------------|-------|
 | Surge node never appears; the placeholder Pod stays `Pending` and rotations end in `failure` | `noderotation_duration_seconds{phase="surge_wait"}` climbing; `noderotation_completed_total{outcome="failure"}` | No schedulable **same-AZ** capacity for the replacement (zonal-PV pin) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) |
 | `noderotation_candidates` never trends to `0` across two windows | `NodeRotationCandidatesNotDraining` ([R2](specification/07-risks.md#71-risks)) | Throughput too low for the window, **or** rotation wedged for one of the causes below | [§2](#2-lowering-auto-mode-terminationgraceperiod), then scan the rows below |
-| `ThroughputZero` warning on **every** window (`C = 0`) | `ThroughputZero` Warning Event | `tGP` too large for the window length, so the throughput model rounds to zero | [§2](#2-lowering-auto-mode-terminationgraceperiod) |
+| `ThroughputBurstShortfall` warning on **every** window | `ThroughputBurstShortfall` Warning Event | `K · C` is smaller than the pool's node count — the window is too short (or `tGP` too large) to rotate a synchronized batch before its shared deadline | [§2](#2-lowering-auto-mode-terminationgraceperiod) |
+| `RotationSpansNextWindow` warning | `RotationSpansNextWindow` Warning Event | `t_rot` exceeds the interval the window stays closed, so one rotation holds the serial gate into the following occurrence and `K · C` overstates capacity | [§2](#2-lowering-auto-mode-terminationgraceperiod) |
 | A drain hangs past `tGP + buffer` | `noderotation_drain_stuck == 1`; `NodeRotationDrainStuck` | Unsatisfiable PDB or a stuck Pod finalizer | [§5](#5-handling-a-stuck-drain) |
 | `noderotation_in_progress` stuck at `1` with no new completions | `NodeRotationStalledInWindow` | Either the surge is not coming up (→ §1) or the drain is stuck (→ §5) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) / [§5](#5-handling-a-stuck-drain) |
 | A NodePool never rotates; candidates frozen and no rotation starts | `noderotation_policy_conflict == 1`; `PolicyConflict` Warning Event | An equal-specificity `RotationPolicy` selector tie, or a runtime-invalid governing policy | [§3](#3-interpreting-the-noderotation_-metrics) metric row, [spec §5.4](specification/05-implementation.md#54-configuration-schema) |

@@ -425,3 +425,131 @@ func TestShortestWindowEmpty(t *testing.T) {
 		t.Errorf("ShortestWindow on empty schedule = (%v, %v), want (0, false)", got, ok)
 	}
 }
+
+// TestShortestIdleGap covers the closed interval between consecutive occurrences
+// of the effective window union — the quantity the layer-2 carry-over check
+// compares t_rot against (§3.2, issue #211). Occurrences are merged first, so
+// adjacent entries share one gap rather than manufacturing a zero-length one.
+func TestShortestIdleGap(t *testing.T) {
+	tests := []struct {
+		name string
+		ws   []policy.MaintenanceWindow
+		want time.Duration
+		ok   bool
+	}{
+		{
+			// {Wed,Sat} 02:00–06:00: gaps between occurrence starts are 3d and 4d,
+			// so the closed intervals are 3d−4h = 68h and 4d−4h = 92h.
+			name: "worked example",
+			ws:   tokyoWedSat(),
+			want: 68 * time.Hour,
+			ok:   true,
+		},
+		{
+			// The issue #211 reproduction: consecutive days, 90m each. Sat 03:30 →
+			// Sun 02:00 is 22h30m closed; Sun 03:30 → Sat 02:00 is 6d−1h30m.
+			name: "adjacent days leave a short gap",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "Asia/Tokyo", Days: []string{"Sat", "Sun"}, Start: "02:00", End: "03:30"},
+			},
+			want: 22*time.Hour + 30*time.Minute,
+			ok:   true,
+		},
+		{
+			// A single weekly occurrence: the only gap is the week wrap.
+			name: "single weekly occurrence wraps",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "UTC", Days: []string{"Sat"}, Start: "02:00", End: "06:00"},
+			},
+			want: week - 4*time.Hour,
+			ok:   true,
+		},
+		{
+			// Daily 00:00–23:59 leaves a one-minute closed interval each midnight.
+			name: "daily near-continuous leaves one minute",
+			ws: []policy.MaintenanceWindow{{
+				Timezone: "UTC",
+				Days:     []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"},
+				Start:    "00:00",
+				End:      "23:59",
+			}},
+			want: time.Minute,
+			ok:   true,
+		},
+		{
+			// Adjacent entries merge into one occurrence (§3.1 union), so the gap is
+			// the week wrap around the merged 6h window — never the 0 the raw
+			// entry boundary at 02:00 would suggest.
+			name: "adjacent entries merge into one occurrence",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "UTC", Days: []string{"Mon"}, Start: "00:00", End: "02:00"},
+				{Timezone: "UTC", Days: []string{"Mon"}, Start: "02:00", End: "06:00"},
+			},
+			want: week - 6*time.Hour,
+			ok:   true,
+		},
+		{
+			// The occurrence crosses the canonical week boundary (Asia/Tokyo Mon
+			// 06:00–10:00 = Sun 21:00–Mon 01:00 UTC): the wrap gap must be measured
+			// from its true end, giving week−4h, not a negative or split value.
+			name: "occurrence wraps the week boundary",
+			ws: []policy.MaintenanceWindow{
+				{Timezone: "Asia/Tokyo", Days: []string{"Mon"}, Start: "06:00", End: "10:00"},
+			},
+			want: week - 4*time.Hour,
+			ok:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newSchedule(t, tt.ws)
+			got, ok := s.ShortestIdleGap()
+			if ok != tt.ok {
+				t.Fatalf("ShortestIdleGap ok = %v, want %v", ok, tt.ok)
+			}
+			if got != tt.want {
+				t.Errorf("ShortestIdleGap = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestShortestIdleGapWrappedAmongSeveral exercises the sort-by-start path: the
+// wrapped occurrence is returned first by mergedOccurrences but is chronologically
+// last, so an unsorted scan would pair the wrong neighbours. Asia/Tokyo Mon
+// 06:00–10:00 is Sun 21:00–Mon 01:00 UTC; the Wed and Fri UTC occurrences sit
+// between. The shortest closed interval is Wed 06:00 → Fri 02:00 = 1d20h.
+func TestShortestIdleGapWrappedAmongSeveral(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "Asia/Tokyo", Days: []string{"Mon"}, Start: "06:00", End: "10:00"},
+		{Timezone: "UTC", Days: []string{"Wed"}, Start: "02:00", End: "06:00"},
+		{Timezone: "UTC", Days: []string{"Fri"}, Start: "02:00", End: "06:00"},
+	})
+	got, ok := s.ShortestIdleGap()
+	if !ok {
+		t.Fatal("ShortestIdleGap ok = false, want true")
+	}
+	if want := 44 * time.Hour; got != want { // Wed 06:00 → Fri 02:00
+		t.Errorf("ShortestIdleGap = %v, want %v", got, want)
+	}
+}
+
+// TestShortestIdleGapContinuous: a continuously-open union never closes, so no
+// rotation can carry over "into the next occurrence" — there is only one. The
+// gap is undefined and the carry-over check must be skipped, mirroring the
+// WorstCasePeriod special case (issue #62).
+func TestShortestIdleGapContinuous(t *testing.T) {
+	s := &Schedule{entries: []Entry{{
+		Loc: time.UTC, Days: allWeekdays(), StartMin: 0, EndMin: 24 * 60,
+	}}}
+	if got, ok := s.ShortestIdleGap(); ok {
+		t.Errorf("ShortestIdleGap on a continuous window = (%v, %v), want (0, false)", got, ok)
+	}
+}
+
+func TestShortestIdleGapEmpty(t *testing.T) {
+	s := newSchedule(t, nil)
+	if got, ok := s.ShortestIdleGap(); ok {
+		t.Errorf("ShortestIdleGap on empty schedule = (%v, %v), want (0, false)", got, ok)
+	}
+}
