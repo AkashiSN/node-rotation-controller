@@ -35,6 +35,10 @@ tests:
       - equal:
           path: spec.surge.maxUnavailable
           value: 1
+      # ADR-0001: the surge-less forceful fallback is opt-in, off by default
+      - equal:
+          path: spec.surge.forcefulFallback.enabled
+          value: false
       - equal:
           path: spec.prePull.enabled
           value: false

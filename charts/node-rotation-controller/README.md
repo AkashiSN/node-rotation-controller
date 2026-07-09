@@ -131,10 +131,23 @@ spec:
         - kubernetes.io/arch
         - karpenter.sh/capacity-type
       preferred: []
+    # Opt-in, default off (spec §3.3, ADR-0001). A candidate that cannot finish a
+    # graceful surge before its own expireAfter deadline is rotated surge-less
+    # inside the window — still via the voluntary, PDB-respecting path — rather
+    # than left to Karpenter's forceful expiration at an uncontrolled time.
+    forcefulFallback:
+      enabled: false
 
   prePull:
     enabled: false          # v2 (disabled in v1)
 ```
+
+> Enabling `surge.forcefulFallback` trades a make-before-break guarantee for
+> control over *when* the disruption happens. Watch
+> `noderotation_forceful_fallback_total`: a rising count means the graceful surge
+> keeps losing the race to node deadlines, which the
+> [runbook](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/runbook.md)
+> tells you how to remediate.
 
 ### Multiple policies (per-NodePool)
 

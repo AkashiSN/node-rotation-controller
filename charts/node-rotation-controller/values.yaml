@@ -243,8 +243,16 @@ rotationPolicies:
             - kubernetes.io/arch
             - karpenter.sh/capacity-type
           preferred: []
+        # Opt-in, default off (spec §3.3, ADR-0001). When a candidate cannot
+        # finish a graceful surge before its own expireAfter deadline, rotate it
+        # surge-less inside the window — deleting the NodeClaim via the same
+        # voluntary, PDB-respecting path — instead of letting Karpenter force-
+        # expire it at an uncontrolled time. Watch
+        # noderotation_forceful_fallback_total when you enable this.
+        forcefulFallback:
+          enabled: false
 
       # v2 (disabled in v1). The v1 parser accepts only `enabled` here; the
-      # images list lands when pre-pull ships in v0.4.
+      # images list lands when pre-pull ships (spec §6.2 roadmap).
       prePull:
         enabled: false

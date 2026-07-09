@@ -163,6 +163,16 @@
                     "required": { "type": "array", "items": { "type": "string" } },
                     "preferred": { "type": "array", "items": { "type": "string" } }
                   }
+                },
+                "forcefulFallback": {
+                  "type": "object",
+                  "description": "Opt-in window-bounded surge-less forceful fallback (spec §3.3, ADR-0001). Default off.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Rotate a candidate that cannot finish a graceful surge before its own deadline surge-less, in-window, via the voluntary (PDB-respecting) path."
+                    }
+                  }
                 }
               }
             },
