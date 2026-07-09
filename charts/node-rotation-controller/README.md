@@ -271,7 +271,10 @@ manage them on the primary release or out-of-band).
 Pre-1.0, treat every upgrade as potentially breaking and read the release notes.
 
 - **CRD updates** are not applied automatically by Helm (see the CRD note above).
-  After upgrading the chart, re-apply `crds/` if the CRD changed.
+  Apply `crds/` **before** `helm upgrade` when the CRD changed: a `RotationPolicy`
+  that sets a field the installed CRD does not know cannot take effect. Which
+  releases changed it is recorded in the runbook's
+  [per-release CRD table](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/runbook.md#8-upgrading-and-rolling-back-the-controller).
 
 ## Uninstalling
 

@@ -80,6 +80,13 @@ in the same PR.
   Fixes / Documentation / Maintenance via `.github/release.yml`) are sufficient
   for a pre-1.0 project with infrequent releases, and an unmaintained changelog
   file is worse than none.
+- **Every release adds a row to the runbook's CRD-change table.** There is no
+  changelog file, so the per-release record of `RotationPolicy` schema changes
+  lives in [`docs/runbook.md` §8](docs/runbook.md#8-upgrading-and-rolling-back-the-controller)
+  and its JA mirror. Append the row in the release-preparation PR — "None" is a
+  valid answer, and the row is what tells an operator crossing several versions
+  whether they must `kubectl apply` the CRDs before `helm upgrade`. The release
+  notes link to the table rather than restating it.
 - **The release-note category is derived automatically from your PR title.** A
   workflow reads the Conventional Commit type (`feat`, `fix`, `docs`, `chore`,
   `refactor`, `test`, `perf`) and applies the matching label, so you do not need
