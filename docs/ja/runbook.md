@@ -316,7 +316,7 @@ PDB/finalizer を直し、drain を完了させること。
 
 ## 6. アラート（PrometheusRule）
 
-Helm chart は [§4.2](specification/04-operations.md#42-観測性) の 6 アラートを含む **任意の**
+Helm chart は [§4.2](specification/04-operations.md#42-観測性) の 7 アラートを含む **任意の**
 `PrometheusRule` を同梱する。既定では **オフ**（既存インストールや Prometheus Operator の
 ないクラスタに影響しないように）。有効化:
 
@@ -333,6 +333,7 @@ helm upgrade --install rot charts/node-rotation-controller \
 | `NodeRotationDrainStuck` | `noderotation_drain_stuck == 1` | drain が `tGP + buffer` を超えてブロック — [§5](#5-drain-が詰まったときの対処)。 |
 | `NodeRotationShortLeadNodes` | `noderotation_short_lead_nodes > 0` | 刻印済み `expireAfter` で `K` 回を保証できなくなった NodeClaim。 |
 | `NodeRotationRetryCountHigh` | `noderotation_retry_count >= 3` | 同一ローテーションが失敗し続ける — systematic な原因（[R3](specification/07-risks.md#71-リスク)）。 |
+| `NodeRotationForcefulFallback` | `increase(noderotation_forceful_fallback_total[1h]) > 0` | graceful な surge がノードの期限とのレースに負け、surge なしでローテーションされた（[ADR-0001](../reference/adr/0001-window-bounded-forceful-fallback.md)（英語））。1 回の fallback は設計どおりの挙動であるため `severity: info` で同梱する。対処は [§3](#3-noderotation_-メトリクスの読み方) を参照。 |
 
 **スケジュール依存のレンジを調整する。** 2 つのアラートはウィンドウ周期 `P` とウィンドウ
 長 `D` に依存する。これらのレンジはハードコードではなく **chart の値** である:

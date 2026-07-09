@@ -63,7 +63,7 @@ controller is healthy and which replica holds the leader Lease.
 | `PodDisruptionBudget` | Keeps a leader replica alive during a node drain (R1, spec §7.1) | `podDisruptionBudget.enabled` |
 | `Service` (`/metrics`) | Exposes the controller metrics (spec §4.2) | `metrics.service.enabled` |
 | `ServiceMonitor` | Prometheus Operator scrape config | `metrics.serviceMonitor.enabled` |
-| `PrometheusRule` | The six §4.2 alerts | `prometheusRule.enabled` |
+| `PrometheusRule` | The seven §4.2 alerts | `prometheusRule.enabled` |
 
 > **CRDs are installed from the chart's `crds/` directory.** Per Helm's CRD
 > handling, they are created on first install but **not** upgraded or deleted by
@@ -199,7 +199,7 @@ helm upgrade --install node-rotation-controller \
   --set prometheusRule.enabled=true
 ```
 
-The `PrometheusRule` ships six alerts. Several depend on your window cadence —
+The `PrometheusRule` ships seven alerts. Several depend on your window cadence —
 tune `prometheusRule.candidatesNotDraining.windowRange` to roughly two window
 periods (2·P) and `prometheusRule.stalledInWindow.completionRange` to roughly one
 window's duration, and adjust each alert's `for`/`severity` as needed. See the
@@ -236,9 +236,9 @@ for how to read each metric and respond.
 | `metrics.serviceMonitor.interval` | `30s` | Scrape interval. |
 | `metrics.serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout. |
 | `metrics.serviceMonitor.labels` | `{}` | Extra labels for the ServiceMonitor (e.g. a Prometheus release selector). |
-| `prometheusRule.enabled` | `false` | Create a PrometheusRule with the six §4.2 alerts. Requires the `monitoring.coreos.com/v1` CRD. |
+| `prometheusRule.enabled` | `false` | Create a PrometheusRule with the seven §4.2 alerts. Requires the `monitoring.coreos.com/v1` CRD. |
 | `prometheusRule.labels` | `{}` | Extra labels for the PrometheusRule. |
-| `prometheusRule.<alert>.for` / `.severity` | per alert | Per-alert `for` duration and severity. Alerts: `completedFailure`, `candidatesNotDraining`, `stalledInWindow`, `drainStuck`, `shortLeadNodes`, `retryCountHigh`. |
+| `prometheusRule.<alert>.for` / `.severity` | per alert | Per-alert `for` duration and severity. Alerts: `completedFailure`, `candidatesNotDraining`, `stalledInWindow`, `drainStuck`, `shortLeadNodes`, `retryCountHigh`, `forcefulFallback` (ships `severity: info` — a single fallback is by design per ADR-0001; tighten it for your environment). |
 | `prometheusRule.candidatesNotDraining.windowRange` | `8d` | `min_over_time` range; set to ~2·P for your schedule. |
 | `prometheusRule.stalledInWindow.completionRange` | `4h` | Range covering ~one window's duration. |
 | `podDisruptionBudget.enabled` | `true` | Create a PDB for the controller so a node drain cannot take out both replicas at once (R1, spec §7.1). |
