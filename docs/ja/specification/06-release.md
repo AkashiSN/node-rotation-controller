@@ -11,6 +11,14 @@
   バージョンで GitHub Container Registry（ghcr.io）に OCI アーティファクトとして
   publish する。リリースパイプラインは publish 前にタグが `Chart.yaml` の
   `version`==`appVersion` と一致することを検証する（タグを正とする）。
+- **サプライチェーン attestation。** どちらの OCI アーティファクトも、リリース
+  ワークフローの OIDC アイデンティティに紐づく keyless な cosign 署名と GitHub
+  build-provenance（SLSA）attestation を付けて publish する（鍵素材は不要）。
+  イメージにはビルドが生成した in-registry の SBOM と SLSA provenance も付属し、
+  各 GitHub Release にはダウンロード可能な SPDX SBOM を添付する。attestation と
+  署名は pre-release タグに対しても実行する。検証手順（`cosign verify`、
+  `gh attestation verify`）は [`SECURITY.md`](../../../SECURITY.md#verifying-releases)
+  にある。
 - インストール: `helm install ... oci://ghcr.io/akashisn/charts/node-rotation-controller --version X.Y.Z`。
 
 ## 6.2 ロードマップ
