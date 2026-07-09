@@ -85,7 +85,6 @@ GitHub Container Registry（OCI）から公開済みの chart をインストー
 ```sh
 helm install node-rotation-controller \
   oci://ghcr.io/akashisn/charts/node-rotation-controller \
-  --version 0.4.0 \
   --namespace node-rotation-system --create-namespace \
   --set-json 'rotationPolicies=[{"spec":{"nodePoolSelector":{"matchLabels":{"workload":"api"}},"maintenanceWindows":[{"timezone":"Asia/Tokyo","days":["Wed","Sat"],"start":"02:00","end":"06:00"}]}}]'
 ```

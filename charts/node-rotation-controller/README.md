@@ -30,14 +30,15 @@ Install the published chart from the GitHub Container Registry (OCI):
 ```sh
 helm install node-rotation-controller \
   oci://ghcr.io/akashisn/charts/node-rotation-controller \
-  --version 0.4.0 \
   --namespace node-rotation-system --create-namespace \
   --set-json 'rotationPolicies=[{"spec":{"nodePoolSelector":{"matchLabels":{"workload":"api"}},"maintenanceWindows":[{"timezone":"Asia/Tokyo","days":["Wed","Sat"],"start":"02:00","end":"06:00"}]}}]'
 ```
 
-> The chart version has **no** leading `v` (the release guard strips it from the
-> `vX.Y.Z` git tag). Pre-1.0, the chart `version` and `appVersion` move together
-> (spec §6.1).
+> The commands above install the latest published chart. Pin a release with
+> `--version X.Y.Z` — the chart version has **no** leading `v` (the release guard
+> strips it from the `vX.Y.Z` git tag). Pre-1.0, the chart `version` and
+> `appVersion` move together (spec §6.1), and the values surface may change
+> between minor releases: `rotationPolicies` as shown here needs chart 0.5.0+.
 
 Or install from a local checkout of this repository:
 
@@ -179,7 +180,7 @@ Prometheus Operator installed you can let the chart wire scraping and alerting:
 
 ```sh
 helm upgrade --install node-rotation-controller \
-  oci://ghcr.io/akashisn/charts/node-rotation-controller --version 0.4.0 \
+  oci://ghcr.io/akashisn/charts/node-rotation-controller \
   --namespace node-rotation-system \
   --set metrics.serviceMonitor.enabled=true \
   --set prometheusRule.enabled=true
@@ -249,8 +250,8 @@ v1 assumes a **single install per cluster**. The `PriorityClass` and the sample
 `RotationPolicy` are **cluster-scoped objects with fixed names**, so a second
 release would collide on them. To run an additional release, set
 `placeholder.priorityClass.create=false` (share the one PriorityClass) and
-`rotationPolicy.create=false` with `rotationPolicies: []` (so the release renders
-no `RotationPolicy` objects — manage them on the primary release or out-of-band).
+`rotationPolicies: []` (so the release renders no `RotationPolicy` objects —
+manage them on the primary release or out-of-band).
 
 ## Upgrading
 
