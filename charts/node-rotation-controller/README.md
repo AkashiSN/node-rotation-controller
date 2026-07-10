@@ -281,8 +281,8 @@ Pre-1.0, treat every upgrade as potentially breaking and read the release notes.
   that sets a field the installed CRD does not know cannot take effect. Which
   releases changed it is recorded in the runbook's
   [per-release CRD table](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/runbook.md#8-upgrading-and-rolling-back-the-controller).
-- **`v0.6.0` seals the `rotationPolicies[].spec` values subtree** (issue #219): an
-  unrecognized key that earlier installs accepted silently now fails the upgrade.
+- **The `rotationPolicies[].spec` values subtree is now sealed** (issue #219): an
+  unrecognized key that earlier charts accepted silently now fails the upgrade.
   If you carry one — a typo, or a key added ahead of a feature — render the new
   chart against your values first (`helm template rot charts/node-rotation-controller
   -f your-values.yaml`) and fix or remove any key the schema names before upgrading.

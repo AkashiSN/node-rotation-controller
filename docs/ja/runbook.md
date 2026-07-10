@@ -472,15 +472,15 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 
 **chart の values スキーマ変更もアップグレードを壊しうる。** 上記の CRD とは別に、
 chart の `values.schema.json` は `helm install`/`helm upgrade` 時に Helm の values を
-検証する。`v0.6.0` は `rotationPolicies[].spec` サブツリーを **シール** する
+検証する。chart は `rotationPolicies[].spec` サブツリーを **シール** するようになった
 （`additionalProperties: false`、issue #219）: `spec` 配下の未知のキー — `surge`、
 `matchNodeRequirements`、`forcefulFallback`、`prePull`、各 `maintenanceWindows` エントリ、
 各 `nodePoolSelector.matchExpressions` エントリの配下を含む — は、黙って落とされる
-のではなく **コマンドが失敗する** ようになった。以前の chart はそうしたキーを受理し、
+のではなく **コマンドが失敗する**。この変更より前の chart はそうしたキーを受理し、
 CRD の structural スキーマに prune させていたため、`surge.readyTimout: 15m` のような
 typo もきれいにインストールされ、どこにもエラーが出ないまま既定値が効いたままになっていた。
 そのようなキーを持つインストール — typo、あるいは機能の実装を先取りして追加したキー — が
-あると、`v0.6.0` への `helm upgrade` は該当キーを名指しするハードエラーになる。
+あると、シール後の chart への最初の `helm upgrade` は該当キーを名指しするハードエラーになる。
 **アップグレード前に検知する** には、自分の values に対して新しい chart をレンダリングする:
 
 ```sh

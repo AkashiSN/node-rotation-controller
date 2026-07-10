@@ -495,17 +495,18 @@ per the paragraph above, it is either rejected or dropped.
 
 **Chart values-schema changes can also break an upgrade.** Distinct from the CRD
 above, the chart's `values.schema.json` validates your Helm values at
-`helm install`/`helm upgrade` time. `v0.6.0` **seals** the `rotationPolicies[].spec`
-subtree (`additionalProperties: false`, issue #219): an unrecognized key under
-`spec` — including under `surge`, `matchNodeRequirements`, `forcefulFallback`,
-`prePull`, each `maintenanceWindows` entry, and each `nodePoolSelector.matchExpressions`
-entry — now **fails the command** instead of being silently dropped. Earlier
-charts accepted such a key and let the CRD's structural schema prune it, so a typo
-like `surge.readyTimout: 15m` installed cleanly and left the default in effect with
-no error anywhere. If any install carries such a key — a typo, or one added ahead
-of a feature landing — the `helm upgrade` into `v0.6.0` turns into a hard failure
-naming the offending key. **Find it before upgrading** by rendering the new chart
-against your own values:
+`helm install`/`helm upgrade` time. The chart now **seals** the
+`rotationPolicies[].spec` subtree (`additionalProperties: false`, issue #219): an
+unrecognized key under `spec` — including under `surge`, `matchNodeRequirements`,
+`forcefulFallback`, `prePull`, each `maintenanceWindows` entry, and each
+`nodePoolSelector.matchExpressions` entry — **fails the command** instead of being
+silently dropped. Charts before this change accepted such a key and let the CRD's
+structural schema prune it, so a typo like `surge.readyTimout: 15m` installed
+cleanly and left the default in effect with no error anywhere. If any install
+carries such a key — a typo, or one added ahead of a feature landing — the first
+`helm upgrade` into a sealed chart turns into a hard failure naming the offending
+key. **Find it before upgrading** by rendering the new chart against your own
+values:
 
 ```sh
 helm template rot charts/node-rotation-controller -f your-values.yaml >/dev/null
