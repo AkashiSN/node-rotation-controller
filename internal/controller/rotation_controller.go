@@ -839,9 +839,6 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 
 	surgeWait := r.now().Sub(startedAt)
 	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
-	// surge_wait phase complete: started-at → surge_ready (§4.2). Observed here
-	// because started-at lives on the candidate, which is deleted just below.
-	r.recorder().ObserveDuration(pool.Name, PhaseSurgeWait, surgeWait)
 	if err := r.freezeNode(ctx, host, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -861,10 +858,18 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
-	// Both lines are emitted only after the claim's pending → draining write has
-	// landed. A pass that fails either write above is retried from this same phase
-	// (the writes are idempotent by design), so an emission placed before them
-	// would repeat on every retry rather than mark the transition once.
+	// surge_wait phase complete: started-at → surge_ready (§4.2). Observed only
+	// after the claim's pending → draining write has landed. A pass that fails
+	// either write above is retried from this same phase (the writes are
+	// idempotent by design), so an observation placed before them would take a
+	// second, strictly-larger sample on every retry (same started-at anchor, a
+	// later now) and inflate the histogram with a duration no rotation took. A
+	// controller that dies between the write and this line drops one sample
+	// instead — for a histogram that is the correct trade: a missing sample lowers
+	// _count truthfully, a phantom sample reports a duration that never occurred.
+	r.recorder().ObserveDuration(pool.Name, PhaseSurgeWait, surgeWait)
+	// Both lines are emitted only after that same write has landed, for the same
+	// reason — an emission before it would repeat on every retry.
 	l := log.FromContext(ctx).WithValues("nodepool", pool.Name)
 	l.Info("surge node ready", "nodeclaim", cand.Name, "surgeNode", host,
 		"surgeWait", surgeWait.Round(time.Second).String())
@@ -1113,16 +1118,12 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 		r.recorder().Success(pool.Name) // emit before releasing the gate (at-least-once)
 		// drain phase complete: draining-at → finalization (§4.2). Guarded so a
 		// rotation that reached draining before this anchor existed is uncounted
-		// rather than mis-anchored.
-		// Read the anchor's fields before the patch below erases them, but emit only
-		// after it lands: a failed patch re-enters completeOrAbort with the anchor
-		// still set, and an emission placed here would announce the rotation complete
-		// once per retry. The Success counter deliberately keeps its at-least-once
-		// placement above — a lost count is worse than a duplicated one.
+		// rather than mis-anchored. Read the anchor's fields before the patch below
+		// erases them, but observe the histogram and log only after it lands.
+		drain, hasDrain := time.Duration(0), false
 		kv := []any{"nodeclaim", name, "mode", rotationMode(pool)}
 		if drainingAt, ok := parseTime(pool.Annotations[annotations.DrainingAt]); ok {
-			drain := r.now().Sub(drainingAt)
-			r.recorder().ObserveDuration(pool.Name, PhaseDrain, drain)
+			drain, hasDrain = r.now().Sub(drainingAt), true
 			kv = append(kv, "drain", drain.Round(time.Second).String())
 		}
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
@@ -1133,6 +1134,18 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 			delete(m, annotations.RotationMode)
 		}); err != nil {
 			return ctrl.Result{}, err
+		}
+		// Observed only after the anchor-clearing write lands: a failed patch
+		// re-enters completeOrAbort with draining-at still set, and an observation
+		// placed before it would take a second, strictly-larger sample (same
+		// draining-at anchor, a later now) on every retry — inflating the histogram
+		// with a duration no rotation took. A controller that dies between the write
+		// and this line drops one sample instead; for a histogram that is the correct
+		// trade — a missing sample lowers _count truthfully, a phantom sample reports
+		// a duration that never occurred. The Success counter deliberately keeps its
+		// at-least-once placement above — a lost count is worse than a duplicated one.
+		if hasDrain {
+			r.recorder().ObserveDuration(pool.Name, PhaseDrain, drain)
 		}
 		log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation complete", kv...)
 		if r.Events != nil {
