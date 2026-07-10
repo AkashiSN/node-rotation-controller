@@ -27,7 +27,7 @@ Split the single derived quantity in two.
 
 ### The containment boundary
 
-`drainEstimate` influences **no** rotation timing, **no** candidate selection, **no** start gate, **no** drain bound, and **no** `Fatal` finding. Everything that can gate a NodePool out of starting rotations, or that can make a node race its own Forceful Expiration, is on the deadline side and keeps using `tGP`. The only thing a wrong `drainEstimate` can do is make a layer-2 `Warn` too loud or too quiet.
+`drainEstimate` influences **no** rotation timing, **no** candidate selection, **no** start gate, **no** drain bound, and **no** `Fatal` finding. Everything that can gate a NodePool out of starting rotations, or that can make a node race its own Forceful Expiration, is on the deadline side and keeps using `tGP`. The only thing a wrong `drainEstimate` can do is make a forecast-side `Warn` too loud or too quiet — a layer-2 throughput warning, or the `DrainEstimateAboveTGP` warning that `Derive` itself emits about the forecast input.
 
 This is pinned by `TestDeriveDrainEstimateContainment` in `internal/schedule/schedule_test.go`. Holding every other input fixed and sweeping `drainEstimate` across `nil`, `1m`, `10m`, `1h`, and `25h` (clamped), the test asserts that `TRot`, `A`, `G`, and the **entire layer-1 finding set** are invariant, while only `C`, `TRotEst`, `DrainEstimate`, and the forecast-side findings (the layer-2 warnings plus `DrainEstimateAboveTGP`) may move. It deliberately forces a non-empty layer-1 set (`RetryBackoffShort`) first, so the invariance is not vacuous.
 
