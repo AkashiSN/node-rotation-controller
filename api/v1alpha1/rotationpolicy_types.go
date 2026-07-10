@@ -129,6 +129,20 @@ type Surge struct {
 	// uncontrolled time. Default off keeps the surge-only behavior.
 	// +optional
 	ForcefulFallback FeatureToggle `json:"forcefulFallback,omitempty"`
+
+	// drainEstimate is the expected duration of a healthy, PDB-respecting drain. It
+	// feeds ONLY the layer-2 throughput forecast (spec §3.2): C = m·ceil(D /
+	// (readyTimeout + drainEstimate + buffer + cooldownAfter)). It is not a bound and
+	// changes no rotation timing — terminationGracePeriod remains the deadline at
+	// which Karpenter force-completes a drain, and ageThreshold/leadTime keep using it.
+	//
+	// Unset resolves to min(terminationGracePeriod, 10m). There is deliberately no
+	// schema default: the fallback depends on the NodePool's terminationGracePeriod,
+	// which admission cannot see. An explicit value above terminationGracePeriod is
+	// unreachable and is warned about and clamped; must be positive (validated at
+	// runtime).
+	// +optional
+	DrainEstimate *metav1.Duration `json:"drainEstimate,omitempty"`
 }
 
 // MatchNodeRequirements selects which candidate-node requirements the placeholder
