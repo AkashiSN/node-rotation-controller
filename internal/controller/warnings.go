@@ -46,9 +46,11 @@ type warningEmitter struct {
 }
 
 type poolWarnState struct {
-	findingCodes map[string]bool // last-warned non-fatal finding codes
-	shortLead    map[string]bool // last-warned short-lead NodeClaim names
-	conflict     string          // last-warned policy-conflict detail ("" = none)
+	findingCodes map[string]bool   // last-warned non-fatal finding codes
+	shortLead    map[string]bool   // last-warned short-lead NodeClaim names
+	conflict     string            // last-warned policy-conflict detail ("" = none)
+	noCandidate  string            // last-logged no-candidate reason key ("" = none)
+	phPending    map[string]string // NodeClaim name → last-logged "reason|message"
 }
 
 func newWarningEmitter(rec events.EventRecorder) *warningEmitter {
@@ -60,7 +62,11 @@ func newWarningEmitter(rec events.EventRecorder) *warningEmitter {
 func (w *warningEmitter) poolStateLocked(pool string) *poolWarnState {
 	s := w.state[pool]
 	if s == nil {
-		s = &poolWarnState{findingCodes: map[string]bool{}, shortLead: map[string]bool{}}
+		s = &poolWarnState{
+			findingCodes: map[string]bool{},
+			shortLead:    map[string]bool{},
+			phPending:    map[string]string{},
+		}
 		w.state[pool] = s
 	}
 	return s

@@ -44,6 +44,10 @@ them with `kubectl describe` without reading metrics:
 | Non-fatal schedule finding (§3.2 layers 1–2) | NodePool | the finding code (e.g. `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `DrainEstimateAboveTGP`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK`) | the finding becomes active for the NodePool |
 | Short-lead NodeClaim (§3.2 layer 3) | NodeClaim | `ShortLead` | the claim's own `expireAfter` can no longer guarantee `K` chances |
 | Surge-less forceful fallback (§3.3) | NodePool | `ForcefulFallback` | a surge-less window-bounded rotation begins because a graceful surge cannot complete before the candidate's deadline (opt-in `surge.forcefulFallback`) |
+| Rotation started (§5.2 step 3) | NodePool | `RotationStarted` | a candidate is picked and the pool's serial gate is anchored (`Normal`) |
+| Rotation completed (§5.2) | NodePool | `RotationCompleted` | the old NodeClaim finalized away out of `draining` (`Normal`) |
+| Rotation attempt failed (§5.2) | NodeClaim | `RotationFailed` | the surge node did not become `Ready` within `readyTimeout`; the attempt is rolled back |
+| Unschedulable surge placeholder (§3.3) | NodeClaim | `SurgeUnschedulable` | the placeholder carries `PodScheduled=False`; the scheduler's reason and message are copied into the Event |
 
 Events are **deduplicated by emitting on the transition into the condition**:
 a finding/claim that clears and later returns re-fires. The dedup state is
@@ -51,11 +55,54 @@ in-memory, so a controller restart re-emits each active warning once. Fatal
 findings are not events — they block the start of a rotation and are logged by
 the §5.2 feasibility gate.
 
+**State-machine transitions.** Every transition of the rotation state machine
+(§5.2) emits one `INFO` log line, so a rotation is reconstructable from the log
+alone rather than from `NodeClaim` timestamps and Karpenter's Events. The volume
+is a handful of lines per rotation, so they are **not** behind `V(1)`.
+
+Each line is emitted **after** the durable annotation write that makes its
+transition real (§5.3), never before. A reconcile whose write fails is retried
+from the same phase — the state machine's writes are idempotent by design — so a
+line placed before the write would repeat on every retry rather than mark the
+transition once. The consequence is the opposite trade: a controller that dies
+between the write and the log **drops** that line. The rotation is unaffected,
+and the durable state on the object remains the authority; the log is a
+best-effort narration of it, not a ledger.
+
+| Line | Fields |
+|------|--------|
+| `rotation candidate selected` | `nodeclaim`, `age`, `deadline`, `eligible`, `surgeless` |
+| `no rotation candidate` | `reason` — the blocking start gate (`outOfWindow`, `frozen`, `cooldownAfterSuccess`, `cooldownAfterFailure`), or `noEligibleClaim` plus the census (`claims`, `notTriggered`, `inBackoff`, `inFlight`, `optedOut`, `deleting`, `notReady`, `terminal`) |
+| `surge placeholder created` | `placeholder`, `requests`, `reschedulablePods`, `daemonSetPods`, `mirrorPods`, `completedPods`, `nodePinnedPods` |
+| `surge placeholder is not schedulable` | `placeholder`, `reason`, `detail` — the placeholder's `PodScheduled=False` condition |
+| `surge node ready` | `surgeNode`, `surgeWait` |
+| `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
+| `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
+| `rotation complete` | `mode`, `drain` |
+
+Two of these describe **level-triggered** conditions rather than edges — the
+reconcile re-evaluates them every pass — so they carry the same transition dedup
+as the Warning Events above: `no rotation candidate` re-fires only when its
+reason or census changes, and `surge placeholder is not schedulable` only when
+the scheduler's message changes. Without that dedup an idle NodePool would log
+every `longRequeue` and a `readyTimeout`-long stall would log every
+`shortRequeue`.
+
+> **Why `surge placeholder created` reports its exclusions.** Karpenter's own
+> `FailedScheduling` message reports the total capacity it must find — the
+> placeholder's requests **plus** the DaemonSet overhead it adds to any node it
+> provisions — which is easy to misread as the controller double-counting
+> DaemonSet Pods in `ReschedulableRequests` (§3.3). The line states both the
+> computed requests and the Pods excluded from them, so the two numbers can be
+> reconciled without inspecting the live placeholder.
+
 > **Liveness is judged from metrics, not from the warning log.** The same
 > transition dedup applies to the `INFO`-level warning **log** lines, so in
-> steady state — stable findings, no transitions — a healthy reconcile loop can
-> run for many passes emitting **zero** log lines. The deduped warning log is
-> therefore **not** a liveness signal: reconcile liveness must be read from the
+> steady state — stable findings, no transitions, no rotation in flight — a
+> healthy reconcile loop can run for many passes emitting **zero** log lines.
+> (A rotation in flight does log: see *State-machine transitions* above. Silence
+> means nothing is changing, not that nothing is running.) The deduped warning
+> log is therefore **not** a liveness signal: reconcile liveness must be read from the
 > `controller_runtime_reconcile_total` / `controller_runtime_reconcile_time_seconds_*`
 > counters and the `workqueue_*` metrics (depth, adds, work duration), which tick
 > on every pass regardless of whether findings change. To *see* per-pass activity
