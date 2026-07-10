@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -475,13 +476,19 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	}
 
 	// ── 2. Candidate-independent start gates.
-	if !r.startGates(pool, res, now) {
+	if open, gate := r.startGates(pool, res, now); !open {
+		r.warn().EmitNoCandidate(ctx, pool, gate)
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
 
 	// ── 3. Pick the candidate, gate on its headroom, then anchor.
-	cand := selection.PickEarliestDeadlineEligible(claims, r.selInputs(res, now, excluded))
+	sel := r.selInputs(res, now, excluded)
+	cand := selection.PickEarliestDeadlineEligible(claims, sel)
 	if cand == nil {
+		// The candidates gauge reports that the count is zero; only the census says
+		// why (issue #221): a claim excluded because its drain began is otherwise
+		// indistinguishable from one that entered retryBackoff.
+		r.warn().EmitNoCandidateCensus(ctx, pool, selection.TakeCensus(claims, sel))
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
 	// A candidate that cannot complete a graceful surge before its own deadline
@@ -506,6 +513,24 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 			return ctrl.Result{RequeueAfter: longRequeue}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	// The rotation now owns the pool's serial gate. Announce the pick and the
+	// numbers that produced it, and reset the idle dedup so the next quiet period
+	// re-reports its reason (issue #221).
+	r.warn().ClearNoCandidate(pool.Name)
+	kv := []any{
+		"nodeclaim", cand.Name,
+		"age", now.Sub(cand.CreationTimestamp.Time).Round(time.Second).String(),
+		"eligible", selection.CountEligible(claims, sel),
+		"surgeless", surgeless,
+	}
+	if dl, ok := claimDeadline(cand); ok {
+		kv = append(kv, "deadline", rfc3339(dl))
+	}
+	log.Info("rotation candidate selected", kv...)
+	if r.Events != nil {
+		r.Events.Eventf(pool, cand, corev1.EventTypeNormal, reasonRotationStarted, actionRotateNode,
+			"rotating NodeClaim %s", cand.Name)
 	}
 	if surgeless {
 		return r.startForcefulFallback(ctx, pool, cand)
@@ -666,22 +691,30 @@ func firstFatal(findings []schedule.Finding) (schedule.Finding, bool) {
 	return schedule.Finding{}, false
 }
 
+// Names of the §5.2 step-2 start gates, reported by startGates so a blocked pool
+// can say which gate held it rather than idling silently (issue #221).
+const (
+	gateOutOfWindow          = "outOfWindow"
+	gateFrozen               = "frozen"
+	gateCooldownAfterSuccess = "cooldownAfterSuccess"
+	gateCooldownAfterFailure = "cooldownAfterFailure"
+)
+
 // startGates is the §5.2 step-2 gate set, shared verbatim with the failed →
-// pending re-entry so the two never diverge.
-func (r *RotationReconciler) startGates(pool *karpv1.NodePool, res resolved, now time.Time) bool {
-	if !res.sched.InWindow(now) {
-		return false
+// pending re-entry so the two never diverge. It returns the name of the first
+// gate that blocks the start, or "" when all are open.
+func (r *RotationReconciler) startGates(pool *karpv1.NodePool, res resolved, now time.Time) (bool, string) {
+	switch {
+	case !res.sched.InWindow(now):
+		return false, gateOutOfWindow
+	case frozen(pool, now):
+		return false, gateFrozen
+	case since(pool.Annotations[annotations.LastRotationAt], now) < res.cooldown:
+		return false, gateCooldownAfterSuccess
+	case since(pool.Annotations[annotations.LastFailureAt], now) < res.cooldown:
+		return false, gateCooldownAfterFailure
 	}
-	if frozen(pool, now) {
-		return false
-	}
-	if since(pool.Annotations[annotations.LastRotationAt], now) < res.cooldown {
-		return false
-	}
-	if since(pool.Annotations[annotations.LastFailureAt], now) < res.cooldown {
-		return false
-	}
-	return true
+	return true, ""
 }
 
 // advance runs one step for the in-flight rotation, keyed by the anchor name. res
@@ -749,7 +782,7 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	// read empty — #95 item 3); the re-read still serves the other fields below.
 	startedAt, _ := parseTime(stampedStartedAt)
 	if r.now().Sub(startedAt) > res.readyTimeout {
-		return r.failPending(ctx, pool, cand)
+		return r.failPending(ctx, pool, res, cand)
 	}
 
 	// Protective markers are passive — re-asserted every pass, even while frozen.
@@ -797,33 +830,43 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if ready {
-		// surge_wait phase complete: started-at → surge_ready (§4.2). Observed here
-		// because started-at lives on the candidate, which is deleted just below.
-		r.recorder().ObserveDuration(pool.Name, PhaseSurgeWait, r.now().Sub(startedAt))
-		if err := r.freezeNode(ctx, host, cand.Name); err != nil {
-			return ctrl.Result{}, err
-		}
-		// Durable phase record BEFORE the delete — it decides the completion
-		// outcome — plus the drain-start anchor for the §4.2 drain histogram,
-		// stamped write-once in the same update so a re-run never moves it.
-		if err := r.patchPool(ctx, pool, func(m map[string]string) {
-			m[annotations.ActiveRotationState] = annotations.StateDraining
-			if m[annotations.DrainingAt] == "" {
-				m[annotations.DrainingAt] = rfc3339(r.now())
-			}
-		}); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
-			m[annotations.State] = annotations.StateDraining
-		}); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := client.IgnoreNotFound(r.Delete(ctx, cand)); err != nil {
-			return ctrl.Result{}, err
-		}
+	if !ready {
+		// A placeholder the scheduler has rejected stalls until readyTimeout with no
+		// other controller-side signal; say why now, once (issue #221).
+		r.warn().EmitPlaceholderPending(ctx, pool.Name, cand, ph)
 		return ctrl.Result{RequeueAfter: shortRequeue}, nil
+	}
+
+	l := log.FromContext(ctx).WithValues("nodepool", pool.Name)
+	surgeWait := r.now().Sub(startedAt)
+	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
+	l.Info("surge node ready", "nodeclaim", cand.Name, "surgeNode", host,
+		"surgeWait", surgeWait.Round(time.Second).String())
+	// surge_wait phase complete: started-at → surge_ready (§4.2). Observed here
+	// because started-at lives on the candidate, which is deleted just below.
+	r.recorder().ObserveDuration(pool.Name, PhaseSurgeWait, surgeWait)
+	if err := r.freezeNode(ctx, host, cand.Name); err != nil {
+		return ctrl.Result{}, err
+	}
+	// Durable phase record BEFORE the delete — it decides the completion
+	// outcome — plus the drain-start anchor for the §4.2 drain histogram,
+	// stamped write-once in the same update so a re-run never moves it.
+	if err := r.patchPool(ctx, pool, func(m map[string]string) {
+		m[annotations.ActiveRotationState] = annotations.StateDraining
+		if m[annotations.DrainingAt] == "" {
+			m[annotations.DrainingAt] = rfc3339(r.now())
+		}
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
+		m[annotations.State] = annotations.StateDraining
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	l.Info("drain started", "nodeclaim", cand.Name, "node", cand.Status.NodeName, "mode", "surge")
+	if err := client.IgnoreNotFound(r.Delete(ctx, cand)); err != nil {
+		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: shortRequeue}, nil
 }
@@ -859,6 +902,8 @@ func (r *RotationReconciler) startForcefulFallback(ctx context.Context, pool *ka
 		r.Events.Eventf(pool, nil, corev1.EventTypeWarning, reasonForcefulFallback, actionForcefulFallback,
 			"rotating NodeClaim %s surge-less: a graceful surge cannot complete before its deadline; deleting in-window via the voluntary path (PDBs apply)", cand.Name)
 	}
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("drain started",
+		"nodeclaim", cand.Name, "node", cand.Status.NodeName, "mode", annotations.RotationModeForcefulFallback)
 	if err := client.IgnoreNotFound(r.Delete(ctx, cand)); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -869,6 +914,7 @@ func (r *RotationReconciler) startForcefulFallback(ctx context.Context, pool *ka
 // up the runtime objects, mark the claim terminally expired (before releasing the
 // anchor), and emit expired — never success, no cooldown (spec §5.2).
 func (r *RotationReconciler) abortPendingExpiry(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (ctrl.Result, error) {
+	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
 	if err := r.deletePlaceholder(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -892,7 +938,8 @@ func (r *RotationReconciler) abortPendingExpiry(ctx context.Context, pool *karpv
 // failPending performs the readyTimeout rollback: reap the induced claim, delete
 // the placeholder, unfreeze, write the failed state in one claim update, emit the
 // failure, then release the gate with the pool-level pause anchor (spec §5.2).
-func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (ctrl.Result, error) {
+// res supplies the timeouts the failure line reports back to the operator.
+func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim) (ctrl.Result, error) {
 	surgeClaim := cand.Annotations[annotations.SurgeClaim]
 	if surgeClaim == "" { // last resort — normally persisted during pending
 		name, err := r.inducedClaim(ctx, pool, cand)
@@ -924,6 +971,23 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 		return ctrl.Result{}, err
 	}
 	r.recorder().Failure(pool.Name, cand.Name)
+
+	// Say why the attempt was rolled back, how many have been made, and when the
+	// next one becomes possible — the claim-scoped escalated backoff (issue #221).
+	retry := parseInt(cand.Annotations[annotations.RetryCount]) + 1
+	backoffUntil := r.now().Add(selection.EscalatedBackoff(retry, res.retryBackoff))
+	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation attempt failed",
+		"nodeclaim", cand.Name,
+		"reason", "readyTimeout",
+		"readyTimeout", res.readyTimeout.String(),
+		"retryCount", retry,
+		"backoffUntil", rfc3339(backoffUntil))
+	if r.Events != nil {
+		r.Events.Eventf(cand, pool, corev1.EventTypeWarning, reasonRotationFailed, actionRotateNode,
+			"the surge node did not become Ready within readyTimeout %v; rolled back, attempt %d, next attempt no earlier than %s",
+			res.readyTimeout, retry, rfc3339(backoffUntil))
+	}
 
 	// Single pool update (last): the inter-attempt pause anchor + the gate release.
 	if err := r.patchPool(ctx, pool, func(m map[string]string) {
@@ -987,7 +1051,8 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 		return ctrl.Result{}, err
 	}
 	// A re-entry is a NEW attempt, so it must pass EVERYTHING a fresh start would.
-	if r.startGates(pool, res, now) &&
+	open, _ := r.startGates(pool, res, now)
+	if open &&
 		now.Sub(failedAt) >= selection.EscalatedBackoff(retry, res.retryBackoff) &&
 		headroomOK {
 		if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
@@ -1039,13 +1104,22 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 	if err := r.unfreezeNodes(ctx, name); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.warn().ClearPlaceholderPending(pool.Name, name)
 	if pool.Annotations[annotations.ActiveRotationState] == annotations.StateDraining {
 		r.recorder().Success(pool.Name) // emit before releasing the gate (at-least-once)
 		// drain phase complete: draining-at → finalization (§4.2). Guarded so a
 		// rotation that reached draining before this anchor existed is uncounted
 		// rather than mis-anchored.
+		kv := []any{"nodeclaim", name, "mode", rotationMode(pool)}
 		if drainingAt, ok := parseTime(pool.Annotations[annotations.DrainingAt]); ok {
-			r.recorder().ObserveDuration(pool.Name, PhaseDrain, r.now().Sub(drainingAt))
+			drain := r.now().Sub(drainingAt)
+			r.recorder().ObserveDuration(pool.Name, PhaseDrain, drain)
+			kv = append(kv, "drain", drain.Round(time.Second).String())
+		}
+		log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation complete", kv...)
+		if r.Events != nil {
+			r.Events.Eventf(pool, nil, corev1.EventTypeNormal, reasonRotationCompleted, actionRotateNode,
+				"NodeClaim %s rotated", name)
 		}
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
 			m[annotations.LastRotationAt] = rfc3339(r.now())
@@ -1066,6 +1140,15 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 }
 
 // ── Start-gate helpers ─────────────────────────────────────────────────────
+
+// rotationMode names how the in-flight rotation is replacing its node: the
+// surge-less fallback stamps the anchor, everything else is the default surge.
+func rotationMode(pool *karpv1.NodePool) string {
+	if m := pool.Annotations[annotations.RotationMode]; m != "" {
+		return m
+	}
+	return "surge"
+}
 
 // frozen reports whether the NodePool's freeze annotation is in the future.
 func frozen(pool *karpv1.NodePool, now time.Time) bool {
@@ -1273,18 +1356,54 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	if err != nil {
 		return err
 	}
+	requests := surge.ReschedulableRequests(pods, cand.Status.NodeName)
 	ph := surge.BuildPlaceholder(surge.PlaceholderInputs{
 		Candidate:         cand,
 		Node:              node,
 		Pool:              pool,
-		Requests:          surge.ReschedulableRequests(pods, cand.Status.NodeName),
+		Requests:          requests,
 		Match:             res.pol.Surge.MatchNodeRequirements,
 		ExcludedHostnames: excluded,
 		PriorityClassName: r.PriorityClassName,
 		Image:             r.PlaceholderImage,
 		Namespace:         r.Namespace,
 	})
-	return client.IgnoreAlreadyExists(r.Create(ctx, ph))
+	if err := client.IgnoreAlreadyExists(r.Create(ctx, ph)); err != nil {
+		return err
+	}
+	// State BOTH the computed requests and the census that produced them. Karpenter's
+	// FailedScheduling message reports the capacity it must find — these requests PLUS
+	// the DaemonSet overhead it adds to any fresh node — which reads like a
+	// double-count of the DaemonSet Pods unless the controller says what it excluded
+	// (issue #221).
+	c := surge.CensusOnNode(pods, cand.Status.NodeName)
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("surge placeholder created",
+		"nodeclaim", cand.Name,
+		"placeholder", ph.Name,
+		"requests", formatRequests(requests),
+		"reschedulablePods", c.Counted,
+		"daemonSetPods", c.DaemonSet,
+		"mirrorPods", c.Mirror,
+		"completedPods", c.Completed,
+		"nodePinnedPods", c.NodePinned)
+	return nil
+}
+
+// formatRequests renders a ResourceList in a stable, greppable order so the
+// placeholder's sizing can be compared against Karpenter's FailedScheduling
+// message by eye.
+func formatRequests(rl corev1.ResourceList) string {
+	names := make([]string, 0, len(rl))
+	for n := range rl {
+		names = append(names, string(n))
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		q := rl[corev1.ResourceName(n)]
+		parts = append(parts, n+"="+q.String())
+	}
+	return strings.Join(parts, ",")
 }
 
 // excludedHostnames is the placeholder's hostname NotIn set: the candidate node
