@@ -62,18 +62,34 @@ func failDrainingClaimUpdate(remaining *int) interceptor.Funcs {
 	}
 }
 
-// newFlakyReconciler mirrors newReconciler but installs a client interceptor.
-func newFlakyReconciler(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *RotationReconciler {
+// newFlakyReconciler mirrors newReconciler but installs a client interceptor. A
+// nil rec gets a throwaway fakeRecorder; tests that assert on recorded metrics
+// pass their own so they can inspect it afterward.
+func newFlakyReconciler(t *testing.T, rec *fakeRecorder, funcs interceptor.Funcs, objs ...client.Object) *RotationReconciler {
 	t.Helper()
+	if rec == nil {
+		rec = &fakeRecorder{}
+	}
 	cl := fake.NewClientBuilder().WithScheme(scheme.New()).WithObjects(objs...).WithInterceptorFuncs(funcs).Build()
 	return &RotationReconciler{
 		Client:            cl,
 		Namespace:         testNS,
 		PlaceholderImage:  "registry.k8s.io/pause:3.10",
 		PriorityClassName: "noderotation-placeholder",
-		Recorder:          &fakeRecorder{},
+		Recorder:          rec,
 		Clock:             func() time.Time { return testNow },
 	}
+}
+
+// countDurations returns how many ObserveDuration calls landed for phase.
+func countDurations(rec *fakeRecorder, phase string) int {
+	n := 0
+	for _, rd := range rec.durations {
+		if rd.phase == phase {
+			n++
+		}
+	}
+	return n
 }
 
 // countLines returns how many captured lines contain every substring.
@@ -101,7 +117,7 @@ func TestSurgeReadyLineIsNotRepeatedWhenTheClaimWriteFails(t *testing.T) {
 	node, cand, pool := pendingRotation(testNow.Add(-3 * time.Minute))
 	cand.Finalizers = []string{"karpenter.sh/termination"}
 	remaining := 1
-	r := newFlakyReconciler(t, failDrainingClaimUpdate(&remaining), pool, cand, node,
+	r := newFlakyReconciler(t, nil, failDrainingClaimUpdate(&remaining), pool, cand, node,
 		testK8sNode(surgeNode, true, nil, false), placeholderPod(surgeNode, corev1.PodRunning))
 
 	var all []string
@@ -125,6 +141,34 @@ func TestSurgeReadyLineIsNotRepeatedWhenTheClaimWriteFails(t *testing.T) {
 	}
 }
 
+// The surge_wait histogram is observed once per rotation. A duplicate is worse
+// than a missing sample: the retry measures the same started-at anchor against a
+// later now, so the second observation is strictly larger and inflates the
+// histogram with a duration no rotation took. The observation must therefore sit
+// after the claim's pending → draining write — the write that makes the
+// transition durable — so a failed-then-retried pass records it exactly once.
+func TestSurgeWaitDurationObservedOnceWhenTheClaimWriteFails(t *testing.T) {
+	node, cand, pool := pendingRotation(testNow.Add(-3 * time.Minute))
+	cand.Finalizers = []string{"karpenter.sh/termination"}
+	remaining := 1
+	rec := &fakeRecorder{}
+	r := newFlakyReconciler(t, rec, failDrainingClaimUpdate(&remaining), pool, cand, node,
+		testK8sNode(surgeNode, true, nil, false), placeholderPod(surgeNode, corev1.PodRunning))
+
+	// Pass 1 fails on the claim write; pass 2 (and 3) re-drive the same phase.
+	for i := range 3 {
+		p := getPool(t, r)
+		_, err := r.reconcileNodePool(context.Background(), p, testPolicy(), mustSchedule(t))
+		if i == 0 && err == nil {
+			t.Fatal("pass 1 must surface the simulated claim-write error")
+		}
+	}
+
+	if got := countDurations(rec, PhaseSurgeWait); got != 1 {
+		t.Errorf("surge_wait observed %d times across a failed-then-retried transition, want exactly 1", got)
+	}
+}
+
 // completeOrAbort emits the completion line and Event; the pool patch that clears
 // the anchor is what ends the rotation. A failed patch re-enters completeOrAbort
 // with the anchor still present.
@@ -136,7 +180,7 @@ func TestRotationCompleteIsNotRepeatedWhenThePoolWriteFails(t *testing.T) {
 	}))
 	remaining := 1
 	rec := events.NewFakeRecorder(16)
-	r := newFlakyReconciler(t, failClearingPoolUpdate(&remaining), pool) // nc-old already finalized away
+	r := newFlakyReconciler(t, nil, failClearingPoolUpdate(&remaining), pool) // nc-old already finalized away
 	r.Events = rec
 
 	var all []string
@@ -156,6 +200,34 @@ func TestRotationCompleteIsNotRepeatedWhenThePoolWriteFails(t *testing.T) {
 	}
 	if evs := drain(rec); len(evs) != 1 {
 		t.Errorf("want exactly 1 RotationCompleted Event, got %d: %v", len(evs), evs)
+	}
+}
+
+// The drain histogram is observed once per completed rotation, from the same
+// draining-at anchor. Placed before the anchor-clearing pool write, a failed
+// write re-enters completeOrAbort with draining-at still set and observes a
+// second, larger sample. The observation must follow the write that erases the
+// anchor so a failed-then-retried completion records drain exactly once.
+func TestDrainDurationObservedOnceWhenThePoolWriteFails(t *testing.T) {
+	pool := withTGP(testNodePool(map[string]string{
+		annotations.ActiveRotation:      "nc-old",
+		annotations.ActiveRotationState: annotations.StateDraining,
+		annotations.DrainingAt:          rfc(testNow.Add(-4 * time.Minute)),
+	}))
+	remaining := 1
+	rec := &fakeRecorder{}
+	r := newFlakyReconciler(t, rec, failClearingPoolUpdate(&remaining), pool) // nc-old already finalized away
+
+	for i := range 3 {
+		p := getPool(t, r)
+		_, err := r.reconcileNodePool(context.Background(), p, testPolicy(), mustSchedule(t))
+		if i == 0 && err == nil {
+			t.Fatal("pass 1 must surface the simulated pool-write error")
+		}
+	}
+
+	if got := countDurations(rec, PhaseDrain); got != 1 {
+		t.Errorf("drain observed %d times across a failed-then-retried completion, want exactly 1", got)
 	}
 }
 
