@@ -60,6 +60,15 @@ the §5.2 feasibility gate.
 alone rather than from `NodeClaim` timestamps and Karpenter's Events. The volume
 is a handful of lines per rotation, so they are **not** behind `V(1)`.
 
+Each line is emitted **after** the durable annotation write that makes its
+transition real (§5.3), never before. A reconcile whose write fails is retried
+from the same phase — the state machine's writes are idempotent by design — so a
+line placed before the write would repeat on every retry rather than mark the
+transition once. The consequence is the opposite trade: a controller that dies
+between the write and the log **drops** that line. The rotation is unaffected,
+and the durable state on the object remains the authority; the log is a
+best-effort narration of it, not a ledger.
+
 | Line | Fields |
 |------|--------|
 | `rotation candidate selected` | `nodeclaim`, `age`, `deadline`, `eligible`, `surgeless` |

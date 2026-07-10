@@ -837,11 +837,8 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 		return ctrl.Result{RequeueAfter: shortRequeue}, nil
 	}
 
-	l := log.FromContext(ctx).WithValues("nodepool", pool.Name)
 	surgeWait := r.now().Sub(startedAt)
 	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
-	l.Info("surge node ready", "nodeclaim", cand.Name, "surgeNode", host,
-		"surgeWait", surgeWait.Round(time.Second).String())
 	// surge_wait phase complete: started-at → surge_ready (§4.2). Observed here
 	// because started-at lives on the candidate, which is deleted just below.
 	r.recorder().ObserveDuration(pool.Name, PhaseSurgeWait, surgeWait)
@@ -864,6 +861,13 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
+	// Both lines are emitted only after the claim's pending → draining write has
+	// landed. A pass that fails either write above is retried from this same phase
+	// (the writes are idempotent by design), so an emission placed before them
+	// would repeat on every retry rather than mark the transition once.
+	l := log.FromContext(ctx).WithValues("nodepool", pool.Name)
+	l.Info("surge node ready", "nodeclaim", cand.Name, "surgeNode", host,
+		"surgeWait", surgeWait.Round(time.Second).String())
 	l.Info("drain started", "nodeclaim", cand.Name, "node", cand.Status.NodeName, "mode", "surge")
 	if err := client.IgnoreNotFound(r.Delete(ctx, cand)); err != nil {
 		return ctrl.Result{}, err
@@ -1110,16 +1114,16 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 		// drain phase complete: draining-at → finalization (§4.2). Guarded so a
 		// rotation that reached draining before this anchor existed is uncounted
 		// rather than mis-anchored.
+		// Read the anchor's fields before the patch below erases them, but emit only
+		// after it lands: a failed patch re-enters completeOrAbort with the anchor
+		// still set, and an emission placed here would announce the rotation complete
+		// once per retry. The Success counter deliberately keeps its at-least-once
+		// placement above — a lost count is worse than a duplicated one.
 		kv := []any{"nodeclaim", name, "mode", rotationMode(pool)}
 		if drainingAt, ok := parseTime(pool.Annotations[annotations.DrainingAt]); ok {
 			drain := r.now().Sub(drainingAt)
 			r.recorder().ObserveDuration(pool.Name, PhaseDrain, drain)
 			kv = append(kv, "drain", drain.Round(time.Second).String())
-		}
-		log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation complete", kv...)
-		if r.Events != nil {
-			r.Events.Eventf(pool, nil, corev1.EventTypeNormal, reasonRotationCompleted, actionRotateNode,
-				"NodeClaim %s rotated", name)
 		}
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
 			m[annotations.LastRotationAt] = rfc3339(r.now())
@@ -1129,6 +1133,11 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 			delete(m, annotations.RotationMode)
 		}); err != nil {
 			return ctrl.Result{}, err
+		}
+		log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation complete", kv...)
+		if r.Events != nil {
+			r.Events.Eventf(pool, nil, corev1.EventTypeNormal, reasonRotationCompleted, actionRotateNode,
+				"NodeClaim %s rotated", name)
 		}
 	} else {
 		r.recorder().Expired(pool.Name, name) // vanished out of pending — nothing rotated
@@ -1368,7 +1377,13 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 		Image:             r.PlaceholderImage,
 		Namespace:         r.Namespace,
 	})
-	if err := client.IgnoreAlreadyExists(r.Create(ctx, ph)); err != nil {
+	if err := r.Create(ctx, ph); err != nil {
+		// A cached read can report the placeholder absent just after it was created;
+		// the create is idempotent, but the line below must not claim a creation that
+		// this pass did not perform.
+		if apierrors.IsAlreadyExists(err) {
+			return nil
+		}
 		return err
 	}
 	// State BOTH the computed requests and the census that produced them. Karpenter's
@@ -1497,6 +1512,11 @@ func (r *RotationReconciler) reapUngovernedRotation(ctx context.Context, pool *k
 			"NodePool left RotationPolicy governance with an in-flight rotation on %s; rolled it back (deleted placeholder, removed freeze markers and cordon, cleared anchor) so no do-not-disrupt marker or placeholder is orphaned",
 			claim)
 	}
+	// The attempt ends here, so drop its unschedulable-placeholder dedup entry. The
+	// no-policy caller drops the whole pool's warn state via Forget, but the
+	// policy-conflict caller deliberately keeps it (to dedup the conflict itself),
+	// and would otherwise retain this claim's key forever (issue #221).
+	r.warn().ClearPlaceholderPending(pool.Name, claim)
 	if err := r.deletePlaceholder(ctx, claim); err != nil {
 		return err
 	}
