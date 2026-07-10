@@ -320,14 +320,15 @@ func nodeReadyObj(obj client.Object) bool {
 // them. pol and sched are carried so the methods threaded with a resolved no
 // longer read a single cluster-wide Policy/Schedule off the reconciler.
 type resolved struct {
-	pol          *policy.Policy
-	sched        *window.Schedule
-	leadTime     selection.LeadTime // K·P + t_rot, resolved per claim (§3.2)
-	override     *time.Duration     // explicit ageThreshold, nil in auto mode
-	retryBackoff time.Duration
-	readyTimeout time.Duration
-	cooldown     time.Duration
-	drainBound   time.Duration // tGP + buffer; DrainFallback when tGP unset (§5.2)
+	pol           *policy.Policy
+	sched         *window.Schedule
+	leadTime      selection.LeadTime // K·P + t_rot, resolved per claim (§3.2)
+	override      *time.Duration     // explicit ageThreshold, nil in auto mode
+	retryBackoff  time.Duration
+	readyTimeout  time.Duration
+	cooldown      time.Duration
+	drainBound    time.Duration  // tGP + buffer; DrainFallback when tGP unset (§5.2)
+	drainEstimate *time.Duration // surge.drainEstimate; nil => schedule resolves min(tGP, default). Layer-2 forecast only (§3.2)
 }
 
 func (r *RotationReconciler) resolve(pool *karpv1.NodePool, pol *policy.Policy, sched *window.Schedule) resolved {
@@ -347,6 +348,13 @@ func (r *RotationReconciler) resolve(pool *karpv1.NodePool, pol *policy.Policy, 
 		drainBound = schedule.DrainFallback
 	}
 
+	// nil is meaningful: schedule.Derive resolves an unset estimate to
+	// min(tGP, DrainEstimateDefault). Never fold it into leadTime or drainBound.
+	var drainEst *time.Duration
+	if s.DrainEstimate != nil {
+		drainEst = new(s.DrainEstimate.Duration)
+	}
+
 	return resolved{
 		pol:   pol,
 		sched: sched,
@@ -358,11 +366,12 @@ func (r *RotationReconciler) resolve(pool *karpv1.NodePool, pol *policy.Policy, 
 			Base:          time.Duration(pol.K())*p + s.ReadyTimeout.Duration + schedule.Buffer,
 			DrainFallback: schedule.DrainFallback,
 		},
-		override:     ov,
-		retryBackoff: s.RetryBackoff.Duration,
-		readyTimeout: s.ReadyTimeout.Duration,
-		cooldown:     s.CooldownAfter.Duration,
-		drainBound:   drainBound,
+		override:      ov,
+		retryBackoff:  s.RetryBackoff.Duration,
+		readyTimeout:  s.ReadyTimeout.Duration,
+		cooldown:      s.CooldownAfter.Duration,
+		drainBound:    drainBound,
+		drainEstimate: drainEst,
 	}
 }
 
@@ -598,9 +607,12 @@ func (r *RotationReconciler) drainStuck(pool *karpv1.NodePool, claims []karpv1.N
 // the Findings are consumed by the feasibility gate (issue #27). The layer-2
 // throughput inputs windowLen (D), idleGap and nodeCount (N) must be passed so the
 // throughput findings are meaningful (issues #36, #211); A and G do not depend on
-// them. A nil idleGap skips the carry-over check.
+// them. A nil idleGap skips the carry-over check. res.drainEstimate feeds only the
+// layer-2 forecast (t_rot_est); a nil value lets schedule.Derive resolve it to
+// min(tGP, DrainEstimateDefault) (issue #212).
 // A never-expiring template has no derivation: an override A still applies, but
-// no chances can be guaranteed and no findings are produced.
+// no chances can be guaranteed and no findings are produced — drainEstimate is
+// irrelevant to that early return.
 func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolved, p, windowLen time.Duration, idleGap *time.Duration, nodeCount int) schedule.Result {
 	eptr := pool.Spec.Template.Spec.ExpireAfter.Duration
 	if eptr == nil {
@@ -619,6 +631,7 @@ func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolv
 		IdleGap:        idleGap,
 		ReadyTimeout:   res.readyTimeout,
 		Cooldown:       res.cooldown,
+		DrainEstimate:  res.drainEstimate,
 		RetryBackoff:   res.retryBackoff,
 		K:              res.pol.K(),
 		MaxUnavailable: res.pol.SurgeMaxUnavailable(),
