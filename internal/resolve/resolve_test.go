@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -184,6 +185,86 @@ func TestToPolicyMapsAndDefaults(t *testing.T) {
 	// Unset MatchNodeRequirements.Required must default to the §5.4 set.
 	if got := len(p.Surge.MatchNodeRequirements.Required); got != 3 {
 		t.Errorf("required default len = %d, want 3", got)
+	}
+}
+
+func TestToPolicyCarriesDrainEstimate(t *testing.T) {
+	// A RotationPolicy with an explicit surge.drainEstimate must survive the
+	// CRD-to-policy conversion; if toSurge drops it the controller silently takes
+	// the min(tGP, 10m) default path and the configured value never takes effect
+	// in a cluster (#212).
+	spec := nrv1.RotationPolicySpec{
+		NodePoolSelector: matchLabels("workload", "api"),
+		MaintenanceWindows: []nrv1.MaintenanceWindow{{
+			Timezone: "UTC", Days: []string{"Mon"}, Start: "02:00", End: "06:00",
+		}},
+		Surge: nrv1.Surge{DrainEstimate: &metav1.Duration{Duration: 20 * time.Minute}},
+	}
+	p, err := ToPolicy(spec)
+	if err != nil {
+		t.Fatalf("ToPolicy err = %v", err)
+	}
+	if p.Surge.DrainEstimate == nil {
+		t.Fatal("drainEstimate dropped: policy.Surge.DrainEstimate == nil (toSurge must copy it)")
+	}
+	if p.Surge.DrainEstimate.Duration != 20*time.Minute {
+		t.Errorf("drainEstimate = %v, want 20m", p.Surge.DrainEstimate.Duration)
+	}
+}
+
+func TestToPolicyLeavesUnsetDrainEstimateNil(t *testing.T) {
+	// An unset drainEstimate must stay nil after ToPolicy (which runs ApplyDefaults):
+	// the nil is load-bearing — it is what makes schedule.Derive apply the
+	// min(tGP, 10m) fallback, which admission and ApplyDefaults cannot compute
+	// because tGP lives on the NodePool template.
+	spec := nrv1.RotationPolicySpec{
+		NodePoolSelector: matchLabels("workload", "api"),
+		MaintenanceWindows: []nrv1.MaintenanceWindow{{
+			Timezone: "UTC", Days: []string{"Mon"}, Start: "02:00", End: "06:00",
+		}},
+	}
+	p, err := ToPolicy(spec)
+	if err != nil {
+		t.Fatalf("ToPolicy err = %v", err)
+	}
+	if p.Surge.DrainEstimate != nil {
+		t.Errorf("drainEstimate = %v, want nil (unset; resolved in schedule.Derive)", p.Surge.DrainEstimate)
+	}
+}
+
+// TestToSurgeCopiesEveryField guards the hand-written field-by-field copy in
+// toSurge against the bug class that lost drainEstimate (#212): the next field
+// added to nrv1.Surge / policy.Surge can be silently dropped the same way. It
+// builds an nrv1.Surge with EVERY field set to a distinctive non-zero value,
+// converts it, and reflects over the resulting policy.Surge, failing on any
+// field left at its zero value. Reflection covers a newly added field
+// automatically, without anyone remembering to update this test.
+//
+// The two nested-struct fields (MatchNodeRequirements, FeatureToggle) need no
+// special handling: reflect.Value.IsZero recurses into a struct and reports it
+// zero only when all of its own fields are zero, so populating every sub-field
+// of the nrv1 inputs below makes the whole-struct check meaningful.
+func TestToSurgeCopiesEveryField(t *testing.T) {
+	mu := int32(1)
+	in := nrv1.Surge{
+		MaxUnavailable: &mu,
+		ReadyTimeout:   &metav1.Duration{Duration: 15 * time.Minute},
+		CooldownAfter:  &metav1.Duration{Duration: 10 * time.Minute},
+		RetryBackoff:   &metav1.Duration{Duration: 30 * time.Minute},
+		MatchNodeRequirements: nrv1.MatchNodeRequirements{
+			Required:  []string{"topology.kubernetes.io/zone"},
+			Preferred: []string{"kubernetes.io/arch"},
+		},
+		ForcefulFallback: nrv1.FeatureToggle{Enabled: true},
+		DrainEstimate:    &metav1.Duration{Duration: 20 * time.Minute},
+	}
+
+	got := reflect.ValueOf(toSurge(in))
+	typ := got.Type()
+	for i := range got.NumField() {
+		if got.Field(i).IsZero() {
+			t.Errorf("toSurge left policy.Surge.%[1]s at its zero value; add %[1]s to toSurge in internal/resolve/resolve.go", typ.Field(i).Name)
+		}
 	}
 }
 
