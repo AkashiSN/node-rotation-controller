@@ -15,6 +15,7 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
+	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 	"github.com/AkashiSN/node-rotation-controller/internal/surge"
 )
 
@@ -254,6 +255,13 @@ func TestSurgeReadyAndDrainStartAreLogged(t *testing.T) {
 
 // A readyTimeout rollback must say why, how many attempts have been made, and
 // when the next attempt becomes possible — the issue's "failure" row.
+//
+// The reported values are pinned, not merely present: `backoffUntil` is the
+// instant the claim becomes re-selectable, so it must equal
+// failed-at + EscalatedBackoff(stored retry-count). Both `selection.failedPastBackoff`
+// and `advanceFailed` read the retry count AFTER failPending's increment, so the
+// line must report the incremented value — reporting the pre-increment count
+// would name an instant half a backoff too early.
 func TestFailureLogsRetryCountAndBackoffExpiry(t *testing.T) {
 	node, cand, pool := pendingRotation(testNow.Add(-20 * time.Minute)) // past the 15m readyTimeout
 	rec := events.NewFakeRecorder(16)
@@ -264,11 +272,46 @@ func TestFailureLogsRetryCountAndBackoffExpiry(t *testing.T) {
 	if _, err := r.reconcileNodePool(log.IntoContext(context.Background(), captureLogger(&lines)), pool, testPolicy(), mustSchedule(t)); err != nil {
 		t.Fatalf("reconcileNodePool: %v", err)
 	}
-	if !containsLine(lines, "rotation attempt failed", "readyTimeout", "retryCount", "backoffUntil") {
-		t.Errorf("failure line must carry reason, retry count and backoff expiry; lines = %v", lines)
+	// First failure ⇒ stored retry-count 1 ⇒ EscalatedBackoff(1, 30m) = 30m << 0.
+	wantUntil := rfc3339(testNow.Add(30 * time.Minute))
+	if !containsLine(lines, "rotation attempt failed", `"reason"="readyTimeout"`, `"retryCount"=1`, `"backoffUntil"="`+wantUntil+`"`) {
+		t.Errorf("failure line must carry reason, the INCREMENTED retry count and the exact backoff expiry %s; lines = %v", wantUntil, lines)
+	}
+	// The value the line reports must be the one the re-selection gate actually uses.
+	got := getClaimOrNil(t, r, "nc-old")
+	if got == nil {
+		t.Fatal("candidate must survive the rollback")
+	}
+	stored := parseInt(got.Annotations[annotations.RetryCount])
+	failedAt, ok := parseTime(got.Annotations[annotations.FailedAt])
+	if !ok {
+		t.Fatal("failed-at must be stamped")
+	}
+	if reopensAt := failedAt.Add(selection.EscalatedBackoff(stored, testPolicy().Surge.RetryBackoff.Duration)); rfc3339(reopensAt) != wantUntil {
+		t.Errorf("logged backoffUntil %s != the instant the gate reopens %s", wantUntil, rfc3339(reopensAt))
 	}
 	if evs := drain(rec); len(evs) != 1 {
 		t.Errorf("want 1 Warning RotationFailed Event, got %d: %v", len(evs), evs)
+	}
+}
+
+// On the FIRST failure EscalatedBackoff(0) and EscalatedBackoff(1) coincide — the
+// shift is max(retryCount−1, 0) — so `backoffUntil` alone cannot catch an
+// off-by-one there. A second failure separates them: retry-count 2 doubles the
+// base, and reporting the pre-increment 1 would name an instant 30m too early.
+func TestFailureLogsEscalatedBackoffOnARepeatFailure(t *testing.T) {
+	node, cand, pool := pendingRotation(testNow.Add(-20 * time.Minute))
+	ncAnn(annotations.RetryCount, "1")(cand) // one prior failure already recorded
+	r := newReconciler(t, testNow, nil, pool, cand, node)
+
+	var lines []string
+	if _, err := r.reconcileNodePool(log.IntoContext(context.Background(), captureLogger(&lines)), pool, testPolicy(), mustSchedule(t)); err != nil {
+		t.Fatalf("reconcileNodePool: %v", err)
+	}
+	// retry-count 2 ⇒ EscalatedBackoff(2, 30m) = 30m << 1 = 1h.
+	wantUntil := rfc3339(testNow.Add(time.Hour))
+	if !containsLine(lines, "rotation attempt failed", `"retryCount"=2`, `"backoffUntil"="`+wantUntil+`"`) {
+		t.Errorf("repeat failure must report the escalated backoff expiry %s; lines = %v", wantUntil, lines)
 	}
 }
 
