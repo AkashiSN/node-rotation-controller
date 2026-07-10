@@ -388,6 +388,12 @@ spec:
     maxUnavailable: 1             # v1 fixed at 1 (serial); the OpenAPI schema rejects any other value
     readyTimeout: 15m             # must be > 0 (validated at runtime)
     cooldownAfter: 10m            # must be > 0
+    # drainEstimate: 10m          # optional; expected healthy PDB-respecting drain. Feeds ONLY the
+                                  #   layer-2 throughput forecast (t_rot_est, §3.2) — not a bound, no
+                                  #   rotation timing changes. No default: unset resolves to
+                                  #   min(tGP, 10m) at derivation time (the fallback depends on the
+                                  #   NodePool template). Must be > 0; an explicit value above tGP is
+                                  #   unreachable, so it warns (DrainEstimateAboveTGP) and is clamped.
     retryBackoff: 30m             # must be > 0
     matchNodeRequirements:        # which candidate-node requirements the placeholder replicates (§3.3)
       required:                   # defaulted to the set below when empty (applied at runtime)

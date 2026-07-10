@@ -190,3 +190,48 @@ func TestWeekdayCaseInsensitive(t *testing.T) {
 		t.Fatalf("Validate with mixed-case weekdays err = %v", err)
 	}
 }
+
+// TestApplyDefaultsLeavesDrainEstimateUnset: the default is min(tGP, 10m) and tGP
+// lives on the NodePool template, which neither admission nor ApplyDefaults can
+// see. nil must survive all the way into schedule.Derive (issue #212).
+func TestApplyDefaultsLeavesDrainEstimateUnset(t *testing.T) {
+	p := &Policy{}
+	p.ApplyDefaults()
+	if p.Surge.DrainEstimate != nil {
+		t.Errorf("drainEstimate defaulted to %v, want nil (resolved against the NodePool tGP)", p.Surge.DrainEstimate)
+	}
+}
+
+func TestValidateRejectsNonPositiveDrainEstimate(t *testing.T) {
+	// ApplyDefaults runs first (see TestValidateAcceptsPositiveAndUnsetDrainEstimate)
+	// so the only remaining validation failure is the non-positive drainEstimate
+	// under test, not an incidentally-unset ageThreshold/maxUnavailable.
+	for _, d := range []time.Duration{0, -1 * time.Minute} {
+		p := validPolicy()
+		p.ApplyDefaults()
+		p.Surge.DrainEstimate = durPtr(d)
+		if err := p.Validate(); err == nil {
+			t.Errorf("drainEstimate %v: Validate() = nil, want an error", d)
+		}
+	}
+}
+
+func TestValidateAcceptsPositiveAndUnsetDrainEstimate(t *testing.T) {
+	// ApplyDefaults runs first, matching every other Validate-success test in this
+	// file (e.g. TestApplyDefaultsFillsZeroValues): validPolicy() alone leaves
+	// ageThreshold/maxUnavailable unset, which Validate rejects independently of
+	// drainEstimate.
+	p := validPolicy()
+	p.ApplyDefaults()
+	p.Surge.DrainEstimate = durPtr(5 * time.Minute)
+	if err := p.Validate(); err != nil {
+		t.Errorf("positive drainEstimate: Validate() = %v, want nil", err)
+	}
+
+	p = validPolicy()
+	p.ApplyDefaults()
+	p.Surge.DrainEstimate = nil
+	if err := p.Validate(); err != nil {
+		t.Errorf("unset drainEstimate: Validate() = %v, want nil", err)
+	}
+}

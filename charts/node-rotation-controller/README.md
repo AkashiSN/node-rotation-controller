@@ -123,6 +123,9 @@ spec:
     cooldownAfter: 10m      # settle pause between rotations; also post-failure pause
     retryBackoff: 30m       # base wait before re-selecting a failed NodeClaim;
                             # doubles per consecutive failure, capped at 8x
+    # drainEstimate: 10m    # expected healthy drain; feeds the layer-2 throughput
+                            # forecast only (spec §3.2). Unset => min(tGP, 10m).
+                            # NOT a bound — terminationGracePeriod stays the deadline.
     # Which candidate-node requirements the placeholder replicates (spec §3.3).
     # The karpenter.sh/nodepool selector is always applied and is NOT listed.
     matchNodeRequirements:

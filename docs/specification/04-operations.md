@@ -41,7 +41,7 @@ them with `kubectl describe` without reading metrics:
 
 | Surface | Object | Reason | When |
 |---------|--------|--------|------|
-| Non-fatal schedule finding (§3.2 layers 1–2) | NodePool | the finding code (e.g. `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK`) | the finding becomes active for the NodePool |
+| Non-fatal schedule finding (§3.2 layers 1–2) | NodePool | the finding code (e.g. `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `DrainEstimateAboveTGP`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK`) | the finding becomes active for the NodePool |
 | Short-lead NodeClaim (§3.2 layer 3) | NodeClaim | `ShortLead` | the claim's own `expireAfter` can no longer guarantee `K` chances |
 | Surge-less forceful fallback (§3.3) | NodePool | `ForcefulFallback` | a surge-less window-bounded rotation begins because a graceful surge cannot complete before the candidate's deadline (opt-in `surge.forcefulFallback`) |
 

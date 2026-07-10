@@ -42,8 +42,8 @@ type MaintenanceWindow struct {
 	End      string   `json:"end"`      // "HH:MM" 24-hour, must be after Start (no overnight wrap)
 }
 
-// Surge holds the v1 surge-orchestration knobs (spec §3.3, §5.4). The three
-// durations are pointers so an unset field (nil → defaulted) is distinguishable
+// Surge holds the v1 surge-orchestration knobs (spec §3.3, §5.4). The duration
+// fields are pointers so an unset field (nil → defaulted) is distinguishable
 // from an explicitly configured non-positive value (e.g. 0m), which Validate
 // rejects rather than silently defaulting (issue #30).
 type Surge struct {
@@ -53,6 +53,11 @@ type Surge struct {
 	RetryBackoff          *metav1.Duration      `json:"retryBackoff"`
 	MatchNodeRequirements MatchNodeRequirements `json:"matchNodeRequirements"`
 	ForcefulFallback      FeatureToggle         `json:"forcefulFallback"` // §3.3, ADR-0001; opt-in surge-less window-bounded forceful fallback (default off)
+	// DrainEstimate is the EXPECTED drain duration used by the layer-2 throughput
+	// forecast (spec §3.2). It is not a bound: the deadline stays terminationGracePeriod.
+	// nil means unset and is NOT defaulted here — the default is min(tGP, 10m) and tGP
+	// lives on the NodePool template, so resolution happens in internal/schedule.
+	DrainEstimate *metav1.Duration `json:"drainEstimate"`
 }
 
 // MatchNodeRequirements selects which candidate-node requirements the
@@ -128,6 +133,10 @@ func (p *Policy) ApplyDefaults() {
 	if len(p.Surge.MatchNodeRequirements.Required) == 0 {
 		p.Surge.MatchNodeRequirements.Required = append([]string(nil), defaultRequiredRequirements...)
 	}
+	// surge.drainEstimate is deliberately NOT defaulted: its default is
+	// min(tGP, DrainEstimateDefault) and tGP is a NodePool-template value this
+	// package cannot see. nil is carried into schedule.Derive, which resolves it
+	// (issue #212).
 }
 
 // Validate runs structural checks only (shape, enums, formats, the v1 surge
@@ -161,8 +170,13 @@ func (p *Policy) Validate() error {
 	// (0m, -1m) is preserved and rejected here rather than silently entering an
 	// unsafe mode — a non-positive readyTimeout fails attempts instantly, a
 	// non-positive cooldownAfter bypasses the start gates, a non-positive
-	// retryBackoff makes failed-claim retry timing nonsensical. The nil guard only
-	// matters when Validate runs without ApplyDefaults; Load always defaults first.
+	// retryBackoff makes failed-claim retry timing nonsensical, and a non-positive
+	// drainEstimate would make the layer-2 throughput forecast meaningless (and
+	// t_rot_est shorter than readyTimeout + buffer). The nil guard only matters
+	// when Validate runs without ApplyDefaults; Load always defaults first.
+	// drainEstimate is exempt from that defaulting (its fallback needs the
+	// NodePool's tGP, invisible here), so nil reaches this loop as the normal,
+	// valid "unset" case and is skipped just like the others.
 	for _, d := range []struct {
 		name string
 		val  *metav1.Duration
@@ -170,6 +184,7 @@ func (p *Policy) Validate() error {
 		{"surge.readyTimeout", p.Surge.ReadyTimeout},
 		{"surge.cooldownAfter", p.Surge.CooldownAfter},
 		{"surge.retryBackoff", p.Surge.RetryBackoff},
+		{"surge.drainEstimate", p.Surge.DrainEstimate},
 	} {
 		if d.val != nil && d.val.Duration <= 0 {
 			errs = append(errs, fmt.Errorf("%s must be positive, got %v", d.name, d.val.Duration))

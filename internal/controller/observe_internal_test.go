@@ -28,9 +28,9 @@ func hasFinding(findings []schedule.Finding, code string) bool {
 // TestDerivedThresholdsPopulatesThroughputInputs covers issue #36: derivedThresholds
 // must feed the layer-2 throughput inputs (WindowLen D, NodeCount N) into
 // schedule.Derive, not leave them at zero. The real 23h59m window yields
-// C = ceil(23h59m / (t_rot 1h + cooldown 10m)) = 21; a zero WindowLen (the pre-fix
-// state) collapses C and silences every layer-2 check, proving the input is
-// load-bearing. A/G are unaffected by these layer-2 inputs.
+// C = ceil(23h59m / (t_rot_est 40m + cooldown 10m)) = 29; a zero WindowLen (the
+// pre-fix state) collapses C and silences every layer-2 check, proving the input
+// is load-bearing. A/G are unaffected by these layer-2 inputs.
 func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	r := newReconciler(t, testNow, nil, pool)
@@ -50,8 +50,8 @@ func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 	if got.G != 2 {
 		t.Errorf("G: got %d, want 2", got.G)
 	}
-	if got.C != 21 {
-		t.Errorf("C: got %d, want 21 (ceil(23h59m / 70m))", got.C)
+	if got.C != 29 {
+		t.Errorf("C: got %d, want 29 (ceil(23h59m / 50m))", got.C)
 	}
 
 	// Regression guard: the pre-fix WindowLen=0 drives C to zero, which layer 2
@@ -68,9 +68,10 @@ func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 
 // TestDerivedThresholdsPassesIdleGap covers the issue #211 wiring: the carry-over
 // check fires only when the reconciler supplies the schedule's shortest idle gap.
-// The 23h59m daily window closes for one minute, which the 70m serial gate
-// (t_rot 1h + cooldown 10m) plainly spans; a nil gap (a continuously-open window,
-// where nothing can carry into a "next" occurrence) must silence the check instead.
+// The 23h59m daily window closes for one minute, which the 50m forecast denominator
+// (t_rot_est 40m + cooldown 10m) plainly spans; a nil gap (a continuously-open
+// window, where nothing can carry into a "next" occurrence) must silence the check
+// instead.
 func TestDerivedThresholdsPassesIdleGap(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	r := newReconciler(t, testNow, nil, pool)
@@ -82,12 +83,56 @@ func TestDerivedThresholdsPassesIdleGap(t *testing.T) {
 
 	got := r.derivedThresholds(pool, res, p, d, &gap, 3)
 	if !hasFinding(got.Findings, "RotationSpansNextWindow") {
-		t.Errorf("RotationSpansNextWindow expected: t_rot 1h + cooldown 10m > idle gap %v; findings=%+v", gap, got.Findings)
+		t.Errorf("RotationSpansNextWindow expected: t_rot_est 40m + cooldown 10m > idle gap %v; findings=%+v", gap, got.Findings)
 	}
 
 	none := r.derivedThresholds(pool, res, p, d, nil, 3)
 	if hasFinding(none.Findings, "RotationSpansNextWindow") {
 		t.Errorf("a nil idle gap must skip the carry-over check; findings=%+v", none.Findings)
+	}
+}
+
+// TestDerivedThresholdsPassesDrainEstimate: the policy field reaches schedule.Derive
+// and moves ONLY the forecast side. An unset field must arrive as nil so Derive
+// applies min(tGP, 10m) — here tGP = 30m, so the default resolves to 10m (issue #212).
+func TestDerivedThresholdsPassesDrainEstimate(t *testing.T) {
+	pool := withExpireAfter(withTGP(testNodePool(nil)))
+	r := newReconciler(t, testNow, nil, pool)
+	sched := mustSchedule(t)
+	p, _ := sched.WorstCasePeriod()
+	d, _ := sched.ShortestWindow()
+
+	pol := testPolicy()
+	res := r.resolve(pool, pol, sched)
+	if res.drainEstimate != nil {
+		t.Errorf("resolve() drainEstimate = %v, want nil for an unset policy field", res.drainEstimate)
+	}
+	unset := r.derivedThresholds(pool, res, p, d, nil, 3)
+	if want := 10 * time.Minute; unset.DrainEstimate != want {
+		t.Errorf("unset: DrainEstimate = %v, want %v (min(tGP 30m, default 10m))", unset.DrainEstimate, want)
+	}
+	if want := 40 * time.Minute; unset.TRotEst != want {
+		t.Errorf("unset: TRotEst = %v, want %v", unset.TRotEst, want)
+	}
+
+	pol = testPolicy()
+	pol.Surge.DrainEstimate = &metav1.Duration{Duration: 20 * time.Minute}
+	res = r.resolve(pool, pol, sched)
+	if res.drainEstimate == nil || *res.drainEstimate != 20*time.Minute {
+		t.Fatalf("resolve() drainEstimate = %v, want 20m", res.drainEstimate)
+	}
+	explicit := r.derivedThresholds(pool, res, p, d, nil, 3)
+	if want := 20 * time.Minute; explicit.DrainEstimate != want {
+		t.Errorf("explicit: DrainEstimate = %v, want %v", explicit.DrainEstimate, want)
+	}
+
+	// The deadline side is untouched by either, and only C moves.
+	if unset.TRot != explicit.TRot || unset.A != explicit.A || unset.G != explicit.G {
+		t.Errorf("deadline side moved with drainEstimate: TRot %v/%v A %v/%v G %d/%d",
+			unset.TRot, explicit.TRot, unset.A, explicit.A, unset.G, explicit.G)
+	}
+	if unset.C == explicit.C {
+		t.Errorf("C = %d for both estimates; the field is not load-bearing", unset.C)
 	}
 }
 

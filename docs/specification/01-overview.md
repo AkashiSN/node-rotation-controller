@@ -57,7 +57,9 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 | `E` | `expireAfter` — a NodeClaim's lifetime before Forceful Expiration (per-node, authoritative: `NodeClaim.spec.expireAfter`) |
 | `tGP` | `terminationGracePeriod` — the bound Karpenter can hold a drain to |
 | `P` | worst-case window period — the largest gap between consecutive maintenance-window occurrences (§3.1) |
-| `t_rot` | upper bound on one node's rotation time = `readyTimeout + tGP + buffer` |
+| `t_rot` | upper bound on one node's rotation time = `readyTimeout + tGP + buffer`; the deadline bound (`leadTime`, `A`, `G`, §3.3, §5.2) — **not** used by layer 2 |
+| `drainEstimate` | expected healthy PDB-respecting drain (`surge.drainEstimate`); unset ⇒ `min(tGP, 10m)`; layer-2 forecast only (§3.2) |
+| `t_rot_est` | expected rotation service time = `readyTimeout + drainEstimate + buffer`; the layer-2 throughput denominator (§3.2) |
 | `K` | `minRotationChances` — desired guaranteed rotation chances before expiry (floor 1) |
 | `leadTime` | how early a node is selected before its deadline = `K·P + t_rot` |
 | `A` | `ageThreshold` — the age at which a node becomes a candidate; derived `A = E − (K·P + t_rot)` |
@@ -65,10 +67,10 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 | `D` | maintenance-window duration — the length of a single window occurrence (§3.2 layer 2) |
 | `gap` | the shortest interval the window union stays **closed** between consecutive occurrences (§3.2 layer 2) |
 | `m` | `surge.maxUnavailable` — concurrent rotations per NodePool; fixed at `1` in v1 (§3.2 layer 2) |
-| `C` | per-occurrence window capacity — rotations one window occurrence can start, `C = m · ceil(D / (t_rot + cooldownAfter))` (§3.2 layer 2) |
+| `C` | per-occurrence window capacity — rotations one window occurrence can start, `C = m · ceil(D / (t_rot_est + cooldownAfter))` (§3.2 layer 2) |
 | `N` | NodePool node count — used only by the layer-2 throughput check, not by the per-node derivation (§3.2) |
 
-> `buffer`, `cooldownAfter`, and `readyTimeout` are configuration fields (§5.4), not derived symbols; they feed the `t_rot` and `C` formulas above.
+> `buffer`, `cooldownAfter`, `drainEstimate`, and `readyTimeout` are configuration fields (§5.4), not derived symbols; they feed the `t_rot`, `t_rot_est`, and `C` formulas above.
 
 ## 1.5 Position in the Karpenter Ecosystem
 

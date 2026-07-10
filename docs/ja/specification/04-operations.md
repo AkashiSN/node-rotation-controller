@@ -41,7 +41,7 @@
 
 | サーフェス | オブジェクト | reason | 発火タイミング |
 |-----------|------------|--------|--------------|
-| 非致命的 schedule 所見（§3.2 レイヤ 1–2） | NodePool | 所見コード（例: `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK`） | その所見が NodePool で有効になったとき |
+| 非致命的 schedule 所見（§3.2 レイヤ 1–2） | NodePool | 所見コード（例: `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `DrainEstimateAboveTGP`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK`） | その所見が NodePool で有効になったとき |
 | short-lead NodeClaim（§3.2 レイヤ 3） | NodeClaim | `ShortLead` | claim 自身の `expireAfter` が `K` 回のローテーションを保証できなくなったとき |
 | surge-less forceful fallback（§3.3） | NodePool | `ForcefulFallback` | 候補の deadline 前に graceful な surge を完了できないため surge-less なウィンドウ有界ローテーションを開始するとき（opt-in の `surge.forcefulFallback`）|
 
