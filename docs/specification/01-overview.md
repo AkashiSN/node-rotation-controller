@@ -63,8 +63,9 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 | `A` | `ageThreshold` — the age at which a node becomes a candidate; derived `A = E − (K·P + t_rot)` |
 | `G` | rotation chances the schedule actually guarantees; `G = K` under auto-derivation, recomputed for an explicit `ageThreshold` override |
 | `D` | maintenance-window duration — the length of a single window occurrence (§3.2 layer 2) |
+| `gap` | the shortest interval the window union stays **closed** between consecutive occurrences (§3.2 layer 2) |
 | `m` | `surge.maxUnavailable` — concurrent rotations per NodePool; fixed at `1` in v1 (§3.2 layer 2) |
-| `C` | per-occurrence window capacity — nodes one window occurrence can rotate, `C = m · floor(D / (t_rot + cooldownAfter))` (§3.2 layer 2) |
+| `C` | per-occurrence window capacity — rotations one window occurrence can start, `C = m · ceil(D / (t_rot + cooldownAfter))` (§3.2 layer 2) |
 | `N` | NodePool node count — used only by the layer-2 throughput check, not by the per-node derivation (§3.2) |
 
 > `buffer`, `cooldownAfter`, and `readyTimeout` are configuration fields (§5.4), not derived symbols; they feed the `t_rot` and `C` formulas above.

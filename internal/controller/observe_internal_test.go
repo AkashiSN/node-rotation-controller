@@ -27,9 +27,10 @@ func hasFinding(findings []schedule.Finding, code string) bool {
 
 // TestDerivedThresholdsPopulatesThroughputInputs covers issue #36: derivedThresholds
 // must feed the layer-2 throughput inputs (WindowLen D, NodeCount N) into
-// schedule.Derive, not leave them at zero. With the real 23h59m window no
-// ThroughputZero fires; a zero WindowLen (the pre-fix state) spuriously warns,
-// proving the input is load-bearing. A/G are unaffected by these layer-2 inputs.
+// schedule.Derive, not leave them at zero. The real 23h59m window yields
+// C = ceil(23h59m / (t_rot 1h + cooldown 10m)) = 21; a zero WindowLen (the pre-fix
+// state) collapses C and silences every layer-2 check, proving the input is
+// load-bearing. A/G are unaffected by these layer-2 inputs.
 func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	r := newReconciler(t, testNow, nil, pool)
@@ -37,23 +38,56 @@ func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 	res := r.resolve(pool, testPolicy(), sched)
 	p, _ := sched.WorstCasePeriod()
 	d, _ := sched.ShortestWindow()
+	gap, ok := sched.ShortestIdleGap()
+	if !ok {
+		t.Fatal("the 23h59m daily window closes for a minute each midnight; want a defined idle gap")
+	}
 
-	got := r.derivedThresholds(pool, res, p, d, 3)
+	got := r.derivedThresholds(pool, res, p, d, &gap, 3)
 	if got.A != 287*time.Hour {
 		t.Errorf("A: got %v, want 287h", got.A)
 	}
 	if got.G != 2 {
 		t.Errorf("G: got %d, want 2", got.G)
 	}
-	if hasFinding(got.Findings, "ThroughputZero") {
-		t.Errorf("ThroughputZero must not fire with a populated 23h59m window; findings=%+v", got.Findings)
+	if got.C != 21 {
+		t.Errorf("C: got %d, want 21 (ceil(23h59m / 70m))", got.C)
 	}
 
-	// Regression guard: the pre-fix WindowLen=0 produces the spurious warning the
-	// issue describes, so the input genuinely drives the finding.
-	zero := r.derivedThresholds(pool, res, p, 0, 3)
-	if !hasFinding(zero.Findings, "ThroughputZero") {
-		t.Errorf("ThroughputZero expected when WindowLen=0; findings=%+v", zero.Findings)
+	// Regression guard: the pre-fix WindowLen=0 drives C to zero, which layer 2
+	// treats as degenerate and skips wholesale — so the input genuinely drives the
+	// throughput findings (issue #211 replaced the old ThroughputZero warning).
+	zero := r.derivedThresholds(pool, res, p, 0, &gap, 3)
+	if zero.C != 0 {
+		t.Errorf("C with WindowLen=0: got %d, want 0", zero.C)
+	}
+	if hasFinding(zero.Findings, "RotationSpansNextWindow") {
+		t.Errorf("layer 2 must be skipped entirely at a degenerate D; findings=%+v", zero.Findings)
+	}
+}
+
+// TestDerivedThresholdsPassesIdleGap covers the issue #211 wiring: the carry-over
+// check fires only when the reconciler supplies the schedule's shortest idle gap.
+// The 23h59m daily window closes for one minute, which the 70m serial gate
+// (t_rot 1h + cooldown 10m) plainly spans; a nil gap (a continuously-open window,
+// where nothing can carry into a "next" occurrence) must silence the check instead.
+func TestDerivedThresholdsPassesIdleGap(t *testing.T) {
+	pool := withExpireAfter(withTGP(testNodePool(nil)))
+	r := newReconciler(t, testNow, nil, pool)
+	sched := mustSchedule(t)
+	res := r.resolve(pool, testPolicy(), sched)
+	p, _ := sched.WorstCasePeriod()
+	d, _ := sched.ShortestWindow()
+	gap, _ := sched.ShortestIdleGap()
+
+	got := r.derivedThresholds(pool, res, p, d, &gap, 3)
+	if !hasFinding(got.Findings, "RotationSpansNextWindow") {
+		t.Errorf("RotationSpansNextWindow expected: t_rot 1h + cooldown 10m > idle gap %v; findings=%+v", gap, got.Findings)
+	}
+
+	none := r.derivedThresholds(pool, res, p, d, nil, 3)
+	if hasFinding(none.Findings, "RotationSpansNextWindow") {
+		t.Errorf("a nil idle gap must skip the carry-over check; findings=%+v", none.Findings)
 	}
 }
 

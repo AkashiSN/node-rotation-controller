@@ -415,9 +415,15 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// WorstCasePeriod/ShortestWindow's ok is always true here: policy.Validate
 	// rejects an empty maintenanceWindows (and empty days), so the Schedule always
 	// has ≥1 occurrence. N is the pool's in-scope claim count (issue #36).
+	// ShortestIdleGap is genuinely undefined for a continuously-open window, and a
+	// nil gap tells Derive to skip the carry-over check (issue #211).
 	p, _ := sched.WorstCasePeriod()
 	d, _ := sched.ShortestWindow()
-	derived := r.derivedThresholds(pool, res, p, d, len(claims))
+	var idleGap *time.Duration
+	if g, ok := sched.ShortestIdleGap(); ok {
+		idleGap = &g
+	}
+	derived := r.derivedThresholds(pool, res, p, d, idleGap, len(claims))
 
 	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
 	r.observe(pool, res, now, claims, p, derived, excluded)
@@ -590,11 +596,12 @@ func (r *RotationReconciler) drainStuck(pool *karpv1.NodePool, claims []karpv1.N
 // ageThreshold A and guaranteed chances G feed the
 // noderotation_age_threshold_seconds / noderotation_rotation_chances gauges, and
 // the Findings are consumed by the feasibility gate (issue #27). The layer-2
-// throughput inputs windowLen (D) and nodeCount (N) must be passed so the
-// throughput findings are meaningful (issue #36); A and G do not depend on them.
+// throughput inputs windowLen (D), idleGap and nodeCount (N) must be passed so the
+// throughput findings are meaningful (issues #36, #211); A and G do not depend on
+// them. A nil idleGap skips the carry-over check.
 // A never-expiring template has no derivation: an override A still applies, but
 // no chances can be guaranteed and no findings are produced.
-func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolved, p, windowLen time.Duration, nodeCount int) schedule.Result {
+func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolved, p, windowLen time.Duration, idleGap *time.Duration, nodeCount int) schedule.Result {
 	eptr := pool.Spec.Template.Spec.ExpireAfter.Duration
 	if eptr == nil {
 		if res.override != nil {
@@ -609,6 +616,7 @@ func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolv
 		TGPWasUnset:    unset,
 		P:              p,
 		WindowLen:      windowLen,
+		IdleGap:        idleGap,
 		ReadyTimeout:   res.readyTimeout,
 		Cooldown:       res.cooldown,
 		RetryBackoff:   res.retryBackoff,
