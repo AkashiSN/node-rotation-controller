@@ -258,7 +258,10 @@ for how to read each metric and respond.
 
 The chart ships a [`values.schema.json`](values.schema.json) that validates
 values at install time as a fast first line of defense; the CRD and controller
-remain the source of truth and re-validate (spec §5.4).
+remain the source of truth and re-validate (spec §5.4). The `rotationPolicies[].spec`
+subtree is **sealed** (`additionalProperties: false`): a mistyped key such as
+`surge.readyTimout` fails `helm install`/`helm upgrade` outright rather than being
+silently dropped by the CRD's structural schema and leaving the default in effect.
 
 ## Multiple releases in one cluster
 
@@ -278,6 +281,12 @@ Pre-1.0, treat every upgrade as potentially breaking and read the release notes.
   that sets a field the installed CRD does not know cannot take effect. Which
   releases changed it is recorded in the runbook's
   [per-release CRD table](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/runbook.md#8-upgrading-and-rolling-back-the-controller).
+- **The `rotationPolicies[].spec` values subtree is now sealed** (issue #219): an
+  unrecognized key that earlier charts accepted silently now fails the upgrade.
+  If you carry one — a typo, or a key added ahead of a feature — render the new
+  chart against your values first (`helm template rot charts/node-rotation-controller
+  -f your-values.yaml`) and fix or remove any key the schema names before upgrading.
+  See the runbook's [upgrade guide](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/runbook.md#8-upgrading-and-rolling-back-the-controller).
 
 ## Uninstalling
 

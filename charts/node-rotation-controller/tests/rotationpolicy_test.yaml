@@ -202,3 +202,76 @@ tests:
     asserts:
       - notExists:
           path: spec.surge.drainEstimate
+
+  # Issue #219: the RotationPolicy value subtree is sealed with
+  # additionalProperties:false, so a typo'd key is rejected at render time
+  # instead of being silently dropped by the CRD's structural schema. helm
+  # unittest evaluates values.schema.json, so these cases exercise the seal.
+  #
+  # The schema error is raised while values are loaded (before template render),
+  # which helm unittest surfaces as a bare template failure — a `failedTemplate`
+  # with an `errorMessage:` matcher records the case as errored rather than
+  # matching, so these assert the failure without pinning the message. The paired
+  # valid-key case guards against over-sealing (a false positive that fails every
+  # install). The `helm template` negative control in the PR checks the exact
+  # "additional properties '<key>' not allowed" text.
+  - it: rejects a typo'd surge key (surge is sealed)
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - { timezone: Asia/Tokyo, days: [Wed], start: "02:00", end: "06:00" }
+            surge:
+              readyTimout: 15m
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects a typo'd maintenanceWindows key (each window entry is sealed)
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - { timezone: Asia/Tokyo, days: [Wed], start: "02:00", end: "06:00", tz: x }
+    asserts:
+      - failedTemplate: {}
+
+  - it: accepts every sealed object populated with its legitimate keys
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+              matchExpressions:
+                - { key: role, operator: In, values: [worker] }
+            ageThreshold: 168h
+            minRotationChances: 2
+            maintenanceWindows:
+              - { timezone: Asia/Tokyo, days: [Wed, Sat], start: "02:00", end: "06:00" }
+            surge:
+              maxUnavailable: 1
+              readyTimeout: 15m
+              cooldownAfter: 10m
+              drainEstimate: 20m
+              retryBackoff: 30m
+              matchNodeRequirements:
+                required: [topology.kubernetes.io/zone]
+                preferred: []
+              forcefulFallback:
+                enabled: true
+            prePull:
+              enabled: false
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.surge.drainEstimate
+          value: 20m
+      - equal:
+          path: spec.surge.forcefulFallback.enabled
+          value: true

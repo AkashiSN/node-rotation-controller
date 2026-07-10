@@ -493,6 +493,29 @@ older CRD, and the controller defaults it to off. What applying the new schema
 buys you is the ability to set the field and have it **persist** — before that,
 per the paragraph above, it is either rejected or dropped.
 
+**Chart values-schema changes can also break an upgrade.** Distinct from the CRD
+above, the chart's `values.schema.json` validates your Helm values at
+`helm install`/`helm upgrade` time. The chart now **seals** the
+`rotationPolicies[].spec` subtree (`additionalProperties: false`, issue #219): an
+unrecognized key under `spec` — including under `surge`, `matchNodeRequirements`,
+`forcefulFallback`, `prePull`, each `maintenanceWindows` entry, and each
+`nodePoolSelector.matchExpressions` entry — **fails the command** instead of being
+silently dropped. Charts before this change accepted such a key and let the CRD's
+structural schema prune it, so a typo like `surge.readyTimout: 15m` installed
+cleanly and left the default in effect with no error anywhere. If any install
+carries such a key — a typo, or one added ahead of a feature landing — the first
+`helm upgrade` into a sealed chart turns into a hard failure naming the offending
+key. **Find it before upgrading** by rendering the new chart against your own
+values:
+
+```sh
+helm template rot charts/node-rotation-controller -f your-values.yaml >/dev/null
+```
+
+A clean render means the upgrade will pass the schema; a non-zero exit prints
+`additional properties '<key>' not allowed` (or the failing value's constraint) at
+the exact path — fix or remove that key, then upgrade.
+
 **Rolling back.** Rolling the **image** back is symmetric and equally safe — the
 older controller resumes from the same on-object state. The real hazard is
 rolling back **across a CRD schema change**: a `RotationPolicy` authored against
