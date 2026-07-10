@@ -1,7 +1,11 @@
 package schedule
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -460,12 +464,24 @@ func pinnedEstimate() Inputs {
 
 // layer1Codes is the closed set of layer-1 finding codes (spec §3.2). Layer 1 vs
 // layer 2 is classified by CODE, not severity: every layer-2 finding is Warn, and
-// so are several layer-1 ones.
+// so are several layer-1 ones. NoWindows is included: it is emitted directly by
+// Derive (not via the layer1 helper) before the P<=0 short-circuit, but it is a
+// scheduling-feasibility Fatal like the rest of layer 1.
 var layer1Codes = map[string]bool{
 	"KBelowOne": true, "KBelowTwo": true,
 	"ANonPositive": true, "AVeryAggressive": true,
 	"OverrideNonPositive": true, "OverrideGBelowOne": true, "OverrideGBelowK": true,
 	"TGPUnset": true, "HardCapExceeded": true, "RetryBackoffShort": true,
+	"NoWindows": true,
+}
+
+// forecastCodes is the closed set of forecast-side codes: the layer-2 throughput
+// warnings plus the layer-2-adjacent input-validity warning DrainEstimateAboveTGP
+// emitted from Derive itself. Together with layer1Codes it must cover every code
+// the package emits (see TestFindingCodesAreClassified).
+var forecastCodes = map[string]bool{
+	"ThroughputBelowArrival": true, "ThroughputBurstShortfall": true, "RotationSpansNextWindow": true,
+	"DrainEstimateAboveTGP": true,
 }
 
 func layer1Set(r Result) map[string]Severity {
@@ -476,6 +492,55 @@ func layer1Set(r Result) map[string]Severity {
 		}
 	}
 	return m
+}
+
+// TestFindingCodesAreClassified guards layer1Codes/forecastCodes against going
+// stale: it parses schedule.go's own source for every Finding{Code: "..."}
+// literal and requires each one to be registered in layer1Codes or
+// forecastCodes. Without this, a new layer-1 finding added without a matching
+// entry would make TestDeriveDrainEstimateContainment's layer-1 invariance
+// check silently ignore it — the containment assertion would pass vacuously
+// even if drainEstimate started leaking into that finding.
+//
+// If this test fails: add the reported code to layer1Codes (if it can gate a
+// NodePool out of rotating) or forecastCodes (if it is throughput/forecast-only
+// advisory), matching schedule.go's own layer-1/layer-2 split.
+func TestFindingCodesAreClassified(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "schedule.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse schedule.go: %v", err)
+	}
+
+	seen := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		kv, ok := n.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		if ident, ok := kv.Key.(*ast.Ident); !ok || ident.Name != "Code" {
+			return true
+		}
+		lit, ok := kv.Value.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		code, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			t.Fatalf("unquote Code literal %s: %v", lit.Value, err)
+		}
+		seen[code] = true
+		return true
+	})
+	if len(seen) == 0 {
+		t.Fatal("found no Finding Code literals in schedule.go; did the field name or parse target change?")
+	}
+
+	for code := range seen {
+		if !layer1Codes[code] && !forecastCodes[code] {
+			t.Errorf("finding code %q is emitted by schedule.go but not classified in layer1Codes or forecastCodes (schedule_test.go); add it to whichever set matches its containment side", code)
+		}
+	}
 }
 
 func TestResolveDrainEstimate(t *testing.T) {
