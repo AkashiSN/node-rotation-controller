@@ -5,6 +5,8 @@
 - Issue: [#156](https://github.com/AkashiSN/node-rotation-controller/issues/156)
 
 > **Note (2026-07-09, [#211](https://github.com/AkashiSN/node-rotation-controller/issues/211)).** This ADR records the layer-2 throughput model as it stood when the decision was made. Layer 2 now counts rotation *starts* with `C = m·ceil(D / (t_rot + cooldownAfter))`, and the `ThroughputZero` finding it could produce no longer exists — see [§3.2](../../specification/03-design.md#32-candidate-selection) for the current model. The `floor` formula quoted in *Context* below is the pre-#211 one. The decision itself is unaffected: it turns on capacity falling below demand (`C·A < N·P`), not on how `C` rounds.
+>
+> **Note (2026-07-10, [#212](https://github.com/AkashiSN/node-rotation-controller/issues/212)).** The `C` quoted in *Context* below is derived from `t_rot`, the force-kill deadline. Layer 2 no longer computes `C` that way: it now uses a separate throughput forecast `t_rot_est = readyTimeout + surge.drainEstimate + buffer`, while `t_rot` stays the deadline bound behind `leadTime`/`A`/`G`/the fallback deadline race — see [ADR-0002](0002-drain-estimate-vs-force-kill-deadline.md). The decision here is still unaffected, for the same reason: it turns on `C·A < N·P`, not on which term feeds `C`.
 
 ## Context
 

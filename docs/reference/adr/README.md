@@ -13,3 +13,4 @@ The ADR records the decision; the canonical behavior lives in [`docs/specificati
 | ADR | Title | Status |
 |-----|-------|--------|
 | [0001](0001-window-bounded-forceful-fallback.md) | Window-bounded forceful fallback (relax the surge-only invariant) | Accepted |
+| [0002](0002-drain-estimate-vs-force-kill-deadline.md) | Drain estimate vs. force-kill deadline (split `t_rot` into a deadline bound and a throughput forecast) | Accepted |
