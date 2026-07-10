@@ -237,8 +237,14 @@ func TestToPolicyLeavesUnsetDrainEstimateNil(t *testing.T) {
 // added to nrv1.Surge / policy.Surge can be silently dropped the same way. It
 // builds an nrv1.Surge with EVERY field set to a distinctive non-zero value,
 // converts it, and reflects over the resulting policy.Surge, failing on any
-// field left at its zero value. Reflection covers a newly added field
-// automatically, without anyone remembering to update this test.
+// field left at its zero value.
+//
+// This is not automatic: a field added to both structs also needs a non-zero
+// value added to the fixture below, or the fixture itself leaves the field at
+// zero and the test passes vacuously. The guard only guarantees that adding a
+// field forces someone to touch this test — a failure does not say whether
+// toSurge forgot to copy the field or the fixture forgot to set it, so the
+// author must check both.
 //
 // The two nested-struct fields (MatchNodeRequirements, FeatureToggle) need no
 // special handling: reflect.Value.IsZero recurses into a struct and reports it
