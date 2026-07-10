@@ -218,7 +218,7 @@ metric.
 
 - **Behavior.** When `surge.forcefulFallback.enabled` is set on the governing RotationPolicy, a candidate that cannot complete a graceful surge before its own deadline (`deadline − now < t_rot`) is rotated **surge-less**: the controller deletes the old `NodeClaim` in-window without provisioning a surge node, draining it via Karpenter's voluntary path so PDBs still apply (spec §3.3).
 - **Signals.** Each such rotation increments `noderotation_forceful_fallback_total{nodepool}` and emits a `ForcefulFallback` Warning Event on the NodePool (`kubectl describe nodepool <name>`); the in-flight rotation also carries the `noderotation.io/rotation-mode=forceful-fallback` annotation on the NodePool.
-- **Remediation.** A rising `noderotation_forceful_fallback_total` means graceful surges are repeatedly losing the race to the deadline — widen the maintenance window; set `surge.drainEstimate` to the workload's real drain time if the forecast is over-stated; reduce the synchronized node count flagged by `ThroughputBurstShortfall`. (`tGP` may still be lowered to lengthen `A`, but it is not the throughput lever.)
+- **Remediation.** A rising `noderotation_forceful_fallback_total` means graceful surges are repeatedly losing the race to the deadline (`deadline − now < t_rot`) — widen the maintenance window; lower `terminationGracePeriod`, which shrinks `t_rot` directly, the deadline-race predicate itself (see [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod) for the trade-off); reduce the synchronized node count flagged by `ThroughputBurstShortfall`. `surge.drainEstimate` does **not** help here — it feeds only the layer-2 throughput forecast `t_rot_est`, never the deadline race.
 
 ---
 
