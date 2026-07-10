@@ -378,6 +378,12 @@ spec:
     maxUnavailable: 1             # v1 は 1 固定（直列）。OpenAPI スキーマが 1 以外を拒否
     readyTimeout: 15m             # 0 超でなければならない（実行時に検証）
     cooldownAfter: 10m            # 0 超でなければならない
+    # drainEstimate: 10m          # 任意; 健全で PDB を尊重する drain の期待所要時間。レイヤ 2 の
+                                  #   スループット予測（t_rot_est、§3.2）のみに効き、上界ではなく
+                                  #   ローテーションのタイミングは変えない。既定なし: 未設定時は
+                                  #   導出時に min(tGP, 10m) に解決される（代替値は NodePool テンプレ
+                                  #   に依存）。0 超でなければならない; tGP を超える明示値は到達不能
+                                  #   なため警告（DrainEstimateAboveTGP）してクランプする。
     retryBackoff: 30m             # 0 超でなければならない
     matchNodeRequirements:        # placeholder が複製する候補ノードの requirement（§3.3）
       required:                   # 空のとき以下の集合にデフォルト（実行時に適用）

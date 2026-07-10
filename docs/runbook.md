@@ -20,7 +20,7 @@ Japanese translation: [docs/ja/runbook.md](ja/runbook.md).
 ## Contents
 
 1. [Per-AZ surge headroom for zonal-PV workloads](#1-per-az-surge-headroom-for-zonal-pv-workloads)
-2. [Lowering Auto Mode `terminationGracePeriod`](#2-lowering-auto-mode-terminationgraceperiod)
+2. [Calibrating the drain: `drainEstimate` vs `terminationGracePeriod`](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod)
 3. [Interpreting the `noderotation_*` metrics](#3-interpreting-the-noderotation_-metrics)
 4. [The freeze workflow](#4-the-freeze-workflow)
 5. [Handling a stuck drain](#5-handling-a-stuck-drain)
@@ -77,52 +77,64 @@ that alert fires for a zonal-PV NodePool, suspect a per-AZ capacity gap first.
 
 ---
 
-## 2. Lowering Auto Mode `terminationGracePeriod`
+## 2. Calibrating the drain: `drainEstimate` vs `terminationGracePeriod`
 
-**Applies to:** EKS Auto Mode NodePools (where the stock
+**Applies to:** any NodePool whose layer-2 throughput forecast (`C`) looks too
+low, and EKS Auto Mode NodePools specifically (where the stock
 `terminationGracePeriod` (`tGP`) default is `24h`).
 
-**Why it matters.** `tGP` is the deadline at which Karpenter **force-completes** a
-drain — it is not the duration a healthy drain takes. The controller's throughput
-model ([§3.2 layer 2](specification/03-design.md#32-candidate-selection)) has to budget
-that full bound for *each* rotation: the single-node rotation bound is
-`t_rot = readyTimeout + tGP + buffer`, and a window of duration `D` admits
-`C = ceil(D / (t_rot + cooldownAfter))` serial rotation starts.
+**Why it matters.** Two different durations are easy to conflate:
 
-With the stock `tGP = 24h`, `t_rot ≈ 24.5h`, so a typical 4-hour window computes
-`C = ceil(4h / (24.5h + 10m)) = 1`. One rotation per occurrence is real — the
-window gates only rotation *starts*, and an in-flight rotation continues past the
-window's close — but it makes `K · C` the entire budget a synchronized batch has
-before its shared deadline. On the defaults (`K = 2`) that budget is **two nodes**,
-so a pool of any realistic size warns with `ThroughputBurstShortfall`. And when
-`t_rot + cooldownAfter` exceeds the interval the window stays *closed*,
-`RotationSpansNextWindow` additionally warns: the rotation still holds the serial
-start gate when the next window opens.
+- `surge.drainEstimate` — how long a **healthy, PDB-respecting drain actually
+  takes**. This is the **throughput knob**. The controller forecasts capacity
+  from it: the expected rotation service time is
+  `t_rot_est = readyTimeout + drainEstimate + buffer`, and a window of duration
+  `D` admits `C = ceil(D / (t_rot_est + cooldownAfter))` serial rotation starts
+  ([§3.2 layer 2](specification/03-design.md#32-candidate-selection)). Unset,
+  `drainEstimate` defaults to `min(tGP, 10m)`.
+- `terminationGracePeriod` — the deadline at which Karpenter **force-completes** a
+  drain, killing whatever pods have not yet drained. It is a **safety bound**, not
+  a throughput input, and it no longer appears in `C` at all.
+
+Before #212 the model budgeted the full `tGP` in `C`, so on stock Auto Mode
+(`tGP = 24h`, `t_rot ≈ 24.5h`) a 4-hour window computed `C = 1` — and the apparent
+remedy was to lower `tGP`. That is no longer how throughput is raised. With the
+default `drainEstimate = min(24h, 10m) = 10m`, `t_rot_est = 40m`, so the same
+4-hour window now computes `C = ceil(4h / (40m + 10m)) = 5` regardless of `tGP`.
+
+**Raising throughput.** `C` is forecast from `surge.drainEstimate` (expected
+healthy drain), not from `terminationGracePeriod` (the force-kill deadline). If
+`C` looks too low, set `drainEstimate` to your workload's real drain time — read
+it off `noderotation_duration_seconds{phase="drain"}`. Do **not** lower
+`terminationGracePeriod` to make a throughput warning go away. It no longer raises
+`C` at all; it reaches only `ThroughputBelowArrival`, and only indirectly, by
+lengthening `A` (and under an explicit `ageThreshold` override, not even that).
+What it does do is shorten the window a genuinely slow, PDB-respecting drain gets
+before Karpenter force-kills its pods. `terminationGracePeriod` is chosen from the
+downtime you can tolerate in an incident, not from the drain times you observe in
+normal operation — the observations do not contain the tail it exists to cover.
 
 > **Near-continuous schedules warn too.** `RotationSpansNextWindow` fires on any
-> closed interval shorter than `t_rot + cooldownAfter`, however small — a daily
+> closed interval shorter than `t_rot_est + cooldownAfter`, however small — a daily
 > `00:00`–`23:59` window closes for one minute at each midnight, and a rotation
 > genuinely does hold the gate across it. The warning is correct, but on such a
 > schedule the amount by which `K · C` overstates capacity is tiny. If you mean
 > 24/7, write `00:00`–`24:00`: that union never closes, so there is no next
 > occurrence to carry into and the check does not apply.
 
-**Guidance.** Lowering `tGP` is a legitimate operational choice — for the
-stuck-drain bound and the 21-day cap below — but treat it as **tuning a safety
-bound, not as silencing a throughput warning**. Because PDB-respecting drains
-finish in minutes, a lower `tGP` buys little real throughput; it only shortens the
-grace a genuinely slow drain is given. Widening the maintenance window or adding
-occurrences raises real capacity; lowering `tGP` mostly makes the *forecast* less
-pessimistic.
+If a `RotationSpansNextWindow` warning is the symptom, the remedies, in order,
+are: space the window occurrences further apart; lower `cooldownAfter`; correct
+`drainEstimate` if it over-states the real drain. Lowering `tGP` does **not**
+help — the predicate is evaluated on `t_rot_est`, which no longer contains it.
 
-If you do lower it, set NodePool `spec.template.spec.terminationGracePeriod` to a
-**realistic per-node drain bound** — the worked example in
-[§3.2](specification/03-design.md#32-candidate-selection) uses `1h`. With `tGP = 1h`,
-`t_rot ≈ 1.5h` and the same 4-hour window gives `C = ceil(4h / (1.5h + 10m)) = 3`
-rotation starts per occurrence.
+**Still reasons to lower `tGP`.** Lowering `terminationGracePeriod` remains a
+legitimate operational choice, just not for throughput:
 
-Lowering `tGP` has two further effects, both beneficial here:
-
+- **It lengthens `A` (`ageThreshold`).** `tGP` sits inside the deadline bound
+  `t_rot = readyTimeout + tGP + buffer`, so a smaller `tGP` derives a larger `A` —
+  nodes rotate later, reducing churn — and because `ThroughputBelowArrival`
+  compares `C·A` against `N·P`, it *indirectly* relaxes that one check. Under an
+  explicit `ageThreshold` override even that path closes.
 - **It relaxes the Auto Mode 21-day hard cap** (`E + tGP ≤ 21d`,
   [§1.1](specification/01-overview.md#11-background)). `tGP = 1h` admits `expireAfter` up to
   ~`20d`, which is exactly the headroom needed to satisfy the lead-time
@@ -131,15 +143,18 @@ Lowering `tGP` has two further effects, both beneficial here:
   `tGP + buffer`, so a lower `tGP` surfaces a wedged drain sooner (see
   [§5](#5-handling-a-stuck-drain)).
 
-**Trade-off.** A genuinely slow drain is **force-completed after `tGP`** instead
-of `24h`. Pick `tGP` from the workload's real PDB-respecting drain time — long
-enough that healthy drains finish voluntarily, short enough that the throughput
-model passes. Do **not** copy the `1h` from the example blindly.
+**Trade-off.** Pick `terminationGracePeriod` from the downtime you can tolerate in
+an incident — long enough that a genuinely slow, PDB-respecting drain finishes
+voluntarily, short enough that the 21-day cap and stuck-drain bound behave. Pick
+`drainEstimate` from how long a healthy drain actually *takes*. They are different
+numbers; conflating them is what made `C` unusable before.
 
 > If `tGP` is unset (self-managed Karpenter allows nil), the drain is unbounded
-> by Karpenter; the controller substitutes a fixed fallback bound (e.g. `1h`)
-> for both the throughput model and the stuck-drain alert
+> by Karpenter; the controller substitutes a fixed fallback bound (e.g. `1h`) for
+> the stuck-drain alert and the deadline bound `t_rot`
 > ([§3.2 layer-1 `TGPUnset` warning](specification/03-design.md#32-candidate-selection)).
+> An explicit `drainEstimate` is then used as-is — there is no deadline to clamp
+> it against.
 
 ---
 
@@ -171,8 +186,9 @@ that stops reconciling does not latch its last value forever.
 `Warning` Events on the NodePool / NodeClaim
 ([§4.2](specification/04-operations.md#42-observability)), so `kubectl describe nodepool <name>`
 shows them without a metrics stack. Reasons include `KBelowTwo`,
-`AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `ThroughputBelowArrival`,
-`ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK`, and `ShortLead`.
+`AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `DrainEstimateAboveTGP`,
+`ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`,
+`OverrideGBelowK`, and `ShortLead`.
 
 **Judging reconcile liveness — use the metrics, not the warning log.** Both the
 Warning Events *and* the `INFO`-level warning **log** lines are deduplicated on
@@ -202,7 +218,7 @@ metric.
 
 - **Behavior.** When `surge.forcefulFallback.enabled` is set on the governing RotationPolicy, a candidate that cannot complete a graceful surge before its own deadline (`deadline − now < t_rot`) is rotated **surge-less**: the controller deletes the old `NodeClaim` in-window without provisioning a surge node, draining it via Karpenter's voluntary path so PDBs still apply (spec §3.3).
 - **Signals.** Each such rotation increments `noderotation_forceful_fallback_total{nodepool}` and emits a `ForcefulFallback` Warning Event on the NodePool (`kubectl describe nodepool <name>`); the in-flight rotation also carries the `noderotation.io/rotation-mode=forceful-fallback` annotation on the NodePool.
-- **Remediation.** A rising `noderotation_forceful_fallback_total` means graceful surges are repeatedly losing the race to the deadline — widen the maintenance window, lower `tGP`, or reduce the synchronized node count flagged by `ThroughputBurstShortfall`.
+- **Remediation.** A rising `noderotation_forceful_fallback_total` means graceful surges are repeatedly losing the race to the deadline — widen the maintenance window; set `surge.drainEstimate` to the workload's real drain time if the forecast is over-stated; reduce the synchronized node count flagged by `ThroughputBurstShortfall`. (`tGP` may still be lowered to lengthen `A`, but it is not the throughput lever.)
 
 ---
 
@@ -337,7 +353,7 @@ Working through it concretely:
    `tGP` regardless — so a stuck drain self-resolves within `tGP`, and the
    stuck-drain alert is a heads-up that a *graceful* drain is not finishing, not
    that the node is stuck forever. This is the practical reason to keep `tGP`
-   bounded ([§2](#2-lowering-auto-mode-terminationgraceperiod)). **When `tGP` is
+   bounded ([§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod)). **When `tGP` is
    unset** (self-managed Karpenter), there is **no Karpenter-side force** — a
    blocking PDB or stuck finalizer can hold the drain indefinitely, so operator
    action is the only resolution.
@@ -400,15 +416,15 @@ the section that fixes it. The signal strings are the exact ones from
 | Symptom (what you see) | Confirm with | Likely cause | Go to |
 |------------------------|--------------|--------------|-------|
 | Surge node never appears; the placeholder Pod stays `Pending` and rotations end in `failure` | `noderotation_duration_seconds{phase="surge_wait"}` climbing; `noderotation_completed_total{outcome="failure"}` | No schedulable **same-AZ** capacity for the replacement (zonal-PV pin) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) |
-| `noderotation_candidates` never trends to `0` across two windows | `NodeRotationCandidatesNotDraining` ([R2](specification/07-risks.md#71-risks)) | Throughput too low for the window, **or** rotation wedged for one of the causes below | [§2](#2-lowering-auto-mode-terminationgraceperiod), then scan the rows below |
-| `ThroughputBurstShortfall` warning on **every** window | `ThroughputBurstShortfall` Warning Event | `K · C` is smaller than the pool's node count — the window is too short (or `tGP` too large) to rotate a synchronized batch before its shared deadline | [§2](#2-lowering-auto-mode-terminationgraceperiod) |
-| `RotationSpansNextWindow` warning | `RotationSpansNextWindow` Warning Event | `t_rot + cooldownAfter` exceeds the interval the window stays closed, so one rotation holds the serial start gate into the following occurrence and `K · C` overstates capacity | [§2](#2-lowering-auto-mode-terminationgraceperiod) |
+| `noderotation_candidates` never trends to `0` across two windows | `NodeRotationCandidatesNotDraining` ([R2](specification/07-risks.md#71-risks)) | Throughput too low for the window, **or** rotation wedged for one of the causes below | [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod), then scan the rows below |
+| `ThroughputBurstShortfall` warning on **every** window | `ThroughputBurstShortfall` Warning Event | `K · C` is smaller than the pool's node count — the window is too short (or `drainEstimate` over-stated) to rotate a synchronized batch before its shared deadline | [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod) |
+| `RotationSpansNextWindow` warning | `RotationSpansNextWindow` Warning Event | `t_rot_est + cooldownAfter` exceeds the interval the window stays closed, so one rotation holds the serial start gate into the following occurrence and `K · C` overstates capacity | [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod) |
 | A drain hangs past `tGP + buffer` | `noderotation_drain_stuck == 1`; `NodeRotationDrainStuck` | Unsatisfiable PDB or a stuck Pod finalizer | [§5](#5-handling-a-stuck-drain) |
 | `noderotation_in_progress` stuck at `1` with no new completions | `NodeRotationStalledInWindow` | Either the surge is not coming up (→ §1) or the drain is stuck (→ §5) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) / [§5](#5-handling-a-stuck-drain) |
 | A NodePool never rotates; candidates frozen and no rotation starts | `noderotation_policy_conflict == 1`; `PolicyConflict` Warning Event | An equal-specificity `RotationPolicy` selector tie, or a runtime-invalid governing policy | [§3](#3-interpreting-the-noderotation_-metrics) metric row, [spec §5.4](specification/05-implementation.md#54-configuration-schema) |
 | A NodePool stopped rotating, seemingly on purpose | `noderotation_freeze_until_timestamp > 0` | An active (possibly forgotten ad-hoc) freeze | [§4](#4-the-freeze-workflow) |
-| Nodes reach `expireAfter` before a graceful rotation finishes | `noderotation_completed_total{outcome="expired"}` | The lead-time race was lost — threshold/throughput too tight for the window cadence | [§2](#2-lowering-auto-mode-terminationgraceperiod), [spec §3.5](specification/03-design.md#35-backstop-behavior) |
-| `noderotation_short_lead_nodes > 0` | `NodeRotationShortLeadNodes`; `ShortLead` Warning Event | A node's own stamped `expireAfter` can no longer guarantee `K` chances | [§2](#2-lowering-auto-mode-terminationgraceperiod), [spec §3.2 layer 3](specification/03-design.md#32-candidate-selection) |
+| Nodes reach `expireAfter` before a graceful rotation finishes | `noderotation_completed_total{outcome="expired"}` | The lead-time race was lost — threshold/throughput too tight for the window cadence | [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod), [spec §3.5](specification/03-design.md#35-backstop-behavior) |
+| `noderotation_short_lead_nodes > 0` | `NodeRotationShortLeadNodes`; `ShortLead` Warning Event | A node's own stamped `expireAfter` can no longer guarantee `K` chances | [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod), [spec §3.2 layer 3](specification/03-design.md#32-candidate-selection) |
 | `noderotation_retry_count >= 3` for a pool | `NodeRotationRetryCountHigh` ([R3](specification/07-risks.md#71-risks)) | A **systematic** failure: sustained preemption or a same-AZ capacity shortage | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) |
 | "Reconcile looks stalled" — no recent warning **log** lines | *Not a real symptom.* Check `controller_runtime_reconcile_total{controller="rotation"}` is still rising | Warning logs/events are deduped on transition; a healthy steady-state loop emits **zero** log lines | [§3](#3-interpreting-the-noderotation_-metrics) (judging liveness) |
 
