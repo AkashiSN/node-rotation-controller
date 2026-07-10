@@ -242,6 +242,16 @@ rotationPolicies:
         # Base wait before re-selecting a failed NodeClaim; doubles per
         # consecutive failure, capped at 8x (spec §5.3).
         retryBackoff: 30m
+        # Expected duration of a healthy, PDB-respecting drain. Feeds ONLY the
+        # layer-2 throughput forecast (spec §3.2) — it is not a bound, and it
+        # changes no rotation timing. Leave it unset and the controller uses
+        # min(terminationGracePeriod, 10m).
+        #
+        # Set it ONLY if you know your workload's real drain time. Do NOT lower
+        # terminationGracePeriod to "fix" a throughput warning: that is the
+        # deadline at which Karpenter force-kills a drain, not how long a healthy
+        # one takes.
+        # drainEstimate: 10m
         # Which candidate-node requirements the placeholder replicates (spec §3.3).
         # The karpenter.sh/nodepool selector is always applied and is NOT listed.
         matchNodeRequirements:
