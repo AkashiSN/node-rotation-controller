@@ -56,7 +56,7 @@ flowchart TD
     q2 -->|yes| pick["pick earliest-deadline eligible candidate<br/>(empty state, or failed past backoff)"]
     pick --> q3{"candidate<br/>found?"}
     q3 -->|no| rq
-    q3 -->|yes| q4{"surge_headroom?<br/>candidate's reschedulable sum<br/>vs spec.limits budget"}
+    q3 -->|yes| q4{"surge_headroom?<br/>candidate's clamped footprint<br/>vs spec.limits budget"}
     q4 -->|no| warn["warn: insufficient limits;<br/>Requeue (1m)"]
     q4 -->|yes| anchor["write active-rotation anchor<br/>(conflict-checked, only-if-absent)"]
     anchor --> adv
@@ -96,10 +96,11 @@ reconcile_nodepool(np):
                                              #   graceful surge started now cannot finish before cand's own
                                              #   deadline (deadline − now < t_rot) — a surge would only lose the
                                              #   race, so rotate surge-less. A claim with no deadline never qualifies
-  if not surgeless and not surge_headroom(np, cand):   # cand's reschedulable-Pod request sum (= the placeholder's
-                                             #   requests, §3.3) vs (spec.limits − provisioned): candidate-dependent,
-                                             #   so it runs AFTER selection — and only for a surge (a surge-less
-                                             #   fallback provisions no placeholder to size)
+  if not surgeless and not surge_headroom(np, cand):   # cand's clamped placeholder footprint (the reschedulable-Pod
+                                             #   request sum after the §3.3 allocatable clamp; a refused clamp keeps the
+                                             #   full drain) vs (spec.limits − provisioned): candidate-dependent, so it
+                                             #   runs AFTER selection — and only for a surge (a surge-less fallback
+                                             #   provisions no placeholder to size)
       warn("insufficient limits headroom; cannot surge"); return Requeue(1m)
   annotate(np, active-rotation=cand.name)    # anchor BEFORE any other side effect. Conflict-checked,
                                              #   only-if-absent write (optimistic lock on resourceVersion /

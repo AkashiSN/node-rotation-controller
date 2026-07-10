@@ -20,6 +20,15 @@ const (
 	reasonRotationCompleted  = "RotationCompleted"
 	reasonRotationFailed     = "RotationFailed"
 	reasonSurgeUnschedulable = "SurgeUnschedulable"
+	reasonSurgeClamped       = "SurgeClamped"
+	// reasonSurgeClampBandExceeded warns that the clamp gave up more than the
+	// measured per-AZ band explains — the controller's request accounting has
+	// diverged from the scheduler's. The rotation still proceeds (issue #224).
+	reasonSurgeClampBandExceeded = "SurgeClampBandExceeded"
+	// reasonSurgeClampRefused warns that DaemonSet overhead leaves no room for any
+	// placeholder, so the clamp is refused rather than sized to zero; the rotation
+	// rolls back instead of a silent break-before-make (issue #224).
+	reasonSurgeClampRefused = "SurgeClampRefused"
 
 	actionRotateNode     = "RotateNode"
 	actionProvisionSurge = "ProvisionSurge"

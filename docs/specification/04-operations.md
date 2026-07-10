@@ -48,6 +48,9 @@ them with `kubectl describe` without reading metrics:
 | Rotation completed (§5.2) | NodePool | `RotationCompleted` | the old NodeClaim finalized away out of `draining` (`Normal`) |
 | Rotation attempt failed (§5.2) | NodeClaim | `RotationFailed` | the surge node did not become `Ready` within `readyTimeout`; the attempt is rolled back |
 | Unschedulable surge placeholder (§3.3) | NodeClaim | `SurgeUnschedulable` | the placeholder carries `PodScheduled=False`; the scheduler's reason and message are copied into the Event |
+| Surge placeholder clamped (§3.3) | NodeClaim | `SurgeClamped` | the placeholder was clamped to `NodeClaim.status.allocatable − DaemonSet overhead` so a nearly-full node stays rotatable (`Normal`); the shortfall is bounded by the per-AZ band and absorbed by preemption + Karpenter follow-up |
+| Clamp shortfall exceeds band (§3.3) | NodeClaim | `SurgeClampBandExceeded` | a fired clamp gave up more than the measured per-AZ band explains — request accounting has diverged from the scheduler's (`Warning`); the rotation still proceeds |
+| Surge clamp refused (§3.3) | NodeClaim | `SurgeClampRefused` | DaemonSet overhead exhausts `NodeClaim.status.allocatable`, so no clamp induces a node; the placeholder keeps the full drain, stays unschedulable, and the rotation rolls back (`Warning`) |
 
 Events are **deduplicated by emitting on the transition into the condition**:
 a finding/claim that clears and later returns re-fires. The dedup state is
@@ -73,7 +76,7 @@ best-effort narration of it, not a ledger.
 |------|--------|
 | `rotation candidate selected` | `nodeclaim`, `age`, `deadline`, `eligible`, `surgeless` |
 | `no rotation candidate` | `reason` — the blocking start gate (`outOfWindow`, `frozen`, `cooldownAfterSuccess`, `cooldownAfterFailure`), or `noEligibleClaim` plus the census (`claims`, `notTriggered`, `inBackoff`, `inFlight`, `optedOut`, `deleting`, `notReady`, `terminal`) |
-| `surge placeholder created` | `placeholder`, `requests`, `reschedulablePods`, `daemonSetPods`, `mirrorPods`, `completedPods`, `nodePinnedPods` |
+| `surge placeholder created` | `placeholder`, `requests`, `reschedulablePods`, `daemonSetPods`, `mirrorPods`, `completedPods`, `nodePinnedPods`; when the clamp fires (§3.3) also `clamped`, `unclamped`, `limit`, `shortfall`, and `bandExceeded` if the shortfall exceeds the band; when refused, `clampRefused` names the resource |
 | `surge placeholder is not schedulable` | `placeholder`, `reason`, `detail` — the placeholder's `PodScheduled=False` condition |
 | `surge node ready` | `surgeNode`, `surgeWait` |
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |

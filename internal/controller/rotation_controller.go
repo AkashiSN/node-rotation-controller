@@ -1184,8 +1184,14 @@ func (r *RotationReconciler) headroomFits(ctx context.Context, pool *karpv1.Node
 	return surge.FitsHeadroom(pool, reqs), nil
 }
 
-// candidateRequests sums the reschedulable Pod requests on the candidate node —
-// the placeholder's sizing (spec §3.3). An unscheduled candidate has none.
+// candidateRequests sums the reschedulable Pod requests on the candidate node
+// and applies the same clamp createPlaceholder does, so the surge_headroom gate
+// (spec §5.2 step 3) tests the actual placeholder's footprint against the
+// NodePool budget — the pre-check the spec §4.2 note describes. Testing the
+// un-clamped sum here would reject exactly the nearly-full nodes the clamp exists
+// to keep rotatable under a tight-but-sufficient budget (issue #224). A refused
+// clamp returns the full drain, which is correct: that rotation rolls back
+// regardless of the budget. An unscheduled candidate has none.
 func (r *RotationReconciler) candidateRequests(ctx context.Context, cand *karpv1.NodeClaim) (corev1.ResourceList, error) {
 	if cand.Status.NodeName == "" {
 		return corev1.ResourceList{}, nil
@@ -1194,7 +1200,8 @@ func (r *RotationReconciler) candidateRequests(ctx context.Context, cand *karpv1
 	if err != nil {
 		return nil, err
 	}
-	return surge.ReschedulableRequests(pods, cand.Status.NodeName), nil
+	requests := surge.ReschedulableRequests(pods, cand.Status.NodeName)
+	return surge.Clamp(requests, cand.Status.Allocatable, surge.DaemonSetRequests(pods, cand.Status.NodeName)).Requests, nil
 }
 
 // surgeReady reports whether the placeholder is Running on a Ready host distinct
@@ -1366,11 +1373,22 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 		return err
 	}
 	requests := surge.ReschedulableRequests(pods, cand.Status.NodeName)
+	// Clamp the placeholder to what Karpenter can actually provision for a fresh
+	// node of this instance type — NodeClaim.status.allocatable minus DaemonSet
+	// overhead — so a node the scheduler filled past Karpenter's per-AZ cached
+	// estimate is still rotatable (issue #224). No-op when allocatable is absent.
+	clamp := surge.Clamp(requests, cand.Status.Allocatable, surge.DaemonSetRequests(pods, cand.Status.NodeName))
+	// clamp.Requests is the full drain on both the common path and a refused clamp
+	// (DaemonSet overhead exhausts allocatable, so no clamp value induces a node —
+	// sizing the placeholder to zero would satisfy surge_ready with nothing
+	// reserved, a silent break-before-make; keep it full and unschedulable so the
+	// rotation rolls back). band bounds the shortfall of a clamp that did fire.
+	band := surge.Band(node.Status.Allocatable, cand.Status.Allocatable)
 	ph := surge.BuildPlaceholder(surge.PlaceholderInputs{
 		Candidate:         cand,
 		Node:              node,
 		Pool:              pool,
-		Requests:          requests,
+		Requests:          clamp.Requests,
 		Match:             res.pol.Surge.MatchNodeRequirements,
 		ExcludedHostnames: excluded,
 		PriorityClassName: r.PriorityClassName,
@@ -1392,15 +1410,64 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	// double-count of the DaemonSet Pods unless the controller says what it excluded
 	// (issue #221).
 	c := surge.CensusOnNode(pods, cand.Status.NodeName)
-	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("surge placeholder created",
+	kv := []any{
 		"nodeclaim", cand.Name,
 		"placeholder", ph.Name,
-		"requests", formatRequests(requests),
+		"requests", formatRequests(clamp.Requests),
 		"reschedulablePods", c.Counted,
 		"daemonSetPods", c.DaemonSet,
 		"mirrorPods", c.Mirror,
 		"completedPods", c.Completed,
-		"nodePinnedPods", c.NodePinned)
+		"nodePinnedPods", c.NodePinned,
+	}
+	// Three mutually exclusive surge states, each announced on this one line and,
+	// except the common path, with a matching Event (issue #224):
+	//   - refused: DaemonSet overhead exhausts allocatable; the placeholder keeps
+	//     the full drain, stays unschedulable, and the rotation rolls back.
+	//   - clamped: the placeholder gives up a bounded shortfall; if that shortfall
+	//     exceeds the measured band, the controller's accounting has diverged from
+	//     the scheduler's and it says so — but still proceeds.
+	//   - common: the drain fits; the line is exactly the #221 line, silent.
+	l := log.FromContext(ctx).WithValues("nodepool", pool.Name)
+	switch {
+	case clamp.Refused:
+		kv = append(kv, "clampRefused", clamp.RefusedResource)
+		l.Info("surge placeholder created", kv...)
+		if r.Events != nil {
+			r.Events.Eventf(cand, pool, corev1.EventTypeWarning, reasonSurgeClampRefused, actionProvisionSurge,
+				"DaemonSet overhead leaves no provisionable capacity for %s; the surge placeholder cannot be clamped and the rotation will roll back — opt into surge.forcefulFallback for surge-less rotation",
+				clamp.RefusedResource)
+		}
+	case clamp.Clamped:
+		kv = append(kv,
+			"clamped", true,
+			"unclamped", formatRequests(requests),
+			"limit", formatRequests(clamp.Limit),
+			"shortfall", formatRequests(clamp.Shortfall))
+		over, exceeds := surge.ExceedsBand(clamp.Shortfall, band)
+		if exceeds {
+			kv = append(kv, "bandExceeded", over)
+		}
+		l.Info("surge placeholder created", kv...)
+		if r.Events != nil {
+			// Normal: a within-band clamp is a deliberate, bounded weakening of the
+			// capacity guarantee, not a failure. It replaces the SurgeUnschedulable
+			// Warning that an in-band node would otherwise stall on.
+			r.Events.Eventf(cand, pool, corev1.EventTypeNormal, reasonSurgeClamped, actionProvisionSurge,
+				"surge placeholder clamped to Karpenter's provisionable capacity (limit %s); %s below the full drain, absorbed by placeholder preemption and Karpenter follow-up",
+				formatRequests(clamp.Limit), formatRequests(clamp.Shortfall))
+			if exceeds {
+				// Warning: the shortfall is larger than the per-AZ band explains, so a
+				// modelling assumption (request accounting matching the scheduler's) no
+				// longer holds. The rotation still proceeds; the divergence is surfaced.
+				r.Events.Eventf(cand, pool, corev1.EventTypeWarning, reasonSurgeClampBandExceeded, actionProvisionSurge,
+					"clamp shortfall on %s exceeds the measured per-AZ band (%s); the placeholder reserves less than one drain and the shortfall is no longer bounded by capacity variance",
+					over, formatRequests(band))
+			}
+		}
+	default:
+		l.Info("surge placeholder created", kv...)
+	}
 	return nil
 }
 
