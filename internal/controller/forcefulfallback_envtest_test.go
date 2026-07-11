@@ -26,8 +26,8 @@ import (
 
 // ffExpireAfter is the candidate's Forceful Expiration interval; ffGap positions
 // the injected clock so deadline − now = ffGap. With the fixture's
-// readyTimeout (15m) + drainBound (tGP 30m + buffer), t_rot is ≳45m, so a 20m
-// gap satisfies the surge-less trigger deadline − now < t_rot (spec §3.3).
+// readyTimeout (15m) + drainBound (tGP 30m + buffer 2m = 32m), t_rot is 47m, so a
+// 20m gap satisfies the surge-less trigger deadline − now < t_rot (spec §3.3).
 const (
 	ffExpireAfter = 14 * 24 * time.Hour
 	ffGap         = 20 * time.Minute

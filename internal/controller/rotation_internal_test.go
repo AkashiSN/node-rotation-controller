@@ -383,8 +383,8 @@ func withTemplateE(p *karpv1.NodePool, d time.Duration) *karpv1.NodePool {
 
 // TestNoStartWhenFeasibilityFatal covers issue #27: a NodePool whose schedule
 // derivation is fatal must not start a new rotation, even with an otherwise
-// eligible candidate. Here leadTime = K·P + t_rot = 2·24h + 1h = 49h, so a
-// template E of 40h gives A = 40h − 49h = −9h ≤ 0 (fatal ANonPositive, §3.2).
+// eligible candidate. Here leadTime = K·P + t_rot = 2·24h + 47m = 48h47m, so a
+// template E of 40h gives A = 40h − 48h47m = −8h47m ≤ 0 (fatal ANonPositive, §3.2).
 func TestNoStartWhenFeasibilityFatal(t *testing.T) {
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode)) // eligible
 	pool := withTemplateE(withTGP(testNodePool(nil)), 40*time.Hour)
@@ -404,8 +404,8 @@ func TestNoStartWhenFeasibilityFatal(t *testing.T) {
 }
 
 // TestStartWhenFeasibilityHealthy is the gate's negative control: a feasible
-// template E (14d ⇒ A = 287h > 0) still starts normally, so the fatal gate does
-// not over-block.
+// template E (14d ⇒ A = 287h13m > 0) still starts normally, so the fatal gate
+// does not over-block.
 func TestStartWhenFeasibilityHealthy(t *testing.T) {
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode))
 	pool := withTemplateE(withTGP(testNodePool(nil)), 14*24*time.Hour)
@@ -744,7 +744,7 @@ func TestStuckDrainHoldsGateAndSetsGauge(t *testing.T) {
 	rec := &fakeRecorder{}
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
 		ncAnn(annotations.State, annotations.StateDraining))
-	// Deleting for 2h, well past the 45m bound (tGP 30m + buffer 15m).
+	// Deleting for 2h, well past the 32m bound (tGP 30m + buffer 2m).
 	dt := metav1.NewTime(testNow.Add(-2 * time.Hour))
 	cand.DeletionTimestamp = &dt
 	pool := withExpireAfter(withTGP(testNodePool(map[string]string{
@@ -778,7 +778,7 @@ func TestDrainWithinBoundClearsStuckGauge(t *testing.T) {
 	rec := &fakeRecorder{}
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
 		ncAnn(annotations.State, annotations.StateDraining))
-	dt := metav1.NewTime(testNow.Add(-5 * time.Minute)) // within the 45m bound
+	dt := metav1.NewTime(testNow.Add(-5 * time.Minute)) // within the 32m bound
 	cand.DeletionTimestamp = &dt
 	pool := withExpireAfter(withTGP(testNodePool(map[string]string{
 		annotations.ActiveRotation:      "nc-old",

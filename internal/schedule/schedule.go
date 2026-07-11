@@ -18,10 +18,15 @@ import (
 	"time"
 )
 
-// Buffer is the fixed slack added to both t_rot (beyond readyTimeout + tGP) and
-// t_rot_est (beyond readyTimeout + drainEstimate) (spec §3.2 symbol table). 15m
-// makes the worked example's t_rot land at 1.5h.
-const Buffer = 15 * time.Minute
+// Buffer is the fixed slack in t_rot (beyond readyTimeout + tGP) and t_rot_est
+// (beyond readyTimeout + drainEstimate) covering the controller's OWN detection
+// lag outside those two phase timeouts: each pending→draining→complete
+// transition is observed at most one reconcile cadence (shortRequeue) late, plus
+// the annotation-patch and Delete round-trips (spec §3.2 symbol table). It is
+// NOT operator-configurable — it bounds a cadence the operator has no better
+// knowledge of than the controller does; the controller pins it to
+// 4*shortRequeue via a compile-time assertion in internal/controller (issue #215).
+const Buffer = 2 * time.Minute
 
 // HardCap is the EKS Auto Mode ceiling on a node's true end-of-life: Auto Mode
 // enforces expireAfter + terminationGracePeriod ≤ 21d (§1.1), a limit operators

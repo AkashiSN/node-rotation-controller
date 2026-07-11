@@ -61,23 +61,23 @@ func baseAuto() Inputs {
 func TestDeriveWorkedExample(t *testing.T) {
 	r := Derive(baseAuto())
 
-	if want := 90 * time.Minute; r.TRot != want {
+	if want := 77 * time.Minute; r.TRot != want {
 		t.Errorf("TRot = %v, want %v", r.TRot, want)
 	}
-	if want := 142*time.Hour + 30*time.Minute; r.A != want { // 336h - (192h + 1.5h)
+	if want := 142*time.Hour + 43*time.Minute; r.A != want { // 336h − (192h + 1h17m)
 		t.Errorf("A = %v, want %v", r.A, want)
 	}
 	if r.G != 2 {
 		t.Errorf("G = %d, want 2", r.G)
 	}
-	if want := 40 * time.Minute; r.TRotEst != want { // 15m + drainEstimate 10m + 15m
+	if want := 27 * time.Minute; r.TRotEst != want { // 15m + 10m + 2m
 		t.Errorf("TRotEst = %v, want %v", r.TRotEst, want)
 	}
 	if want := 10 * time.Minute; r.DrainEstimate != want { // min(tGP 1h, default 10m)
 		t.Errorf("DrainEstimate = %v, want %v", r.DrainEstimate, want)
 	}
-	if r.C != 5 { // ceil(4h / 50m) = 5 — the near-edge start counts (§3.1)
-		t.Errorf("C = %d, want 5", r.C)
+	if r.C != 7 { // ceil(4h / 37m) = 7 — the near-edge start counts (§3.1)
+		t.Errorf("C = %d, want 7", r.C)
 	}
 	if len(r.Findings) != 0 {
 		t.Errorf("expected no findings, got %v", codes(r))
@@ -86,7 +86,7 @@ func TestDeriveWorkedExample(t *testing.T) {
 
 func TestDeriveWeeklyOnlyFatal(t *testing.T) {
 	in := baseAuto()
-	in.P = 7 * 24 * time.Hour // 168h → A = 336 - (336 + 1.5) = -1.5h
+	in.P = 7 * 24 * time.Hour // 168h → A = 336 − (336 + 1h17m) = −1h17m
 	r := Derive(in)
 	has(t, r, "ANonPositive", Fatal)
 }
@@ -95,11 +95,11 @@ func TestDeriveWeeklyOnlyFatal(t *testing.T) {
 // race: A == 0 exactly is a Fatal ANonPositive, not a pass. The auto branch's
 // guard is `A <= 0`, so the boundary value must trip it (between the A < 0 case
 // in TestDeriveWeeklyOnlyFatal and the A > 0 healthy worked example). Here E is
-// tuned so A = E − (K·P + t_rot) = 0 exactly: K·P = 2·96h = 192h, t_rot = 90m,
-// so E = 193.5h gives A = 0.
+// tuned so A = E − (K·P + t_rot) = 0 exactly: K·P = 2·96h = 192h, t_rot = 77m,
+// so E = 193h17m gives A = 0.
 func TestDeriveACentralRaceZeroFatal(t *testing.T) {
 	in := baseAuto()
-	in.E = 193*time.Hour + 30*time.Minute // A = 193.5h − (192h + 1.5h) = 0
+	in.E = 193*time.Hour + 17*time.Minute // A = 193h17m − (192h + 1h17m) = 0
 	r := Derive(in)
 	if r.A != 0 {
 		t.Fatalf("A = %v, want exactly 0 (boundary)", r.A)
@@ -121,7 +121,7 @@ func TestDeriveKFloor(t *testing.T) {
 
 func TestDeriveAggressiveWarn(t *testing.T) {
 	in := baseAuto()
-	in.E = 240 * time.Hour // A = 240 - 193.5 = 46.5h, with P=96h → 0 < A < P
+	in.E = 240 * time.Hour // A = 240 − 193h17m = 46h43m, with P=96h → 0 < A < P
 	r := Derive(in)
 	has(t, r, "AVeryAggressive", Warn)
 	absent(t, r, "ANonPositive")
@@ -131,7 +131,7 @@ func TestDeriveAggressiveWarn(t *testing.T) {
 // AVeryAggressive warning (only the auto branch is exercised by
 // TestDeriveAggressiveWarn). An explicit override A with 0 < A < P warns that
 // nodes rotate very young — and must still guarantee >= 1 chance so no fatal
-// fires. Override = 50h with P = 96h ⇒ 0 < A < P; G = floor((334.5−50)/96) = 2.
+// fires. Override = 50h with P = 96h ⇒ 0 < A < P; G = floor((334h43m−50)/96) = 2.
 func TestDeriveOverrideAggressiveWarn(t *testing.T) {
 	in := baseAuto()
 	in.Override = new(50 * time.Hour) // 0 < 50h < P(96h)
@@ -147,7 +147,7 @@ func TestDeriveOverrideAggressiveWarn(t *testing.T) {
 
 func TestDeriveOverrideGBelowOneFatal(t *testing.T) {
 	in := baseAuto()
-	in.Override = new(300 * time.Hour) // G = floor((334.5 - 300)/96) = 0
+	in.Override = new(300 * time.Hour) // G = floor((334h43m - 300)/96) = 0
 	r := Derive(in)
 	has(t, r, "OverrideGBelowOne", Fatal)
 	if r.G != 0 {
@@ -163,7 +163,7 @@ func TestDeriveOverrideGBelowOneFatal(t *testing.T) {
 // must be -1, not 0.
 func TestDeriveOverrideGFloorNegative(t *testing.T) {
 	in := baseAuto()
-	in.Override = new(400 * time.Hour) // E−tRot = 334.5h; (334.5−400)/96 = -0.68 → floor -1
+	in.Override = new(400 * time.Hour) // E−tRot = 334h43m; (334h43m−400)/96 = -0.68 → floor -1
 	r := Derive(in)
 	if r.G != -1 {
 		t.Errorf("G = %d, want -1 (floor of negative numerator)", r.G)
@@ -173,7 +173,7 @@ func TestDeriveOverrideGFloorNegative(t *testing.T) {
 
 func TestDeriveOverrideGBelowKWarn(t *testing.T) {
 	in := baseAuto()
-	in.Override = new(200 * time.Hour) // G = floor((334.5 - 200)/96) = 1, K=2
+	in.Override = new(200 * time.Hour) // G = floor((334h43m - 200)/96) = 1, K=2
 	r := Derive(in)
 	has(t, r, "OverrideGBelowK", Warn)
 	absent(t, r, "OverrideGBelowOne")
@@ -188,7 +188,7 @@ func TestDeriveTGPUnsetWarn(t *testing.T) {
 	in.TGPWasUnset = true  // …and flags it
 	r := Derive(in)
 	has(t, r, "TGPUnset", Warn)
-	if want := 90 * time.Minute; r.TRot != want { // 15m + 1h + 15m
+	if want := 77 * time.Minute; r.TRot != want { // 15m + 1h + 2m
 		t.Errorf("TRot = %v, want %v", r.TRot, want)
 	}
 }
@@ -200,8 +200,8 @@ func TestDeriveHardCapExceededWarn(t *testing.T) {
 	r := Derive(in)
 	has(t, r, "HardCapExceeded", Warn)
 	// Non-fatal: the cap warning must not change the derived A. tRot = 15m + 48h +
-	// 15m = 48.5h; A = 480h − (2·96h + 48.5h) = 239.5h.
-	if want := 239*time.Hour + 30*time.Minute; r.A != want {
+	// 2m = 48h17m; A = 480h − (2·96h + 48h17m) = 239h43m.
+	if want := 239*time.Hour + 43*time.Minute; r.A != want {
 		t.Errorf("A = %v, want %v (cap warning must not change A)", r.A, want)
 	}
 }
@@ -244,18 +244,18 @@ func TestDeriveCeilCountsTheNearEdgeStart(t *testing.T) {
 }
 
 // TestDeriveAutoModeDefaultHasNoThroughputZero pins D1+D2 (issue #211) and the
-// #212 split: on the stock Auto Mode tGP = 24h the DEADLINE bound t_rot ≈ 24.5h
-// dwarfs any realistic window, but layer 2 forecasts with t_rot_est = 40m (the
-// default drainEstimate), so C = 5. The old ThroughputZero finding asserted a
+// #212 split: on the stock Auto Mode tGP = 24h the DEADLINE bound t_rot ≈ 24h17m
+// dwarfs any realistic window, but layer 2 forecasts with t_rot_est = 27m (the
+// default drainEstimate), so C = 7. The old ThroughputZero finding asserted a
 // positive-length window rotates nothing and is gone.
 func TestDeriveAutoModeDefaultHasNoThroughputZero(t *testing.T) {
 	in := baseAuto()
-	in.TGP = 24 * time.Hour // Auto Mode stock default → tRot ≈ 24.5h, tRotEst = 40m
+	in.TGP = 24 * time.Hour // Auto Mode stock default → tRot ≈ 24h17m, tRotEst = 27m
 	r := Derive(in)
 	absent(t, r, "ThroughputZero")
-	absent(t, r, "ANonPositive") // A = 336 - (192 + 24.5) = 119.5h > 0
-	if r.C != 5 {
-		t.Errorf("C = %d, want 5 (ceil(4h / 50m))", r.C)
+	absent(t, r, "ANonPositive") // A = 336 - (192 + 24h17m) = 119h43m > 0
+	if r.C != 7 {
+		t.Errorf("C = %d, want 7 (ceil(4h / 37m))", r.C)
 	}
 }
 
@@ -308,31 +308,31 @@ func TestDeriveThroughputBurstShortfall(t *testing.T) {
 func TestDeriveShortWindowStillEvaluatesThroughput(t *testing.T) {
 	in := baseAuto()
 	in.E = 20 * 24 * time.Hour      // 480h
-	in.TGP = 24 * time.Hour         // tRot = 24h30m, tRotEst = 40m
+	in.TGP = 24 * time.Hour         // tRot = 24h17m, tRotEst = 27m
 	in.P = 6 * 24 * time.Hour       // 144h (Sun → next Sat)
 	in.WindowLen = 90 * time.Minute // D
 	in.IdleGap = new(22*time.Hour + 30*time.Minute)
-	in.NodeCount = 3
+	in.NodeCount = 4
 
 	r := Derive(in)
-	if want := 24*time.Hour + 30*time.Minute; r.TRot != want {
+	if want := 24*time.Hour + 17*time.Minute; r.TRot != want {
 		t.Fatalf("TRot = %v, want %v", r.TRot, want)
 	}
-	if want := 167*time.Hour + 30*time.Minute; r.A != want { // 480h − (288h + 24.5h)
+	if want := 167*time.Hour + 43*time.Minute; r.A != want { // 480h − (288h + 24h17m)
 		t.Fatalf("A = %v, want %v", r.A, want)
 	}
-	if r.C != 2 { // ceil(90m / 50m); the deadline bound would say 1
-		t.Fatalf("C = %d, want 2", r.C)
+	if r.C != 3 { // ceil(90m / 37m) = 3; the deadline bound would say 1
+		t.Fatalf("C = %d, want 3", r.C)
 	}
 	// Layer 1 stays clean — the findings below are layer 2's alone.
 	absent(t, r, "ANonPositive")
-	absent(t, r, "AVeryAggressive") // A 167.5h > P 144h
+	absent(t, r, "AVeryAggressive") // A 167h43m > P 144h
 	absent(t, r, "HardCapExceeded") // E + tGP = 21d exactly, cap is a strict >
 
 	absent(t, r, "ThroughputZero")
-	has(t, r, "ThroughputBelowArrival", Warn) // C·A = 335h < N·P = 432h
-	absent(t, r, "ThroughputBurstShortfall")  // N=3 <= K·C = 4
-	absent(t, r, "RotationSpansNextWindow")   // 50m < idle gap 22h30m
+	has(t, r, "ThroughputBelowArrival", Warn) // C·A = 503h < N·P = 576h
+	absent(t, r, "ThroughputBurstShortfall")  // N=4 <= K·C = 6
+	absent(t, r, "RotationSpansNextWindow")   // 37m < idle gap 22h30m
 }
 
 // TestDeriveShortWindowDeadlineBoundView pins what the pre-#212 model reported for
@@ -359,7 +359,7 @@ func TestDeriveShortWindowDeadlineBoundView(t *testing.T) {
 	}
 	has(t, r, "ThroughputBelowArrival", Warn)
 	has(t, r, "ThroughputBurstShortfall", Warn) // N=3 > K·C = 2
-	has(t, r, "RotationSpansNextWindow", Warn)  // 24h40m > idle gap 22h30m
+	has(t, r, "RotationSpansNextWindow", Warn)  // 24h27m > idle gap 22h30m
 }
 
 // TestDeriveRotationSpansNextWindow pins D3 (issue #211). The gate a rotation
@@ -452,13 +452,15 @@ func TestDeriveNoWindowsFatal(t *testing.T) {
 	has(t, Derive(in), "NoWindows", Fatal)
 }
 
-// pinnedEstimate is baseAuto with drainEstimate set explicitly equal to tGP, so
-// t_rot_est == t_rot and denom stays 100m. Tests about the layer-2 *checks*
-// rather than about the estimate itself use it, so a future change to
-// DrainEstimateDefault cannot silently move their thresholds.
+// pinnedEstimate is baseAuto with tGP and drainEstimate pinned together so
+// t_rot == t_rot_est and denom stays 100m regardless of DrainEstimateDefault
+// *or* Buffer. Tests about the layer-2 *checks* rather than about the estimate
+// itself use it, so a future change to either constant cannot silently move
+// their thresholds.
 func pinnedEstimate() Inputs {
 	in := baseAuto()
-	in.DrainEstimate = new(time.Hour) // == in.TGP
+	in.TGP = 73 * time.Minute                // t_rot = readyTimeout 15m + 73m + Buffer 2m = 90m
+	in.DrainEstimate = new(73 * time.Minute) // == tGP, so t_rot_est == t_rot; denom = 90m + cooldown 10m = 100m
 	return in
 }
 
@@ -605,7 +607,7 @@ func TestDeriveDrainEstimateContainment(t *testing.T) {
 		t.Fatal("precondition: the layer-1 reference set must be non-empty, else invariance is vacuous")
 	}
 
-	// C = ceil(WindowLen 240m / (readyTimeout 15m + est + buffer 15m + cooldown 10m))
+	// C = ceil(WindowLen 240m / (readyTimeout 15m + est + buffer 2m + cooldown 10m))
 	cases := []struct {
 		name    string
 		cfg     *time.Duration
@@ -613,11 +615,11 @@ func TestDeriveDrainEstimateContainment(t *testing.T) {
 		wantC   int
 		wantAbv bool // DrainEstimateAboveTGP expected
 	}{
-		{"unset", nil, 10 * time.Minute, 5, false},                          // denom 50m
-		{"1m", new(time.Minute), time.Minute, 6, false},                     // denom 41m
-		{"10m", new(10 * time.Minute), 10 * time.Minute, 5, false},          // denom 50m
-		{"1h", new(time.Hour), time.Hour, 3, false},                         // denom 100m
-		{"25h clamps to tGP", new(25 * time.Hour), 24 * time.Hour, 1, true}, // denom 24h40m
+		{"unset", nil, 10 * time.Minute, 7, false},                          // denom 37m
+		{"1m", new(time.Minute), time.Minute, 9, false},                     // denom 28m
+		{"10m", new(10 * time.Minute), 10 * time.Minute, 7, false},          // denom 37m
+		{"1h", new(time.Hour), time.Hour, 3, false},                         // denom 87m
+		{"25h clamps to tGP", new(25 * time.Hour), 24 * time.Hour, 1, true}, // denom 24h27m
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -695,11 +697,11 @@ func TestDeriveDrainEstimateContainmentTGPUnset(t *testing.T) {
 // between the two must stay silent.
 func TestDeriveCarryOverUsesEstimate(t *testing.T) {
 	in := baseAuto()
-	in.TGP = 24 * time.Hour // t_rot = 24h30m; t_rot_est = 40m (default estimate)
+	in.TGP = 24 * time.Hour // t_rot = 24h17m; t_rot_est = 27m (default estimate)
 	in.IdleGap = new(12 * time.Hour)
 
 	r := Derive(in)
-	if want := 40 * time.Minute; r.TRotEst != want {
+	if want := 27 * time.Minute; r.TRotEst != want {
 		t.Fatalf("TRotEst = %v, want %v", r.TRotEst, want)
 	}
 	if r.TRot+in.Cooldown <= *in.IdleGap {
@@ -715,14 +717,14 @@ func TestDeriveCarryOverUsesEstimate(t *testing.T) {
 // TestDeriveCeilBoundaryOnEstimate re-pins the #211 ceil boundary on the NEW
 // denominator: D == denom admits exactly one start, D == denom + ε admits two.
 func TestDeriveCeilBoundaryOnEstimate(t *testing.T) {
-	in := baseAuto() // default estimate 10m → t_rot_est 40m, denom = 50m
+	in := baseAuto() // default estimate 10m → t_rot_est 27m, denom = 37m
 	in.IdleGap = nil // keep the carry-over check out of the picture
 
-	in.WindowLen = 50 * time.Minute
+	in.WindowLen = 37 * time.Minute
 	if r := Derive(in); r.C != 1 {
 		t.Errorf("C = %d, want 1 (D == denom exactly)", r.C)
 	}
-	in.WindowLen = 51 * time.Minute
+	in.WindowLen = 38 * time.Minute
 	if r := Derive(in); r.C != 2 {
 		t.Errorf("C = %d, want 2 (ceil must count the near-edge start)", r.C)
 	}

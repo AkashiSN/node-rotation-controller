@@ -42,6 +42,16 @@ const (
 	shortRequeue = 30 * time.Second
 )
 
+// schedule.Buffer bounds this controller's own detection lag: each
+// pending→draining→complete transition is observed at most one shortRequeue
+// late, plus patch/delete round-trips. It lives in internal/schedule, which
+// must not import this package (cycle), so pin the two together here — the side
+// that already depends on schedule. A negative time.Duration constant is not
+// convertible to uint, so these fail to COMPILE if Buffer ever stops tracking
+// 4*shortRequeue in either direction.
+const _ = uint(schedule.Buffer - 4*shortRequeue)
+const _ = uint(4*shortRequeue - schedule.Buffer)
+
 // RotationReconciler drives the make-before-break rotation state machine
 // (spec §5.2/§5.3). It is keyed on the NodePool: each Reconcile performs exactly
 // one non-blocking step, reading all rotation state back from annotations, so a
