@@ -389,6 +389,12 @@ spec:
                                   #   導出時に min(tGP, 10m) に解決される（代替値は NodePool テンプレ
                                   #   に依存）。0 超でなければならない; tGP を超える明示値は到達不能
                                   #   なため警告（DrainEstimateAboveTGP）してクランプする。
+    # provisioningEstimate: 5m    # 任意; 健全な surge プロビジョニング（候補 → Ready）の期待所要
+                                  #   時間。レイヤ 2 のスループット予測（t_rot_est、§3.2、ADR-0003）
+                                  #   のみに効き、上界ではなくローテーションのタイミングは変えない。
+                                  #   既定なし: 未設定時は導出時に min(readyTimeout, 5m) に解決される。
+                                  #   0 超でなければならない; readyTimeout を超える明示値は到達不能な
+                                  #   ため警告（ProvisioningEstimateAboveReadyTimeout）してクランプする。
     retryBackoff: 30m             # 0 超でなければならない
     matchNodeRequirements:        # placeholder が複製する候補ノードの requirement（§3.3）
       required:                   # 空のとき以下の集合にデフォルト（実行時に適用）

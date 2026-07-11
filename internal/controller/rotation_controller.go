@@ -331,15 +331,16 @@ func nodeReadyObj(obj client.Object) bool {
 // them. pol and sched are carried so the methods threaded with a resolved no
 // longer read a single cluster-wide Policy/Schedule off the reconciler.
 type resolved struct {
-	pol           *policy.Policy
-	sched         *window.Schedule
-	leadTime      selection.LeadTime // K·P + t_rot, resolved per claim (§3.2)
-	override      *time.Duration     // explicit ageThreshold, nil in auto mode
-	retryBackoff  time.Duration
-	readyTimeout  time.Duration
-	cooldown      time.Duration
-	drainBound    time.Duration  // tGP + buffer; DrainFallback when tGP unset (§5.2)
-	drainEstimate *time.Duration // surge.drainEstimate; nil => schedule resolves min(tGP, default). Layer-2 forecast only (§3.2)
+	pol                  *policy.Policy
+	sched                *window.Schedule
+	leadTime             selection.LeadTime // K·P + t_rot, resolved per claim (§3.2)
+	override             *time.Duration     // explicit ageThreshold, nil in auto mode
+	retryBackoff         time.Duration
+	readyTimeout         time.Duration
+	cooldown             time.Duration
+	drainBound           time.Duration  // tGP + buffer; DrainFallback when tGP unset (§5.2)
+	drainEstimate        *time.Duration // surge.drainEstimate; nil => schedule resolves min(tGP, default). Layer-2 forecast only (§3.2)
+	provisioningEstimate *time.Duration // surge.provisioningEstimate; nil => schedule resolves min(readyTimeout, default). Layer-2 forecast only (§3.2)
 }
 
 func (r *RotationReconciler) resolve(pool *karpv1.NodePool, pol *policy.Policy, sched *window.Schedule) resolved {
@@ -366,6 +367,13 @@ func (r *RotationReconciler) resolve(pool *karpv1.NodePool, pol *policy.Policy, 
 		drainEst = new(s.DrainEstimate.Duration)
 	}
 
+	// nil is meaningful the same way: schedule.Derive resolves an unset estimate to
+	// min(readyTimeout, ProvisioningEstimateDefault). Forecast-side only (§3.2).
+	var provEst *time.Duration
+	if s.ProvisioningEstimate != nil {
+		provEst = new(s.ProvisioningEstimate.Duration)
+	}
+
 	return resolved{
 		pol:   pol,
 		sched: sched,
@@ -377,12 +385,13 @@ func (r *RotationReconciler) resolve(pool *karpv1.NodePool, pol *policy.Policy, 
 			Base:          time.Duration(pol.K())*p + s.ReadyTimeout.Duration + schedule.Buffer,
 			DrainFallback: schedule.DrainFallback,
 		},
-		override:      ov,
-		retryBackoff:  s.RetryBackoff.Duration,
-		readyTimeout:  s.ReadyTimeout.Duration,
-		cooldown:      s.CooldownAfter.Duration,
-		drainBound:    drainBound,
-		drainEstimate: drainEst,
+		override:             ov,
+		retryBackoff:         s.RetryBackoff.Duration,
+		readyTimeout:         s.ReadyTimeout.Duration,
+		cooldown:             s.CooldownAfter.Duration,
+		drainBound:           drainBound,
+		drainEstimate:        drainEst,
+		provisioningEstimate: provEst,
 	}
 }
 
@@ -658,20 +667,21 @@ func (r *RotationReconciler) derivedThresholds(pool *karpv1.NodePool, res resolv
 	}
 	tgp, unset := poolTGP(pool)
 	return schedule.Derive(schedule.Inputs{
-		E:              *eptr,
-		TGP:            tgp,
-		TGPWasUnset:    unset,
-		P:              p,
-		WindowLen:      windowLen,
-		IdleGap:        idleGap,
-		ReadyTimeout:   res.readyTimeout,
-		Cooldown:       res.cooldown,
-		DrainEstimate:  res.drainEstimate,
-		RetryBackoff:   res.retryBackoff,
-		K:              res.pol.K(),
-		MaxUnavailable: res.pol.SurgeMaxUnavailable(),
-		NodeCount:      nodeCount,
-		Override:       res.override,
+		E:                    *eptr,
+		TGP:                  tgp,
+		TGPWasUnset:          unset,
+		P:                    p,
+		WindowLen:            windowLen,
+		IdleGap:              idleGap,
+		ReadyTimeout:         res.readyTimeout,
+		Cooldown:             res.cooldown,
+		DrainEstimate:        res.drainEstimate,
+		ProvisioningEstimate: res.provisioningEstimate,
+		RetryBackoff:         res.retryBackoff,
+		K:                    res.pol.K(),
+		MaxUnavailable:       res.pol.SurgeMaxUnavailable(),
+		NodeCount:            nodeCount,
+		Override:             res.override,
 	})
 }
 

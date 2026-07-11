@@ -261,8 +261,9 @@ func TestToSurgeCopiesEveryField(t *testing.T) {
 			Required:  []string{"topology.kubernetes.io/zone"},
 			Preferred: []string{"kubernetes.io/arch"},
 		},
-		ForcefulFallback: nrv1.FeatureToggle{Enabled: true},
-		DrainEstimate:    &metav1.Duration{Duration: 20 * time.Minute},
+		ForcefulFallback:     nrv1.FeatureToggle{Enabled: true},
+		DrainEstimate:        &metav1.Duration{Duration: 20 * time.Minute},
+		ProvisioningEstimate: &metav1.Duration{Duration: 3 * time.Minute},
 	}
 
 	got := reflect.ValueOf(toSurge(in))

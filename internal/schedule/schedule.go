@@ -18,13 +18,14 @@ import (
 	"time"
 )
 
-// Buffer is the fixed slack in t_rot (beyond readyTimeout + tGP) and t_rot_est
-// (beyond readyTimeout + drainEstimate) covering the controller's OWN detection
-// lag outside those two phase timeouts: each pending→draining→complete
-// transition is observed at most one reconcile cadence (shortRequeue) late, plus
-// the annotation-patch and Delete round-trips (spec §3.2 symbol table). It is
-// NOT operator-configurable — it bounds a cadence the operator has no better
-// knowledge of than the controller does; the controller pins it to
+// Buffer is the fixed slack in t_rot (beyond readyTimeout + tGP) covering the
+// controller's OWN detection lag outside those two phase timeouts: each
+// pending→draining→complete transition is observed at most one reconcile cadence
+// (shortRequeue) late, plus the annotation-patch and Delete round-trips (spec §3.2
+// symbol table). It is deadline-side only; the layer-2 throughput forecast t_rot_est
+// no longer carries it (ADR-0003, issue #220) — slack has no place in an expected
+// service time. It is NOT operator-configurable — it bounds a cadence the operator
+// has no better knowledge of than the controller does; the controller pins it to
 // 4*shortRequeue via a compile-time assertion in internal/controller (issue #215).
 const Buffer = 2 * time.Minute
 
@@ -50,6 +51,16 @@ const DrainFallback = time.Hour
 // NodePool that has already tuned tGP below this keeps its own, tighter number
 // (issue #212, ADR-0002).
 const DrainEstimateDefault = 10 * time.Minute
+
+// ProvisioningEstimateDefault is the expected surge-provisioning duration
+// (candidate created → new node Ready) substituted for an unset
+// surge.provisioningEstimate. Like DrainEstimateDefault it is a forecast prior, not
+// a claim about any particular cluster: the layer-2 throughput model needs an
+// expected time-to-Ready, and readyTimeout — the deadline the surge attempt is
+// abandoned at — over-states it (real EKS Auto Mode reaches Ready in 1–3m, issue
+// #220). Resolution clamps it to readyTimeout, so a NodePool whose readyTimeout is
+// already below this keeps its own, tighter number (issue #220, ADR-0003).
+const ProvisioningEstimateDefault = 5 * time.Minute
 
 // Severity classifies a Finding.
 type Severity int
@@ -80,20 +91,21 @@ type Finding struct {
 // resolved (the caller substitutes DrainFallback for an unset tGP and sets
 // TGPWasUnset).
 type Inputs struct {
-	E              time.Duration  // expireAfter (representative template value)
-	TGP            time.Duration  // terminationGracePeriod, fallback already applied
-	TGPWasUnset    bool           // true when DrainFallback was substituted for tGP
-	P              time.Duration  // worst-case window period (window.WorstCasePeriod)
-	WindowLen      time.Duration  // D: window occurrence duration, for layer-2 throughput
-	IdleGap        *time.Duration // shortest interval the window stays closed between occurrences (window.ShortestIdleGap); nil skips the layer-2 carry-over check
-	ReadyTimeout   time.Duration  // surge.readyTimeout
-	Cooldown       time.Duration  // surge.cooldownAfter
-	DrainEstimate  *time.Duration // surge.drainEstimate; nil => min(TGP, DrainEstimateDefault). Layer-2 forecast ONLY — never the deadline side (§3.2)
-	RetryBackoff   time.Duration  // surge.retryBackoff
-	K              int            // minRotationChances
-	MaxUnavailable int            // m; surge parallelism, fixed at 1 in v1 (spec §3.3). 0 is treated as 1.
-	NodeCount      int            // N; 0 skips the arrival-rate sub-check
-	Override       *time.Duration // explicit ageThreshold override; nil => auto
+	E                    time.Duration  // expireAfter (representative template value)
+	TGP                  time.Duration  // terminationGracePeriod, fallback already applied
+	TGPWasUnset          bool           // true when DrainFallback was substituted for tGP
+	P                    time.Duration  // worst-case window period (window.WorstCasePeriod)
+	WindowLen            time.Duration  // D: window occurrence duration, for layer-2 throughput
+	IdleGap              *time.Duration // shortest interval the window stays closed between occurrences (window.ShortestIdleGap); nil skips the layer-2 carry-over check
+	ReadyTimeout         time.Duration  // surge.readyTimeout
+	Cooldown             time.Duration  // surge.cooldownAfter
+	DrainEstimate        *time.Duration // surge.drainEstimate; nil => min(TGP, DrainEstimateDefault). Layer-2 forecast ONLY — never the deadline side (§3.2)
+	ProvisioningEstimate *time.Duration // surge.provisioningEstimate; nil => min(ReadyTimeout, ProvisioningEstimateDefault). Layer-2 forecast ONLY — never the deadline side (§3.2)
+	RetryBackoff         time.Duration  // surge.retryBackoff
+	K                    int            // minRotationChances
+	MaxUnavailable       int            // m; surge parallelism, fixed at 1 in v1 (spec §3.3). 0 is treated as 1.
+	NodeCount            int            // N; 0 skips the arrival-rate sub-check
+	Override             *time.Duration // explicit ageThreshold override; nil => auto
 }
 
 // Result carries the derived values plus all findings.
@@ -102,17 +114,22 @@ type Result struct {
 	// Karpenter force-kills the drain. It feeds leadTime, A, G, the forceful-fallback
 	// deadline race and the drain bound. Never substitute TRotEst for it.
 	TRot time.Duration
-	// TRotEst is t_rot_est, the THROUGHPUT FORECAST: readyTimeout + drainEstimate +
-	// buffer, the expected service time of one rotation. Layer 2 alone reads it. It is
-	// a forecast denominator, NOT a runtime gate — what blocks the next start at
-	// runtime is cooldownAfter, the freeze marker and the active-rotation anchor.
+	// TRotEst is t_rot_est, the THROUGHPUT FORECAST: provisioningEstimate +
+	// drainEstimate, the expected service time of one rotation. Layer 2 alone reads
+	// it. It is a forecast denominator, NOT a runtime gate — what blocks the next
+	// start at runtime is cooldownAfter, the freeze marker and the active-rotation
+	// anchor. The readyTimeout/tGP deadline bound and buffer belong to TRot, not here
+	// (ADR-0003, issue #220): t_rot_est estimates how long a healthy rotation takes,
+	// not the instants Karpenter force-kills or the surge attempt is abandoned.
 	TRotEst time.Duration
 	// DrainEstimate is the resolved surge.drainEstimate that produced TRotEst.
 	DrainEstimate time.Duration
-	A             time.Duration // ageThreshold (derived, or the override echoed back)
-	G             int           // guaranteed chances (== K in auto mode; recomputed for an override)
-	C             int           // throughput per window occurrence (layer 2); >= 1 whenever WindowLen > 0
-	Findings      []Finding
+	// ProvisioningEstimate is the resolved surge.provisioningEstimate that produced TRotEst.
+	ProvisioningEstimate time.Duration
+	A                    time.Duration // ageThreshold (derived, or the override echoed back)
+	G                    int           // guaranteed chances (== K in auto mode; recomputed for an override)
+	C                    int           // throughput per window occurrence (layer 2); >= 1 whenever WindowLen > 0
+	Findings             []Finding
 }
 
 // resolveDrainEstimate picks the expected drain duration the layer-2 throughput
@@ -141,6 +158,30 @@ func resolveDrainEstimate(tgp time.Duration, tgpWasUnset bool, cfg *time.Duratio
 	return *cfg, nil
 }
 
+// resolveProvisioningEstimate picks the expected surge-provisioning duration
+// (candidate created → new node Ready) the layer-2 throughput forecast uses for
+// t_rot_est. Like resolveDrainEstimate it never influences t_rot, A, G, leadTime,
+// the forceful-fallback deadline race or the drain bound — those are deadline-side
+// and keep using readyTimeout + tGP (spec §3.2, ADR-0003). A wrong estimate can
+// therefore only make a layer-2 Warn too loud or too quiet.
+//
+// Unset falls back to min(readyTimeout, ProvisioningEstimateDefault), silently:
+// warning about a clamp the operator never wrote is noise. An explicit estimate
+// above readyTimeout is unreachable — the surge attempt is abandoned at readyTimeout,
+// so a provision that ever reaches Ready did so within it — and is warned about and
+// clamped. readyTimeout is always resolved to a positive value upstream (policy
+// defaults it to 15m), so there is no unset-deadline fork here as there is for tGP.
+func resolveProvisioningEstimate(readyTimeout time.Duration, cfg *time.Duration) (time.Duration, []Finding) {
+	if cfg == nil {
+		return min(readyTimeout, ProvisioningEstimateDefault), nil
+	}
+	if *cfg > readyTimeout {
+		return readyTimeout, []Finding{{Severity: Warn, Code: "ProvisioningEstimateAboveReadyTimeout",
+			Message: fmt.Sprintf("surge.provisioningEstimate %v exceeds readyTimeout %v, the deadline the surge attempt is abandoned at; a provision that reaches Ready can never take longer, so the throughput forecast uses %v", *cfg, readyTimeout, readyTimeout)}}
+	}
+	return *cfg, nil
+}
+
 // Derive computes t_rot, A, G, C and returns all layer-1/2 findings. It never
 // errors: feasibility problems are Findings (Fatal/Warn). The caller decides
 // what a Fatal means for a given NodePool.
@@ -148,12 +189,19 @@ func Derive(in Inputs) Result {
 	r := Result{}
 	r.TRot = in.ReadyTimeout + in.TGP + Buffer
 
-	// The forecast side, resolved before the P guard so TRotEst/DrainEstimate are
-	// always populated for logs and messages. Its only finding is a Warn.
+	// The forecast side, resolved before the P guard so TRotEst/DrainEstimate/
+	// ProvisioningEstimate are always populated for logs and messages. Their only
+	// findings are Warns. t_rot_est is the SUM of the two expected phase durations —
+	// provisioning (candidate → Ready) and drain — with no deadline term and no
+	// buffer: it models how long a healthy rotation takes, not when Karpenter or the
+	// surge timeout intervene (ADR-0003, issue #220).
 	est, estFindings := resolveDrainEstimate(in.TGP, in.TGPWasUnset, in.DrainEstimate)
 	r.DrainEstimate = est
-	r.TRotEst = in.ReadyTimeout + est + Buffer
+	prov, provFindings := resolveProvisioningEstimate(in.ReadyTimeout, in.ProvisioningEstimate)
+	r.ProvisioningEstimate = prov
+	r.TRotEst = prov + est
 	r.Findings = append(r.Findings, estFindings...)
+	r.Findings = append(r.Findings, provFindings...)
 
 	if in.P <= 0 {
 		// Without a window period the derivation is undefined; everything below
@@ -180,8 +228,9 @@ func Derive(in Inputs) Result {
 		// are k·denom < D for k = 0, 1, …, and their count is ceil, not floor — the
 		// final near-edge start completes past the window's close (issue #211). The
 		// denominator is the FORECAST t_rot_est, not the deadline bound t_rot: tGP is
-		// when Karpenter force-kills a drain, not how long a healthy one takes, and
-		// budgeting it collapses C on stock Auto Mode (issue #212). m is fixed at 1 in
+		// when Karpenter force-kills a drain and readyTimeout is when the surge attempt
+		// is abandoned — neither is how long a healthy rotation takes, and budgeting
+		// either collapses C on stock Auto Mode (issues #212, #220). m is fixed at 1 in
 		// v1 (policy validates surge.maxUnavailable == 1); kept explicit so v2 surge
 		// parallelism needs no formula change.
 		m := max(in.MaxUnavailable, 1)
@@ -304,7 +353,7 @@ func layer2(in Inputs, r Result) []Finding {
 	// occurrence to carry into).
 	if denom := r.TRotEst + in.Cooldown; in.IdleGap != nil && denom > *in.IdleGap {
 		fs = append(fs, Finding{Severity: Warn, Code: "RotationSpansNextWindow",
-			Message: fmt.Sprintf("the throughput model spaces starts by t_rot_est %v + cooldown %v = %v, longer than the %v the maintenance window stays closed between occurrences: a rotation started near a window's close is forecast to run into the next occurrence, so adjacent occurrences do not each deliver a full C=%d — read K·C as an upper bound; space the occurrences further apart, or lower surge.drainEstimate or cooldownAfter", r.TRotEst, in.Cooldown, denom, *in.IdleGap, r.C)})
+			Message: fmt.Sprintf("the throughput model spaces starts by t_rot_est %v + cooldown %v = %v, longer than the %v the maintenance window stays closed between occurrences: a rotation started near a window's close is forecast to run into the next occurrence, so adjacent occurrences do not each deliver a full C=%d — read K·C as an upper bound; space the occurrences further apart, or lower surge.provisioningEstimate, surge.drainEstimate or cooldownAfter", r.TRotEst, in.Cooldown, denom, *in.IdleGap, r.C)})
 	}
 
 	return fs

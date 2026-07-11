@@ -58,6 +58,12 @@ type Surge struct {
 	// nil means unset and is NOT defaulted here — the default is min(tGP, 10m) and tGP
 	// lives on the NodePool template, so resolution happens in internal/schedule.
 	DrainEstimate *metav1.Duration `json:"drainEstimate"`
+	// ProvisioningEstimate is the EXPECTED surge-provisioning duration (candidate →
+	// Ready) used by the layer-2 throughput forecast (spec §3.2, ADR-0003). It is not a
+	// bound: the deadline stays readyTimeout. nil means unset and is NOT defaulted here
+	// — the default is min(readyTimeout, 5m), resolved in internal/schedule alongside
+	// drainEstimate so both forecast terms share one resolution path.
+	ProvisioningEstimate *metav1.Duration `json:"provisioningEstimate"`
 }
 
 // MatchNodeRequirements selects which candidate-node requirements the
@@ -133,10 +139,11 @@ func (p *Policy) ApplyDefaults() {
 	if len(p.Surge.MatchNodeRequirements.Required) == 0 {
 		p.Surge.MatchNodeRequirements.Required = append([]string(nil), defaultRequiredRequirements...)
 	}
-	// surge.drainEstimate is deliberately NOT defaulted: its default is
-	// min(tGP, DrainEstimateDefault) and tGP is a NodePool-template value this
-	// package cannot see. nil is carried into schedule.Derive, which resolves it
-	// (issue #212).
+	// surge.drainEstimate and surge.provisioningEstimate are deliberately NOT
+	// defaulted: their defaults are min(tGP, DrainEstimateDefault) and
+	// min(readyTimeout, ProvisioningEstimateDefault), which depend on values resolved
+	// elsewhere (tGP on the NodePool template; readyTimeout may be operator-overridden).
+	// nil is carried into schedule.Derive, which resolves both (issues #212, #220).
 }
 
 // Validate runs structural checks only (shape, enums, formats, the v1 surge
@@ -171,12 +178,13 @@ func (p *Policy) Validate() error {
 	// unsafe mode — a non-positive readyTimeout fails attempts instantly, a
 	// non-positive cooldownAfter bypasses the start gates, a non-positive
 	// retryBackoff makes failed-claim retry timing nonsensical, and a non-positive
-	// drainEstimate would make the layer-2 throughput forecast meaningless (and
-	// t_rot_est shorter than readyTimeout + buffer). The nil guard only matters
-	// when Validate runs without ApplyDefaults; Load always defaults first.
-	// drainEstimate is exempt from that defaulting (its fallback needs the
-	// NodePool's tGP, invisible here), so nil reaches this loop as the normal,
-	// valid "unset" case and is skipped just like the others.
+	// drainEstimate or provisioningEstimate would make the layer-2 throughput forecast
+	// meaningless (t_rot_est is their sum). The nil guard only matters when Validate
+	// runs without ApplyDefaults; Load always defaults first. drainEstimate and
+	// provisioningEstimate are exempt from that defaulting (their fallbacks need the
+	// NodePool's tGP and the resolved readyTimeout, resolved in internal/schedule), so
+	// nil reaches this loop as the normal, valid "unset" case and is skipped just like
+	// the others.
 	for _, d := range []struct {
 		name string
 		val  *metav1.Duration
@@ -185,6 +193,7 @@ func (p *Policy) Validate() error {
 		{"surge.cooldownAfter", p.Surge.CooldownAfter},
 		{"surge.retryBackoff", p.Surge.RetryBackoff},
 		{"surge.drainEstimate", p.Surge.DrainEstimate},
+		{"surge.provisioningEstimate", p.Surge.ProvisioningEstimate},
 	} {
 		if d.val != nil && d.val.Duration <= 0 {
 			errs = append(errs, fmt.Errorf("%s must be positive, got %v", d.name, d.val.Duration))
