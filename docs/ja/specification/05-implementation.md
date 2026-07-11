@@ -46,7 +46,7 @@ flowchart TD
     q2 -->|yes| pick["deadline 最早の適格候補を選定<br/>（state 空、または backoff 経過の failed）"]
     pick --> q3{"候補あり?"}
     q3 -->|no| rq
-    q3 -->|yes| q4{"surge_headroom?<br/>候補の再スケジュール合計<br/>vs spec.limits 予算"}
+    q3 -->|yes| q4{"surge_headroom?<br/>候補のクランプ後フットプリント<br/>vs spec.limits 予算"}
     q4 -->|no| warn["warn: limits ヘッドルーム不足;<br/>Requeue（1m）"]
     q4 -->|yes| anchor["active-rotation アンカーを書く<br/>（conflict チェック、only-if-absent）"]
     anchor --> adv
@@ -85,8 +85,9 @@ reconcile_nodepool(np):
                                              #   今から graceful surge を始めても cand 自身の deadline より前に完了
                                              #   できない（deadline − now < t_rot）— surge はレースに負けるだけなので
                                              #   surge なしでローテーションする。deadline の無い claim は非該当
-  if not surgeless and not surge_headroom(np, cand):   # cand の再スケジュール対象 Pod requests 合計（= placeholder
-                                             #   の requests、§3.3）vs (spec.limits − プロビジョニング済): 候補依存
+  if not surgeless and not surge_headroom(np, cand):   # cand のクランプ後 placeholder フットプリント（§3.3 の
+                                             #   allocatable クランプ後の再スケジュール対象 Pod requests 合計。拒否時は
+                                             #   完全な drain を保つ）vs (spec.limits − プロビジョニング済): 候補依存
                                              #   なので選定の「後」に走る — かつ surge のときのみ（surge なしの
                                              #   fallback はサイズを測る placeholder を作らない）
       warn("insufficient limits headroom; cannot surge"); return Requeue(1m)
