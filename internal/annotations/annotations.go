@@ -61,6 +61,16 @@ const (
 	// observed once, so the duration needs its own pool-side anchor (spec §5.3).
 	// Cleared with the anchor at completion.
 	DrainingAt = Prefix + "draining-at"
+	// SurgeWait is the surge-phase duration (started-at → surge_ready) carried
+	// forward from the pending → draining transition to the single completion
+	// point, where the old NodeClaim — and its started-at — has finalized away.
+	// It lets the "rotation complete" line report the whole rotation's
+	// total = surge_wait + drain on one self-contained line rather than a join
+	// back to the earlier "surge node ready" line (spec §4.2, §5.3). Stamped
+	// write-once in the same update as DrainingAt at the pending → draining
+	// transition; read and cleared with the anchor at completion. Absent on the
+	// surge-less forceful-fallback path, which has no surge phase.
+	SurgeWait = Prefix + "surge-wait"
 	// LastRotationAt is the RFC3339 completion time of the last successful
 	// rotation; the cooldownAfter start-gate anchor (spec §5.2 step 2).
 	LastRotationAt = Prefix + "last-rotation-at"

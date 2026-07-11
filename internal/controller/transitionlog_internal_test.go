@@ -316,23 +316,32 @@ func TestFailureLogsEscalatedBackoffOnARepeatFailure(t *testing.T) {
 }
 
 // The old NodeClaim finalized away out of draining → success. The line closes the
-// rotation with the drain duration the §4.2 histogram also records.
+// rotation on a single self-contained line: the surge node and the total rotation
+// time (surge_wait + drain), so an operator need not join back to the earlier
+// "surge node ready" line emitted in a different reconcile pass (#228).
 func TestRotationCompleteIsLogged(t *testing.T) {
 	pool := withTGP(testNodePool(map[string]string{
 		annotations.ActiveRotation:      "nc-old",
 		annotations.ActiveRotationState: annotations.StateDraining,
 		annotations.DrainingAt:          rfc(testNow.Add(-4 * time.Minute)),
+		annotations.SurgeWait:           (90 * time.Second).String(), // carried forward from the transition
 	}))
+	// The surge target survives to completion still carrying the rotation marker;
+	// the old node's NodeClaim has finalized away with its Node, so surge-for=nc-old
+	// resolves to the surge target alone (recovered before unfreeze clears it).
+	surgeHost := testK8sNode(surgeNode, true, map[string]string{annotations.SurgeFor: "nc-old"}, false)
 	rec := events.NewFakeRecorder(16)
-	r := newReconciler(t, testNow, nil, pool) // nc-old absent → finalized away
+	r := newReconciler(t, testNow, nil, pool, surgeHost) // nc-old absent → finalized away
 	r.Events = rec
 
 	var lines []string
 	if _, err := r.reconcileNodePool(log.IntoContext(context.Background(), captureLogger(&lines)), pool, testPolicy(), mustSchedule(t)); err != nil {
 		t.Fatalf("reconcileNodePool: %v", err)
 	}
-	if !containsLine(lines, "rotation complete", "nc-old", "drain") {
-		t.Errorf("missing rotation-complete line with the drain duration; lines = %v", lines)
+	// total = surge_wait 1m30s + drain 4m0s = 5m30s, all on one line with the surge node.
+	if !containsLine(lines, "rotation complete", "nc-old",
+		`"surgeNode"="`+surgeNode+`"`, `"surgeWait"="1m30s"`, `"drain"="4m0s"`, `"total"="5m30s"`) {
+		t.Errorf("rotation-complete line must be self-contained (surgeNode, surgeWait, drain, total); lines = %v", lines)
 	}
 	if evs := drain(rec); len(evs) != 1 {
 		t.Errorf("want 1 Normal RotationCompleted Event, got %d: %v", len(evs), evs)

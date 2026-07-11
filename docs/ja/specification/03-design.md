@@ -203,7 +203,7 @@ sequenceDiagram
     end
     PH-->>C: Ready なホスト（候補以外）で Running = surge_ready
     C->>New: surge ターゲットを freeze
-    C->>NP: active-rotation-state=draining、draining-at
+    C->>NP: active-rotation-state=draining、draining-at、surge-wait
     C->>Old: state=draining、NodeClaim を delete
     K->>Old: termination controller が graceful に drain（Eviction API、PDB 適用）
     Old-->>New: evict された Pod が予約済み容量へ再スケジュール
