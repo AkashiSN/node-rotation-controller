@@ -134,10 +134,11 @@ func toWindows(in []nrv1.MaintenanceWindow) []policy.MaintenanceWindow {
 
 func toSurge(in nrv1.Surge) policy.Surge {
 	s := policy.Surge{
-		ReadyTimeout:  in.ReadyTimeout,
-		CooldownAfter: in.CooldownAfter,
-		RetryBackoff:  in.RetryBackoff,
-		DrainEstimate: in.DrainEstimate,
+		ReadyTimeout:         in.ReadyTimeout,
+		CooldownAfter:        in.CooldownAfter,
+		RetryBackoff:         in.RetryBackoff,
+		DrainEstimate:        in.DrainEstimate,
+		ProvisioningEstimate: in.ProvisioningEstimate,
 		MatchNodeRequirements: policy.MatchNodeRequirements{
 			Required:  append([]string(nil), in.MatchNodeRequirements.Required...),
 			Preferred: append([]string(nil), in.MatchNodeRequirements.Preferred...),

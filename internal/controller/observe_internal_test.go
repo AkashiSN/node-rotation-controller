@@ -28,7 +28,7 @@ func hasFinding(findings []schedule.Finding, code string) bool {
 // TestDerivedThresholdsPopulatesThroughputInputs covers issue #36: derivedThresholds
 // must feed the layer-2 throughput inputs (WindowLen D, NodeCount N) into
 // schedule.Derive, not leave them at zero. The real 23h59m window yields
-// C = ceil(23h59m / (t_rot_est 27m + cooldown 10m)) = 39; a zero WindowLen (the
+// C = ceil(23h59m / (t_rot_est 15m + cooldown 10m)) = 58; a zero WindowLen (the
 // pre-fix state) collapses C and silences every layer-2 check, proving the input
 // is load-bearing. A/G are unaffected by these layer-2 inputs.
 func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
@@ -50,8 +50,8 @@ func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 	if got.G != 2 {
 		t.Errorf("G: got %d, want 2", got.G)
 	}
-	if got.C != 39 {
-		t.Errorf("C: got %d, want 39 (ceil(23h59m / 37m))", got.C)
+	if got.C != 58 {
+		t.Errorf("C: got %d, want 58 (ceil(23h59m / 25m))", got.C)
 	}
 
 	// Regression guard: the pre-fix WindowLen=0 drives C to zero, which layer 2
@@ -68,8 +68,8 @@ func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 
 // TestDerivedThresholdsPassesIdleGap covers the issue #211 wiring: the carry-over
 // check fires only when the reconciler supplies the schedule's shortest idle gap.
-// The 23h59m daily window closes for one minute, which the 37m forecast denominator
-// (t_rot_est 27m + cooldown 10m) plainly spans; a nil gap (a continuously-open
+// The 23h59m daily window closes for one minute, which the 25m forecast denominator
+// (t_rot_est 15m + cooldown 10m) plainly spans; a nil gap (a continuously-open
 // window, where nothing can carry into a "next" occurrence) must silence the check
 // instead.
 func TestDerivedThresholdsPassesIdleGap(t *testing.T) {
@@ -83,7 +83,7 @@ func TestDerivedThresholdsPassesIdleGap(t *testing.T) {
 
 	got := r.derivedThresholds(pool, res, p, d, &gap, 3)
 	if !hasFinding(got.Findings, "RotationSpansNextWindow") {
-		t.Errorf("RotationSpansNextWindow expected: t_rot_est 27m + cooldown 10m > idle gap %v; findings=%+v", gap, got.Findings)
+		t.Errorf("RotationSpansNextWindow expected: t_rot_est 15m + cooldown 10m > idle gap %v; findings=%+v", gap, got.Findings)
 	}
 
 	none := r.derivedThresholds(pool, res, p, d, nil, 3)
@@ -111,7 +111,7 @@ func TestDerivedThresholdsPassesDrainEstimate(t *testing.T) {
 	if want := 10 * time.Minute; unset.DrainEstimate != want {
 		t.Errorf("unset: DrainEstimate = %v, want %v (min(tGP 30m, default 10m))", unset.DrainEstimate, want)
 	}
-	if want := 27 * time.Minute; unset.TRotEst != want {
+	if want := 15 * time.Minute; unset.TRotEst != want { // provisioning 5m + drain 10m
 		t.Errorf("unset: TRotEst = %v, want %v", unset.TRotEst, want)
 	}
 
@@ -129,6 +129,54 @@ func TestDerivedThresholdsPassesDrainEstimate(t *testing.T) {
 	// The deadline side is untouched by either, and only C moves.
 	if unset.TRot != explicit.TRot || unset.A != explicit.A || unset.G != explicit.G {
 		t.Errorf("deadline side moved with drainEstimate: TRot %v/%v A %v/%v G %d/%d",
+			unset.TRot, explicit.TRot, unset.A, explicit.A, unset.G, explicit.G)
+	}
+	if unset.C == explicit.C {
+		t.Errorf("C = %d for both estimates; the field is not load-bearing", unset.C)
+	}
+}
+
+// TestDerivedThresholdsPassesProvisioningEstimate mirrors the drainEstimate wiring
+// (ADR-0003, issue #220): the policy field reaches schedule.Derive and moves ONLY the
+// forecast side. An unset field must arrive as nil so Derive applies
+// min(readyTimeout, 5m) — here readyTimeout = 15m, so the default resolves to 5m.
+func TestDerivedThresholdsPassesProvisioningEstimate(t *testing.T) {
+	pool := withExpireAfter(withTGP(testNodePool(nil)))
+	r := newReconciler(t, testNow, nil, pool)
+	sched := mustSchedule(t)
+	p, _ := sched.WorstCasePeriod()
+	d, _ := sched.ShortestWindow()
+
+	pol := testPolicy()
+	res := r.resolve(pool, pol, sched)
+	if res.provisioningEstimate != nil {
+		t.Errorf("resolve() provisioningEstimate = %v, want nil for an unset policy field", res.provisioningEstimate)
+	}
+	unset := r.derivedThresholds(pool, res, p, d, nil, 3)
+	if want := 5 * time.Minute; unset.ProvisioningEstimate != want {
+		t.Errorf("unset: ProvisioningEstimate = %v, want %v (min(readyTimeout 15m, default 5m))", unset.ProvisioningEstimate, want)
+	}
+	if want := 15 * time.Minute; unset.TRotEst != want { // provisioning 5m + drain 10m
+		t.Errorf("unset: TRotEst = %v, want %v", unset.TRotEst, want)
+	}
+
+	pol = testPolicy()
+	pol.Surge.ProvisioningEstimate = &metav1.Duration{Duration: 2 * time.Minute}
+	res = r.resolve(pool, pol, sched)
+	if res.provisioningEstimate == nil || *res.provisioningEstimate != 2*time.Minute {
+		t.Fatalf("resolve() provisioningEstimate = %v, want 2m", res.provisioningEstimate)
+	}
+	explicit := r.derivedThresholds(pool, res, p, d, nil, 3)
+	if want := 2 * time.Minute; explicit.ProvisioningEstimate != want {
+		t.Errorf("explicit: ProvisioningEstimate = %v, want %v", explicit.ProvisioningEstimate, want)
+	}
+	if want := 12 * time.Minute; explicit.TRotEst != want { // provisioning 2m + drain 10m
+		t.Errorf("explicit: TRotEst = %v, want %v", explicit.TRotEst, want)
+	}
+
+	// The deadline side is untouched by either, and only C moves.
+	if unset.TRot != explicit.TRot || unset.A != explicit.A || unset.G != explicit.G {
+		t.Errorf("deadline side moved with provisioningEstimate: TRot %v/%v A %v/%v G %d/%d",
 			unset.TRot, explicit.TRot, unset.A, explicit.A, unset.G, explicit.G)
 	}
 	if unset.C == explicit.C {

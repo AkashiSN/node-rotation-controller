@@ -59,7 +59,8 @@ EKS Auto Mode はさらに **21 日のノード最大寿命**を、ユーザが*
 | `P` | 最悪ウィンドウ周期 — 連続するメンテナンスウィンドウ機会の最大ギャップ（§3.1） |
 | `t_rot` | 1 ノードのローテーション所要時間の上限 = `readyTimeout + tGP + buffer`。deadline 上界（`leadTime`・`A`・`G`・§3.3・§5.2）であり、レイヤ 2 では**使わない** |
 | `drainEstimate` | 健全で PDB を尊重する drain の期待所要時間（`surge.drainEstimate`）。未設定 ⇒ `min(tGP, 10m)`。レイヤ 2 予測のみ（§3.2） |
-| `t_rot_est` | 期待ローテーションサービス時間 = `readyTimeout + drainEstimate + buffer`。レイヤ 2 のスループット分母（§3.2） |
+| `provisioningEstimate` | 期待される surge プロビジョニング（候補 → Ready）の所要時間（`surge.provisioningEstimate`）。未設定 ⇒ `min(readyTimeout, 5m)`。レイヤ 2 予測のみ（§3.2、ADR-0003） |
+| `t_rot_est` | 期待ローテーションサービス時間 = `provisioningEstimate + drainEstimate`。レイヤ 2 のスループット分母（§3.2）。deadline 項も `buffer` も含まない — それらは `t_rot` のもの |
 | `K` | `minRotationChances` — 失効前に保証したいローテーション回数（下限 1） |
 | `leadTime` | deadline のどれだけ前に選定するか = `K·P + t_rot` |
 | `A` | `ageThreshold` — ノードが候補になる age。導出は `A = E − (K·P + t_rot)` |
@@ -70,7 +71,7 @@ EKS Auto Mode はさらに **21 日のノード最大寿命**を、ユーザが*
 | `C` | ウィンドウ機会あたりの処理容量 — 1 回のウィンドウ機会で開始できるローテーション数。`C = m · ceil(D / (t_rot_est + cooldownAfter))`（§3.2 レイヤ 2）|
 | `N` | NodePool のノード台数 — レイヤ 2 のスループット検証でのみ使い、ノード単位の導出には用いない（§3.2）|
 
-> `cooldownAfter`・`drainEstimate`・`readyTimeout` は導出記号ではなく設定フィールド（§5.4）であり、上記の `t_rot`・`t_rot_est`・`C` の式に効く。`buffer` も同じ式に効くが設定フィールドではなく、コントローラの検出ラグを覆う固定のコントローラ定数（`4·shortRequeue = 2m`）である（§3.2）。
+> `cooldownAfter`・`drainEstimate`・`provisioningEstimate`・`readyTimeout` は導出記号ではなく設定フィールド（§5.4）である。`readyTimeout` は `t_rot`（deadline 上界）に効き、`drainEstimate` と `provisioningEstimate` は `t_rot_est`（予測）に効き、`cooldownAfter` は `C` に効く。`buffer` も `t_rot` に効くが設定フィールドではなく、コントローラの検出ラグを覆う固定のコントローラ定数（`4·shortRequeue = 2m`）であり（§3.2）、deadline 側のみに効く（`t_rot_est` には効かない）。
 
 ## 1.5 Karpenter エコシステムでの位置付け
 

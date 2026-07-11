@@ -252,6 +252,15 @@ rotationPolicies:
         # deadline at which Karpenter force-kills a drain, not how long a healthy
         # one takes.
         # drainEstimate: 10m
+        # Expected duration of a healthy surge provisioning (candidate created →
+        # new node Ready). Feeds ONLY the layer-2 throughput forecast (spec §3.2,
+        # ADR-0003) — it is not a bound, and it changes no rotation timing. Leave it
+        # unset and the controller uses min(readyTimeout, 5m).
+        #
+        # Set it ONLY if you know your cluster's real provisioning time. Do NOT lower
+        # readyTimeout to "fix" a throughput warning: that is the deadline the surge
+        # attempt is abandoned at, not how long a healthy provision takes.
+        # provisioningEstimate: 5m
         # Which candidate-node requirements the placeholder replicates (spec §3.3).
         # The karpenter.sh/nodepool selector is always applied and is NOT listed.
         matchNodeRequirements:

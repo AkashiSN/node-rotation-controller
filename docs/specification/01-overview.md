@@ -59,7 +59,8 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 | `P` | worst-case window period — the largest gap between consecutive maintenance-window occurrences (§3.1) |
 | `t_rot` | upper bound on one node's rotation time = `readyTimeout + tGP + buffer`; the deadline bound (`leadTime`, `A`, `G`, §3.3, §5.2) — **not** used by layer 2 |
 | `drainEstimate` | expected healthy PDB-respecting drain (`surge.drainEstimate`); unset ⇒ `min(tGP, 10m)`; layer-2 forecast only (§3.2) |
-| `t_rot_est` | expected rotation service time = `readyTimeout + drainEstimate + buffer`; the layer-2 throughput denominator (§3.2) |
+| `provisioningEstimate` | expected surge provisioning, candidate → Ready (`surge.provisioningEstimate`); unset ⇒ `min(readyTimeout, 5m)`; layer-2 forecast only (§3.2, ADR-0003) |
+| `t_rot_est` | expected rotation service time = `provisioningEstimate + drainEstimate`; the layer-2 throughput denominator (§3.2). Carries no deadline term and no `buffer` — those are `t_rot`'s |
 | `K` | `minRotationChances` — desired guaranteed rotation chances before expiry (floor 1) |
 | `leadTime` | how early a node is selected before its deadline = `K·P + t_rot` |
 | `A` | `ageThreshold` — the age at which a node becomes a candidate; derived `A = E − (K·P + t_rot)` |
@@ -70,7 +71,7 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 | `C` | per-occurrence window capacity — rotations one window occurrence can start, `C = m · ceil(D / (t_rot_est + cooldownAfter))` (§3.2 layer 2) |
 | `N` | NodePool node count — used only by the layer-2 throughput check, not by the per-node derivation (§3.2) |
 
-> `cooldownAfter`, `drainEstimate`, and `readyTimeout` are configuration fields (§5.4), not derived symbols; they feed the `t_rot`, `t_rot_est`, and `C` formulas above. `buffer` also feeds those formulas but is **not** a configuration field — it is a fixed controller constant (`4·shortRequeue = 2m`) covering the controller's own detection lag (§3.2).
+> `cooldownAfter`, `drainEstimate`, `provisioningEstimate`, and `readyTimeout` are configuration fields (§5.4), not derived symbols. `readyTimeout` feeds `t_rot` (the deadline bound); `drainEstimate` and `provisioningEstimate` feed `t_rot_est` (the forecast); `cooldownAfter` feeds `C`. `buffer` feeds `t_rot` too but is **not** a configuration field — it is a fixed controller constant (`4·shortRequeue = 2m`) covering the controller's own detection lag (§3.2), and it is deadline-side only (it does **not** feed `t_rot_est`).
 
 ## 1.5 Position in the Karpenter Ecosystem
 

@@ -86,27 +86,36 @@ low, and EKS Auto Mode NodePools specifically (where the stock
 **Why it matters.** Two different durations are easy to conflate:
 
 - `surge.drainEstimate` — how long a **healthy, PDB-respecting drain actually
-  takes**. This is the **throughput knob**. The controller forecasts capacity
-  from it: the expected rotation service time is
-  `t_rot_est = readyTimeout + drainEstimate + buffer`, and a window of duration
-  `D` admits `C = ceil(D / (t_rot_est + cooldownAfter))` serial rotation starts
-  ([§3.2 layer 2](specification/03-design.md#32-candidate-selection)). Unset,
-  `drainEstimate` defaults to `min(tGP, 10m)`.
+  takes**, and `surge.provisioningEstimate` — how long a **healthy surge
+  provisioning** (candidate → new node `Ready`) actually takes. These are the two
+  **throughput knobs**. The controller forecasts capacity from their sum: the
+  expected rotation service time is
+  `t_rot_est = provisioningEstimate + drainEstimate` (ADR-0003), and a window of
+  duration `D` admits `C = ceil(D / (t_rot_est + cooldownAfter))` serial rotation
+  starts ([§3.2 layer 2](specification/03-design.md#32-candidate-selection)).
+  Unset, `drainEstimate` defaults to `min(tGP, 10m)` and `provisioningEstimate` to
+  `min(readyTimeout, 5m)`. Neither carries a deadline term or `buffer` — those
+  belong to the safety bound `t_rot`.
 - `terminationGracePeriod` — the deadline at which Karpenter **force-completes** a
   drain, killing whatever pods have not yet drained. It is a **safety bound**, not
-  a throughput input, and it no longer appears in `C` at all.
+  a throughput input, and it no longer appears in `C` at all. `readyTimeout` is the
+  analogous deadline for the provisioning phase (the surge is abandoned there) and
+  likewise does not appear in `C`.
 
 Before #212 the model budgeted the full `tGP` in `C`, so on stock Auto Mode
 (`tGP = 24h`, `t_rot ≈ 24h17m`) a 4-hour window computed `C = 1` — and the apparent
 remedy was to lower `tGP`. That is no longer how throughput is raised. With the
-default `drainEstimate = min(24h, 10m) = 10m`, `t_rot_est = 27m`, so the same
-4-hour window now computes `C = ceil(4h / (27m + 10m)) = 7` regardless of `tGP`.
+default `provisioningEstimate = min(15m, 5m) = 5m` and `drainEstimate = min(24h, 10m) = 10m`,
+`t_rot_est = 15m`, so the same 4-hour window now computes
+`C = ceil(4h / (15m + 10m)) = 10` regardless of `tGP`.
 
-**Raising throughput.** `C` is forecast from `surge.drainEstimate` (expected
-healthy drain), not from `terminationGracePeriod` (the force-kill deadline). If
-`C` looks too low, set `drainEstimate` to your workload's real drain time — read
-it off `noderotation_duration_seconds{phase="drain"}`. Do **not** lower
-`terminationGracePeriod` to make a throughput warning go away. It no longer raises
+**Raising throughput.** `C` is forecast from `surge.provisioningEstimate` and
+`surge.drainEstimate` (expected healthy provision and drain), not from
+`readyTimeout` or `terminationGracePeriod` (the abandon/force-kill deadlines). If
+`C` looks too low, set each estimate to your cluster's real time — read the drain
+off `noderotation_duration_seconds{phase="drain"}` and the provision off
+`{phase="surge_wait"}`. Do **not** lower `terminationGracePeriod` to make a
+throughput warning go away. It no longer raises
 `C` at all; it reaches only `ThroughputBelowArrival`, and only indirectly, by
 lengthening `A` (and under an explicit `ageThreshold` override, not even that).
 What it does do is shorten the window a genuinely slow, PDB-respecting drain gets
@@ -124,8 +133,9 @@ normal operation — the observations do not contain the tail it exists to cover
 
 If a `RotationSpansNextWindow` warning is the symptom, the remedies, in order,
 are: space the window occurrences further apart; lower `cooldownAfter`; correct
-`drainEstimate` if it over-states the real drain. Lowering `tGP` does **not**
-help — the predicate is evaluated on `t_rot_est`, which no longer contains it.
+`provisioningEstimate` or `drainEstimate` if either over-states the real phase.
+Lowering `tGP` does **not** help — the predicate is evaluated on `t_rot_est`,
+which no longer contains it.
 
 **Still reasons to lower `tGP`.** Lowering `terminationGracePeriod` remains a
 legitimate operational choice, just not for throughput:
@@ -417,7 +427,7 @@ the section that fixes it. The signal strings are the exact ones from
 |------------------------|--------------|--------------|-------|
 | Surge node never appears; the placeholder Pod stays `Pending` and rotations end in `failure` | `noderotation_duration_seconds{phase="surge_wait"}` climbing; `noderotation_completed_total{outcome="failure"}` | No schedulable **same-AZ** capacity for the replacement (zonal-PV pin) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) |
 | `noderotation_candidates` never trends to `0` across two windows | `NodeRotationCandidatesNotDraining` ([R2](specification/07-risks.md#71-risks)) | Throughput too low for the window, **or** rotation wedged for one of the causes below | [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod), then scan the rows below |
-| `ThroughputBurstShortfall` warning on **every** window | `ThroughputBurstShortfall` Warning Event | `K · C` is smaller than the pool's node count — the window is too short (or `drainEstimate` over-stated) to rotate a synchronized batch before its shared deadline | [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod) |
+| `ThroughputBurstShortfall` warning on **every** window | `ThroughputBurstShortfall` Warning Event | `K · C` is smaller than the pool's node count — the window is too short (or `provisioningEstimate`/`drainEstimate` over-stated) to rotate a synchronized batch before its shared deadline | [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod) |
 | `RotationSpansNextWindow` warning | `RotationSpansNextWindow` Warning Event | `t_rot_est + cooldownAfter` exceeds the interval the window stays closed, so the forecast predicts a rotation started near an occurrence's close runs into the next occurrence as it opens, and `K · C` must be read as an upper bound | [§2](#2-calibrating-the-drain-drainestimate-vs-terminationgraceperiod) |
 | A drain hangs past `tGP + buffer` | `noderotation_drain_stuck == 1`; `NodeRotationDrainStuck` | Unsatisfiable PDB or a stuck Pod finalizer | [§5](#5-handling-a-stuck-drain) |
 | `noderotation_in_progress` stuck at `1` with no new completions | `NodeRotationStalledInWindow` | Either the surge is not coming up (→ §1) or the drain is stuck (→ §5) | [§1](#1-per-az-surge-headroom-for-zonal-pv-workloads) / [§5](#5-handling-a-stuck-drain) |

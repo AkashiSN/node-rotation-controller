@@ -164,6 +164,10 @@
                   "allOf": [{ "$ref": "#/definitions/goDuration" }],
                   "description": "Expected drain duration for the layer-2 throughput forecast (spec §3.2). Unset resolves to min(terminationGracePeriod, 10m). Not a bound — terminationGracePeriod remains the force-kill deadline."
                 },
+                "provisioningEstimate": {
+                  "allOf": [{ "$ref": "#/definitions/goDuration" }],
+                  "description": "Expected surge-provisioning duration (candidate → Ready) for the layer-2 throughput forecast (spec §3.2, ADR-0003). Unset resolves to min(readyTimeout, 5m). Not a bound — readyTimeout remains the deadline the surge attempt is abandoned at."
+                },
                 "retryBackoff": { "$ref": "#/definitions/goDuration" },
                 "matchNodeRequirements": {
                   "type": "object",

@@ -132,7 +132,7 @@ type Surge struct {
 
 	// drainEstimate is the expected duration of a healthy, PDB-respecting drain. It
 	// feeds ONLY the layer-2 throughput forecast (spec §3.2): C = m·ceil(D /
-	// (readyTimeout + drainEstimate + buffer + cooldownAfter)). It is not a bound and
+	// (provisioningEstimate + drainEstimate + cooldownAfter)). It is not a bound and
 	// changes no rotation timing — terminationGracePeriod remains the deadline at
 	// which Karpenter force-completes a drain, and ageThreshold/leadTime keep using it.
 	//
@@ -143,6 +143,20 @@ type Surge struct {
 	// runtime).
 	// +optional
 	DrainEstimate *metav1.Duration `json:"drainEstimate,omitempty"`
+
+	// provisioningEstimate is the expected duration of a healthy surge provisioning
+	// (candidate created → new node Ready). Like drainEstimate it feeds ONLY the
+	// layer-2 throughput forecast (spec §3.2): C = m·ceil(D / (provisioningEstimate +
+	// drainEstimate + cooldownAfter)). It is not a bound and changes no rotation
+	// timing — readyTimeout remains the deadline at which the surge attempt is
+	// abandoned, and ageThreshold/leadTime keep using it.
+	//
+	// Unset resolves to min(readyTimeout, 5m). There is deliberately no schema
+	// default: the fallback depends on readyTimeout, which an operator may override.
+	// An explicit value above readyTimeout is unreachable and is warned about and
+	// clamped; must be positive (validated at runtime). (ADR-0003, issue #220.)
+	// +optional
+	ProvisioningEstimate *metav1.Duration `json:"provisioningEstimate,omitempty"`
 }
 
 // MatchNodeRequirements selects which candidate-node requirements the placeholder

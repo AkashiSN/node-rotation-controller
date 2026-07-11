@@ -203,6 +203,36 @@ tests:
       - notExists:
           path: spec.surge.drainEstimate
 
+  # Issue #220: surge.provisioningEstimate is an advisory input to the layer-2
+  # throughput forecast only — it changes no rotation timing and is rendered
+  # verbatim like any other surge field (mirrors drainEstimate, ADR-0003).
+  - it: renders an explicit surge.provisioningEstimate when set
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - timezone: Asia/Tokyo
+                days: [Wed]
+                start: "02:00"
+                end: "06:00"
+            surge:
+              provisioningEstimate: 3m
+    asserts:
+      - equal:
+          path: spec.surge.provisioningEstimate
+          value: 3m
+
+  # Unset resolves in the controller to min(readyTimeout, 5m); like drainEstimate
+  # the chart must not inject a default (see values.yaml comment on
+  # surge.provisioningEstimate).
+  - it: leaves surge.provisioningEstimate unset by default so the controller resolves min(readyTimeout, 5m)
+    asserts:
+      - notExists:
+          path: spec.surge.provisioningEstimate
+
   # Issue #219: the RotationPolicy value subtree is sealed with
   # additionalProperties:false, so a typo'd key is rejected at render time
   # instead of being silently dropped by the CRD's structural schema. helm
@@ -259,6 +289,7 @@ tests:
               readyTimeout: 15m
               cooldownAfter: 10m
               drainEstimate: 20m
+              provisioningEstimate: 3m
               retryBackoff: 30m
               matchNodeRequirements:
                 required: [topology.kubernetes.io/zone]
@@ -272,6 +303,9 @@ tests:
       - equal:
           path: spec.surge.drainEstimate
           value: 20m
+      - equal:
+          path: spec.surge.provisioningEstimate
+          value: 3m
       - equal:
           path: spec.surge.forcefulFallback.enabled
           value: true

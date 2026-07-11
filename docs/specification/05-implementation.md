@@ -399,6 +399,12 @@ spec:
                                   #   min(tGP, 10m) at derivation time (the fallback depends on the
                                   #   NodePool template). Must be > 0; an explicit value above tGP is
                                   #   unreachable, so it warns (DrainEstimateAboveTGP) and is clamped.
+    # provisioningEstimate: 5m    # optional; expected surge provisioning (candidate → Ready). Feeds
+                                  #   ONLY the layer-2 throughput forecast (t_rot_est, §3.2, ADR-0003) —
+                                  #   not a bound, no rotation timing changes. No default: unset resolves
+                                  #   to min(readyTimeout, 5m) at derivation time. Must be > 0; an
+                                  #   explicit value above readyTimeout is unreachable, so it warns
+                                  #   (ProvisioningEstimateAboveReadyTimeout) and is clamped.
     retryBackoff: 30m             # must be > 0
     matchNodeRequirements:        # which candidate-node requirements the placeholder replicates (§3.3)
       required:                   # defaulted to the set below when empty (applied at runtime)

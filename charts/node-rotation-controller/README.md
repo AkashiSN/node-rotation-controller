@@ -126,6 +126,10 @@ spec:
     # drainEstimate: 10m    # expected healthy drain; feeds the layer-2 throughput
                             # forecast only (spec §3.2). Unset => min(tGP, 10m).
                             # NOT a bound — terminationGracePeriod stays the deadline.
+    # provisioningEstimate: 5m  # expected candidate → Ready time; feeds the layer-2
+                            # throughput forecast only (spec §3.2, ADR-0003). Unset =>
+                            # min(readyTimeout, 5m). NOT a bound — readyTimeout stays
+                            # the deadline the surge attempt is abandoned at.
     # Which candidate-node requirements the placeholder replicates (spec §3.3).
     # The karpenter.sh/nodepool selector is always applied and is NOT listed.
     matchNodeRequirements:

@@ -70,14 +70,17 @@ func TestDeriveWorkedExample(t *testing.T) {
 	if r.G != 2 {
 		t.Errorf("G = %d, want 2", r.G)
 	}
-	if want := 27 * time.Minute; r.TRotEst != want { // 15m + 10m + 2m
+	if want := 15 * time.Minute; r.TRotEst != want { // provisioning 5m + drain 10m
 		t.Errorf("TRotEst = %v, want %v", r.TRotEst, want)
 	}
 	if want := 10 * time.Minute; r.DrainEstimate != want { // min(tGP 1h, default 10m)
 		t.Errorf("DrainEstimate = %v, want %v", r.DrainEstimate, want)
 	}
-	if r.C != 7 { // ceil(4h / 37m) = 7 — the near-edge start counts (§3.1)
-		t.Errorf("C = %d, want 7", r.C)
+	if want := 5 * time.Minute; r.ProvisioningEstimate != want { // min(readyTimeout 15m, default 5m)
+		t.Errorf("ProvisioningEstimate = %v, want %v", r.ProvisioningEstimate, want)
+	}
+	if r.C != 10 { // ceil(4h / 25m) = 10 — the near-edge start counts (§3.1)
+		t.Errorf("C = %d, want 10", r.C)
 	}
 	if len(r.Findings) != 0 {
 		t.Errorf("expected no findings, got %v", codes(r))
@@ -225,7 +228,7 @@ func TestDeriveHardCapUnderCapNoWarn(t *testing.T) {
 // completes past the window's close and must be counted. floor and ceil agree
 // only when D is an exact multiple of denom.
 func TestDeriveCeilCountsTheNearEdgeStart(t *testing.T) {
-	in := pinnedEstimate() // denom = t_rot_est 90m + cooldown 10m = 100m (estimate pinned to tGP)
+	in := pinnedEstimate() // denom = t_rot_est 90m + cooldown 10m = 100m (both estimates pinned)
 
 	in.WindowLen = 200 * time.Minute // exact multiple: starts at 0m, 100m
 	if r := Derive(in); r.C != 2 {
@@ -244,18 +247,18 @@ func TestDeriveCeilCountsTheNearEdgeStart(t *testing.T) {
 }
 
 // TestDeriveAutoModeDefaultHasNoThroughputZero pins D1+D2 (issue #211) and the
-// #212 split: on the stock Auto Mode tGP = 24h the DEADLINE bound t_rot ≈ 24h17m
-// dwarfs any realistic window, but layer 2 forecasts with t_rot_est = 27m (the
-// default drainEstimate), so C = 7. The old ThroughputZero finding asserted a
+// #212/#220 split: on the stock Auto Mode tGP = 24h the DEADLINE bound t_rot ≈ 24h17m
+// dwarfs any realistic window, but layer 2 forecasts with t_rot_est = 15m (default
+// provisioning 5m + drain 10m), so C = 10. The old ThroughputZero finding asserted a
 // positive-length window rotates nothing and is gone.
 func TestDeriveAutoModeDefaultHasNoThroughputZero(t *testing.T) {
 	in := baseAuto()
-	in.TGP = 24 * time.Hour // Auto Mode stock default → tRot ≈ 24h17m, tRotEst = 27m
+	in.TGP = 24 * time.Hour // Auto Mode stock default → tRot ≈ 24h17m, tRotEst = 15m
 	r := Derive(in)
 	absent(t, r, "ThroughputZero")
 	absent(t, r, "ANonPositive") // A = 336 - (192 + 24h17m) = 119h43m > 0
-	if r.C != 7 {
-		t.Errorf("C = %d, want 7 (ceil(4h / 37m))", r.C)
+	if r.C != 10 {
+		t.Errorf("C = %d, want 10 (ceil(4h / 25m))", r.C)
 	}
 }
 
@@ -283,11 +286,11 @@ func TestDeriveRetryBackoffShortWarn(t *testing.T) {
 }
 
 func TestDeriveThroughputBelowArrival(t *testing.T) {
-	in := pinnedEstimate() // C=3, A=142.5h, P=96h
-	in.NodeCount = 5       // C·A = 427.5h < N·P = 480h
+	in := pinnedEstimate() // C=3, A=142h28m, P=96h
+	in.NodeCount = 5       // C·A = 427h24m < N·P = 480h
 	has(t, Derive(in), "ThroughputBelowArrival", Warn)
 
-	in.NodeCount = 4 // N·P = 384h < C·A = 427.5h
+	in.NodeCount = 4 // N·P = 384h < C·A = 427h24m
 	absent(t, Derive(in), "ThroughputBelowArrival")
 }
 
@@ -308,11 +311,11 @@ func TestDeriveThroughputBurstShortfall(t *testing.T) {
 func TestDeriveShortWindowStillEvaluatesThroughput(t *testing.T) {
 	in := baseAuto()
 	in.E = 20 * 24 * time.Hour      // 480h
-	in.TGP = 24 * time.Hour         // tRot = 24h17m, tRotEst = 27m
+	in.TGP = 24 * time.Hour         // tRot = 24h17m, tRotEst = 15m
 	in.P = 6 * 24 * time.Hour       // 144h (Sun → next Sat)
 	in.WindowLen = 90 * time.Minute // D
 	in.IdleGap = new(22*time.Hour + 30*time.Minute)
-	in.NodeCount = 4
+	in.NodeCount = 5
 
 	r := Derive(in)
 	if want := 24*time.Hour + 17*time.Minute; r.TRot != want {
@@ -321,8 +324,8 @@ func TestDeriveShortWindowStillEvaluatesThroughput(t *testing.T) {
 	if want := 167*time.Hour + 43*time.Minute; r.A != want { // 480h − (288h + 24h17m)
 		t.Fatalf("A = %v, want %v", r.A, want)
 	}
-	if r.C != 3 { // ceil(90m / 37m) = 3; the deadline bound would say 1
-		t.Fatalf("C = %d, want 3", r.C)
+	if r.C != 4 { // ceil(90m / 25m) = 4; the deadline bound would say 1
+		t.Fatalf("C = %d, want 4", r.C)
 	}
 	// Layer 1 stays clean — the findings below are layer 2's alone.
 	absent(t, r, "ANonPositive")
@@ -330,36 +333,38 @@ func TestDeriveShortWindowStillEvaluatesThroughput(t *testing.T) {
 	absent(t, r, "HardCapExceeded") // E + tGP = 21d exactly, cap is a strict >
 
 	absent(t, r, "ThroughputZero")
-	has(t, r, "ThroughputBelowArrival", Warn) // C·A = 503h < N·P = 576h
-	absent(t, r, "ThroughputBurstShortfall")  // N=4 <= K·C = 6
-	absent(t, r, "RotationSpansNextWindow")   // 37m < idle gap 22h30m
+	has(t, r, "ThroughputBelowArrival", Warn) // C·A = 670h52m < N·P = 720h
+	absent(t, r, "ThroughputBurstShortfall")  // N=5 <= K·C = 8
+	absent(t, r, "RotationSpansNextWindow")   // 25m < idle gap 22h30m
 }
 
 // TestDeriveShortWindowDeadlineBoundView pins what the pre-#212 model reported for
-// the same schedule: feeding the force-kill deadline back in as the estimate
-// reproduces C = 1 and all three layer-2 warnings. It is the before/after contrast
-// that makes the split visible, and it guards against t_rot leaking back into
-// layer 2.
+// the same schedule: feeding a force-kill-deadline-sized drainEstimate back in
+// collapses t_rot_est to ≈24h and reproduces C = 1 and all three layer-2 warnings.
+// It is the before/after contrast that makes the split visible, and it guards
+// against the deadline bound leaking back into layer 2. Under the #220 forecast the
+// estimate no longer equals t_rot exactly (buffer and readyTimeout are deadline-side
+// only), so this pins the collapsed C and findings, not an equality.
 func TestDeriveShortWindowDeadlineBoundView(t *testing.T) {
 	in := baseAuto()
 	in.E = 20 * 24 * time.Hour
 	in.TGP = 24 * time.Hour
-	in.DrainEstimate = new(24 * time.Hour) // estimate == deadline: the old model
+	in.DrainEstimate = new(24 * time.Hour) // estimate == force-kill deadline: the old model
 	in.P = 6 * 24 * time.Hour
 	in.WindowLen = 90 * time.Minute
 	in.IdleGap = new(22*time.Hour + 30*time.Minute)
 	in.NodeCount = 3
 
 	r := Derive(in)
-	if r.TRotEst != r.TRot {
-		t.Fatalf("TRotEst = %v, want it to equal TRot %v", r.TRotEst, r.TRot)
+	if want := 24*time.Hour + 5*time.Minute; r.TRotEst != want { // provisioning 5m + drain 24h
+		t.Fatalf("TRotEst = %v, want %v", r.TRotEst, want)
 	}
 	if r.C != 1 {
 		t.Fatalf("C = %d, want 1", r.C)
 	}
 	has(t, r, "ThroughputBelowArrival", Warn)
 	has(t, r, "ThroughputBurstShortfall", Warn) // N=3 > K·C = 2
-	has(t, r, "RotationSpansNextWindow", Warn)  // 24h27m > idle gap 22h30m
+	has(t, r, "RotationSpansNextWindow", Warn)  // denom 24h15m > idle gap 22h30m
 }
 
 // TestDeriveRotationSpansNextWindow pins D3 (issue #211). The gate a rotation
@@ -367,7 +372,7 @@ func TestDeriveShortWindowDeadlineBoundView(t *testing.T) {
 // occurrence — and the check is a strict `denom > idleGap`: a gate that frees
 // exactly as the next occurrence opens does not consume it.
 func TestDeriveRotationSpansNextWindow(t *testing.T) {
-	in := pinnedEstimate() // denom = tRot 90m + cooldown 10m = 100m
+	in := pinnedEstimate() // denom = t_rot_est 90m + cooldown 10m = 100m
 
 	in.IdleGap = new(99 * time.Minute)
 	has(t, Derive(in), "RotationSpansNextWindow", Warn)
@@ -452,15 +457,18 @@ func TestDeriveNoWindowsFatal(t *testing.T) {
 	has(t, Derive(in), "NoWindows", Fatal)
 }
 
-// pinnedEstimate is baseAuto with tGP and drainEstimate pinned together so
-// t_rot == t_rot_est and denom stays 100m regardless of DrainEstimateDefault
-// *or* Buffer. Tests about the layer-2 *checks* rather than about the estimate
-// itself use it, so a future change to either constant cannot silently move
-// their thresholds.
+// pinnedEstimate is baseAuto with both forecast terms pinned explicitly so
+// t_rot_est stays 90m and denom stays 100m regardless of ProvisioningEstimateDefault,
+// DrainEstimateDefault *or* Buffer. Tests about the layer-2 *checks* rather than about
+// the estimates themselves use it, so a future change to any of those constants
+// cannot silently move their thresholds. tGP is raised to 75m so the pinned 75m
+// drainEstimate is not clamped (readyTimeout stays 15m so the pinned 15m
+// provisioningEstimate sits exactly at its cap, un-clamped).
 func pinnedEstimate() Inputs {
 	in := baseAuto()
-	in.TGP = 73 * time.Minute                // t_rot = readyTimeout 15m + 73m + Buffer 2m = 90m
-	in.DrainEstimate = new(73 * time.Minute) // == tGP, so t_rot_est == t_rot; denom = 90m + cooldown 10m = 100m
+	in.TGP = 75 * time.Minute
+	in.ProvisioningEstimate = new(15 * time.Minute) // == readyTimeout, no clamp
+	in.DrainEstimate = new(75 * time.Minute)        // == tGP, no clamp; t_rot_est = 15m + 75m = 90m, denom = 100m
 	return in
 }
 
@@ -483,7 +491,7 @@ var layer1Codes = map[string]bool{
 // the package emits (see TestFindingCodesAreClassified).
 var forecastCodes = map[string]bool{
 	"ThroughputBelowArrival": true, "ThroughputBurstShortfall": true, "RotationSpansNextWindow": true,
-	"DrainEstimateAboveTGP": true,
+	"DrainEstimateAboveTGP": true, "ProvisioningEstimateAboveReadyTimeout": true,
 }
 
 func layer1Set(r Result) map[string]Severity {
@@ -584,6 +592,114 @@ func TestResolveDrainEstimate(t *testing.T) {
 	}
 }
 
+func TestResolveProvisioningEstimate(t *testing.T) {
+	tests := []struct {
+		name         string
+		readyTimeout time.Duration
+		cfg          *time.Duration
+		want         time.Duration
+		wantWarn     bool
+	}{
+		{"unset falls back to the default", 15 * time.Minute, nil, 5 * time.Minute, false},
+		{"unset clamps to a tighter readyTimeout", 3 * time.Minute, nil, 3 * time.Minute, false},
+		{"explicit below readyTimeout is kept", 15 * time.Minute, new(2 * time.Minute), 2 * time.Minute, false},
+		{"explicit equal to readyTimeout is kept", 15 * time.Minute, new(15 * time.Minute), 15 * time.Minute, false},
+		{"explicit above readyTimeout warns and clamps", 15 * time.Minute, new(20 * time.Minute), 15 * time.Minute, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, fs := resolveProvisioningEstimate(tc.readyTimeout, tc.cfg)
+			if got != tc.want {
+				t.Errorf("estimate = %v, want %v", got, tc.want)
+			}
+			warned := false
+			for _, f := range fs {
+				if f.Code == "ProvisioningEstimateAboveReadyTimeout" {
+					warned = true
+					if f.Severity != Warn {
+						t.Errorf("ProvisioningEstimateAboveReadyTimeout severity = %v, want Warn", f.Severity)
+					}
+				}
+			}
+			if warned != tc.wantWarn {
+				t.Errorf("ProvisioningEstimateAboveReadyTimeout present = %v, want %v", warned, tc.wantWarn)
+			}
+		})
+	}
+}
+
+// TestDeriveProvisioningEstimateContainment is the #220 safety argument, pinned the
+// same way TestDeriveDrainEstimateContainment pins drainEstimate (ADR-0003):
+// provisioningEstimate reaches the forecast side and nothing else. Holding every other
+// input fixed, TRot / A / G and the ENTIRE layer-1 finding set must be invariant under
+// any provisioningEstimate — so a wrong estimate can never make a node race its own
+// Forceful Expiration. Only C, TRotEst, ProvisioningEstimate and the forecast-side
+// ProvisioningEstimateAboveReadyTimeout warning may move.
+func TestDeriveProvisioningEstimateContainment(t *testing.T) {
+	base := baseAuto()
+	base.TGP = 24 * time.Hour            // stock Auto Mode; drainEstimate resolves to 10m
+	base.NodeCount = 3                   //
+	base.RetryBackoff = 10 * time.Minute // < readyTimeout 15m → RetryBackoffShort (non-empty layer 1)
+
+	ref := Derive(base) // nil provisioningEstimate → min(readyTimeout 15m, 5m) = 5m
+	refLayer1 := layer1Set(ref)
+	if len(refLayer1) == 0 {
+		t.Fatal("precondition: the layer-1 reference set must be non-empty, else invariance is vacuous")
+	}
+
+	// denom = provisioningEstimate + drainEstimate 10m + cooldown 10m; C = ceil(240m / denom).
+	cases := []struct {
+		name     string
+		cfg      *time.Duration
+		wantProv time.Duration
+		wantC    int
+		wantAbv  bool // ProvisioningEstimateAboveReadyTimeout expected
+	}{
+		{"unset", nil, 5 * time.Minute, 10, false},                                       // denom 25m
+		{"1m", new(time.Minute), time.Minute, 12, false},                                 // denom 21m
+		{"5m", new(5 * time.Minute), 5 * time.Minute, 10, false},                         // denom 25m
+		{"15m equals readyTimeout", new(15 * time.Minute), 15 * time.Minute, 7, false},   // denom 35m
+		{"20m clamps to readyTimeout", new(20 * time.Minute), 15 * time.Minute, 7, true}, // denom 35m
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := base
+			in.ProvisioningEstimate = tc.cfg
+			r := Derive(in)
+
+			// Invariant: the deadline side.
+			if r.TRot != ref.TRot {
+				t.Errorf("TRot = %v, want %v (must not depend on provisioningEstimate)", r.TRot, ref.TRot)
+			}
+			if r.A != ref.A {
+				t.Errorf("A = %v, want %v (must not depend on provisioningEstimate)", r.A, ref.A)
+			}
+			if r.G != ref.G {
+				t.Errorf("G = %d, want %d (must not depend on provisioningEstimate)", r.G, ref.G)
+			}
+			if got := layer1Set(r); !reflect.DeepEqual(got, refLayer1) {
+				t.Errorf("layer-1 findings = %v, want %v (must not depend on provisioningEstimate)", got, refLayer1)
+			}
+
+			// Variant: the forecast side.
+			if r.ProvisioningEstimate != tc.wantProv {
+				t.Errorf("ProvisioningEstimate = %v, want %v", r.ProvisioningEstimate, tc.wantProv)
+			}
+			if want := tc.wantProv + 10*time.Minute; r.TRotEst != want { // + drainEstimate 10m
+				t.Errorf("TRotEst = %v, want %v", r.TRotEst, want)
+			}
+			if r.C != tc.wantC {
+				t.Errorf("C = %d, want %d", r.C, tc.wantC)
+			}
+			if tc.wantAbv {
+				has(t, r, "ProvisioningEstimateAboveReadyTimeout", Warn)
+			} else {
+				absent(t, r, "ProvisioningEstimateAboveReadyTimeout")
+			}
+		})
+	}
+}
+
 // TestDeriveDrainEstimateContainment is the safety argument, pinned as a test
 // (issue #212, ADR-0002): drainEstimate reaches the forecast side and nothing else.
 // Holding every other input fixed, TRot / A / G and the ENTIRE layer-1 finding set
@@ -607,7 +723,7 @@ func TestDeriveDrainEstimateContainment(t *testing.T) {
 		t.Fatal("precondition: the layer-1 reference set must be non-empty, else invariance is vacuous")
 	}
 
-	// C = ceil(WindowLen 240m / (readyTimeout 15m + est + buffer 2m + cooldown 10m))
+	// C = ceil(WindowLen 240m / (provisioningEstimate 5m + est + cooldown 10m))
 	cases := []struct {
 		name    string
 		cfg     *time.Duration
@@ -615,11 +731,11 @@ func TestDeriveDrainEstimateContainment(t *testing.T) {
 		wantC   int
 		wantAbv bool // DrainEstimateAboveTGP expected
 	}{
-		{"unset", nil, 10 * time.Minute, 7, false},                          // denom 37m
-		{"1m", new(time.Minute), time.Minute, 9, false},                     // denom 28m
-		{"10m", new(10 * time.Minute), 10 * time.Minute, 7, false},          // denom 37m
-		{"1h", new(time.Hour), time.Hour, 3, false},                         // denom 87m
-		{"25h clamps to tGP", new(25 * time.Hour), 24 * time.Hour, 1, true}, // denom 24h27m
+		{"unset", nil, 10 * time.Minute, 10, false},                         // denom 25m
+		{"1m", new(time.Minute), time.Minute, 15, false},                    // denom 16m
+		{"10m", new(10 * time.Minute), 10 * time.Minute, 10, false},         // denom 25m
+		{"1h", new(time.Hour), time.Hour, 4, false},                         // denom 75m
+		{"25h clamps to tGP", new(25 * time.Hour), 24 * time.Hour, 1, true}, // denom 24h15m
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -645,7 +761,8 @@ func TestDeriveDrainEstimateContainment(t *testing.T) {
 			if r.DrainEstimate != tc.wantEst {
 				t.Errorf("DrainEstimate = %v, want %v", r.DrainEstimate, tc.wantEst)
 			}
-			if want := in.ReadyTimeout + tc.wantEst + Buffer; r.TRotEst != want {
+			// provisioningEstimate is unset here → min(readyTimeout 15m, default 5m) = 5m.
+			if want := 5*time.Minute + tc.wantEst; r.TRotEst != want {
 				t.Errorf("TRotEst = %v, want %v", r.TRotEst, want)
 			}
 			if r.C != tc.wantC {
@@ -697,11 +814,11 @@ func TestDeriveDrainEstimateContainmentTGPUnset(t *testing.T) {
 // between the two must stay silent.
 func TestDeriveCarryOverUsesEstimate(t *testing.T) {
 	in := baseAuto()
-	in.TGP = 24 * time.Hour // t_rot = 24h17m; t_rot_est = 27m (default estimate)
+	in.TGP = 24 * time.Hour // t_rot = 24h17m; t_rot_est = 15m (default estimates)
 	in.IdleGap = new(12 * time.Hour)
 
 	r := Derive(in)
-	if want := 27 * time.Minute; r.TRotEst != want {
+	if want := 15 * time.Minute; r.TRotEst != want {
 		t.Fatalf("TRotEst = %v, want %v", r.TRotEst, want)
 	}
 	if r.TRot+in.Cooldown <= *in.IdleGap {
@@ -717,14 +834,14 @@ func TestDeriveCarryOverUsesEstimate(t *testing.T) {
 // TestDeriveCeilBoundaryOnEstimate re-pins the #211 ceil boundary on the NEW
 // denominator: D == denom admits exactly one start, D == denom + ε admits two.
 func TestDeriveCeilBoundaryOnEstimate(t *testing.T) {
-	in := baseAuto() // default estimate 10m → t_rot_est 27m, denom = 37m
+	in := baseAuto() // default estimates 5m+10m → t_rot_est 15m, denom = 25m
 	in.IdleGap = nil // keep the carry-over check out of the picture
 
-	in.WindowLen = 37 * time.Minute
+	in.WindowLen = 25 * time.Minute
 	if r := Derive(in); r.C != 1 {
 		t.Errorf("C = %d, want 1 (D == denom exactly)", r.C)
 	}
-	in.WindowLen = 38 * time.Minute
+	in.WindowLen = 26 * time.Minute
 	if r := Derive(in); r.C != 2 {
 		t.Errorf("C = %d, want 2 (ceil must count the near-edge start)", r.C)
 	}
