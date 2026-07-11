@@ -4,6 +4,8 @@
 - Date: 2026-07-10
 - Issue: [#212](https://github.com/AkashiSN/node-rotation-controller/issues/212)
 
+> **Note (2026-07-11, [#215](https://github.com/AkashiSN/node-rotation-controller/issues/215)).** The `Buffer = 15m` figures quoted below predate #215, which right-sized `buffer` to `4·shortRequeue = 2m`. With the new constant the *Rejected alternative*'s layer-2 denominator is `readyTimeout 15m + buffer 2m + cooldownAfter 10m + tGP = 27m + tGP` (not `40m + tGP`), so reaching `C = 2` on a `90m` window needs `tGP < 63m` (not `< 50m`); and on the [§3.2](../../specification/03-design.md#32-candidate-selection) worked schedule `C` goes `1 → 7` and `K·C` goes `2 → 14` (not `1 → 5` / `2 → 10`). The decision is unaffected: it turns on the *"It is unsafe"* ground below — `tGP` censors its own observations and must never be fitted to them — not on the exact throughput margin.
+
 ## Context
 
 The §3.2 derivation collapsed the whole rotation cost into a single quantity, `t_rot = readyTimeout + terminationGracePeriod (tGP) + buffer`, and handed it to two callers with opposite requirements.

@@ -97,10 +97,10 @@ low, and EKS Auto Mode NodePools specifically (where the stock
   a throughput input, and it no longer appears in `C` at all.
 
 Before #212 the model budgeted the full `tGP` in `C`, so on stock Auto Mode
-(`tGP = 24h`, `t_rot ≈ 24.5h`) a 4-hour window computed `C = 1` — and the apparent
+(`tGP = 24h`, `t_rot ≈ 24h17m`) a 4-hour window computed `C = 1` — and the apparent
 remedy was to lower `tGP`. That is no longer how throughput is raised. With the
-default `drainEstimate = min(24h, 10m) = 10m`, `t_rot_est = 40m`, so the same
-4-hour window now computes `C = ceil(4h / (40m + 10m)) = 5` regardless of `tGP`.
+default `drainEstimate = min(24h, 10m) = 10m`, `t_rot_est = 27m`, so the same
+4-hour window now computes `C = ceil(4h / (27m + 10m)) = 7` regardless of `tGP`.
 
 **Raising throughput.** `C` is forecast from `surge.drainEstimate` (expected
 healthy drain), not from `terminationGracePeriod` (the force-kill deadline). If
