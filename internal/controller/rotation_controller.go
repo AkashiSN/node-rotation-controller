@@ -1006,10 +1006,7 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 	// Single pool update (last): the inter-attempt pause anchor + the gate release.
 	if err := r.patchPool(ctx, pool, func(m map[string]string) {
 		m[annotations.LastFailureAt] = rfc3339(r.now())
-		delete(m, annotations.ActiveRotation)
-		delete(m, annotations.ActiveRotationState)
-		delete(m, annotations.DrainingAt)
-		delete(m, annotations.RotationMode)
+		clearRotationAnchorFields(m)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1082,10 +1079,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	// §4.4 pause is never voided, then release the gate.
 	if err := r.patchPool(ctx, pool, func(m map[string]string) {
 		m[annotations.LastFailureAt] = maxRFC3339(m[annotations.LastFailureAt], cand.Annotations[annotations.FailedAt])
-		delete(m, annotations.ActiveRotation)
-		delete(m, annotations.ActiveRotationState)
-		delete(m, annotations.DrainingAt)
-		delete(m, annotations.RotationMode)
+		clearRotationAnchorFields(m)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1150,11 +1144,7 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 		}
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
 			m[annotations.LastRotationAt] = rfc3339(r.now())
-			delete(m, annotations.ActiveRotation)
-			delete(m, annotations.ActiveRotationState)
-			delete(m, annotations.DrainingAt)
-			delete(m, annotations.SurgeWait)
-			delete(m, annotations.RotationMode)
+			clearRotationAnchorFields(m)
 		}); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -1630,13 +1620,22 @@ func (r *RotationReconciler) reapUngovernedRotation(ctx context.Context, pool *k
 }
 
 func (r *RotationReconciler) clearAnchor(ctx context.Context, pool *karpv1.NodePool) error {
-	return r.patchPool(ctx, pool, func(m map[string]string) {
-		delete(m, annotations.ActiveRotation)
-		delete(m, annotations.ActiveRotationState)
-		delete(m, annotations.DrainingAt)
-		delete(m, annotations.SurgeWait)
-		delete(m, annotations.RotationMode)
-	})
+	return r.patchPool(ctx, pool, clearRotationAnchorFields)
+}
+
+// clearRotationAnchorFields deletes every NodePool annotation scoped to a single
+// in-flight rotation. It is the ONE place the anchor's field set is enumerated, so
+// the success clear (completeOrAbort), the two failure clears (failPending and
+// advanceFailed's torn-write repair) and the abort/reap clear (clearAnchor) can
+// never drift — a field added to the anchor is cleared on every end path by
+// editing this alone. It leaves the post-rotation anchors last-rotation-at /
+// last-failure-at untouched; the caller writes those in the same update.
+func clearRotationAnchorFields(m map[string]string) {
+	delete(m, annotations.ActiveRotation)
+	delete(m, annotations.ActiveRotationState)
+	delete(m, annotations.DrainingAt)
+	delete(m, annotations.SurgeWait)
+	delete(m, annotations.RotationMode)
 }
 
 // patchPool applies an idempotent annotation mutation to the NodePool with

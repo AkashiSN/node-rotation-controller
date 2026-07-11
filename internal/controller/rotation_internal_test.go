@@ -531,11 +531,14 @@ func TestReadyTimeoutFailsAndReaps(t *testing.T) {
 	// surge claim created after started-at, never registered a node → reapable.
 	surgeClaim := testClaim("nc-new", 0, ncCreated(testNow.Add(-10*time.Minute)))
 	surgeClaim.Status.NodeName = ""
-	// draining-at is not normally present on a pending timeout; seed it to lock the
-	// invariant that failPending clears it alongside the anchor on every end path.
+	// draining-at and surge-wait are not normally present on a pending timeout; seed
+	// them to lock the invariant that failPending clears every anchor-scoped field
+	// alongside the anchor on every end path (surge-wait can survive a crash after
+	// the pending → draining pool patch but before the claim's state write, #228).
 	pool := withTGP(testNodePool(map[string]string{
 		annotations.ActiveRotation: "nc-old",
 		annotations.DrainingAt:     rfc(testNow.Add(-5 * time.Minute)),
+		annotations.SurgeWait:      (90 * time.Second).String(),
 	}))
 	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
 	ph := placeholderPod("", corev1.PodPending)
@@ -559,6 +562,9 @@ func TestReadyTimeoutFailsAndReaps(t *testing.T) {
 	}
 	if p.Annotations[annotations.DrainingAt] != "" {
 		t.Error("draining-at must be cleared on the failPending path")
+	}
+	if p.Annotations[annotations.SurgeWait] != "" {
+		t.Error("surge-wait must be cleared on the failPending path")
 	}
 	if p.Annotations[annotations.LastFailureAt] == "" {
 		t.Error("last-failure-at must be stamped")
@@ -1227,6 +1233,7 @@ func TestFailedTornWriteRepairReleasesAnchorAndPreservesPause(t *testing.T) {
 		annotations.ActiveRotation: "nc-old",
 		annotations.LastFailureAt:  rfc(testNow.Add(-1 * time.Hour)),   // stale, older than failed-at
 		annotations.DrainingAt:     rfc(testNow.Add(-5 * time.Minute)), // defensive-invariant seed
+		annotations.SurgeWait:      (90 * time.Second).String(),        // defensive-invariant seed (#228)
 	}))
 	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false))
 
@@ -1241,6 +1248,9 @@ func TestFailedTornWriteRepairReleasesAnchorAndPreservesPause(t *testing.T) {
 	}
 	if p.Annotations[annotations.DrainingAt] != "" {
 		t.Error("draining-at must be cleared on the advanceFailed torn-repair path")
+	}
+	if p.Annotations[annotations.SurgeWait] != "" {
+		t.Error("surge-wait must be cleared on the advanceFailed torn-repair path")
 	}
 	if got, want := p.Annotations[annotations.LastFailureAt], rfc(testNow.Add(-5*time.Minute)); got != want {
 		t.Errorf("last-failure-at must advance to max(existing, failed-at): got %q, want %q", got, want)
