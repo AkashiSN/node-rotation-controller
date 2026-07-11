@@ -13,11 +13,11 @@ import (
 
 // The surge-less fallback triggers on a STRICT inequality, deadline − now < t_rot
 // (spec §3.3). With testPolicy's default readyTimeout (15m) and withTGP's
-// terminationGracePeriod (30m) plus schedule.Buffer (15m), t_rot is exactly 1h
+// terminationGracePeriod (30m) plus schedule.Buffer (2m), t_rot is exactly 47m
 // across this file, so a candidate's gap can be positioned on either side of the
 // boundary — and on it.
 const (
-	ffTRot        = time.Hour
+	ffTRot        = 47 * time.Minute
 	ffClaimExpire = 14 * 24 * time.Hour
 )
 
@@ -28,10 +28,10 @@ func ffEnabledPolicy() *policy.Policy {
 	return p
 }
 
-// ffResolved is a resolved whose t_rot is readyTimeout + drainBound = 1h, matching
-// what resolve() derives for testPolicy over a withTGP NodePool.
+// ffResolved is a resolved whose t_rot is readyTimeout + drainBound = 47m, matching
+// what resolve() derives for testPolicy over a withTGP NodePool (tGP 30m + Buffer 2m).
 func ffResolved(pol *policy.Policy) resolved {
-	return resolved{pol: pol, readyTimeout: 15 * time.Minute, drainBound: 45 * time.Minute}
+	return resolved{pol: pol, readyTimeout: 15 * time.Minute, drainBound: 32 * time.Minute}
 }
 
 // ffClaim builds a candidate whose Forceful Expiration deadline sits gap after

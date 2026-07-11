@@ -28,7 +28,7 @@ func hasFinding(findings []schedule.Finding, code string) bool {
 // TestDerivedThresholdsPopulatesThroughputInputs covers issue #36: derivedThresholds
 // must feed the layer-2 throughput inputs (WindowLen D, NodeCount N) into
 // schedule.Derive, not leave them at zero. The real 23h59m window yields
-// C = ceil(23h59m / (t_rot_est 40m + cooldown 10m)) = 29; a zero WindowLen (the
+// C = ceil(23h59m / (t_rot_est 27m + cooldown 10m)) = 39; a zero WindowLen (the
 // pre-fix state) collapses C and silences every layer-2 check, proving the input
 // is load-bearing. A/G are unaffected by these layer-2 inputs.
 func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
@@ -44,14 +44,14 @@ func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 	}
 
 	got := r.derivedThresholds(pool, res, p, d, &gap, 3)
-	if got.A != 287*time.Hour {
-		t.Errorf("A: got %v, want 287h", got.A)
+	if want := 287*time.Hour + 13*time.Minute; got.A != want {
+		t.Errorf("A: got %v, want %v", got.A, want)
 	}
 	if got.G != 2 {
 		t.Errorf("G: got %d, want 2", got.G)
 	}
-	if got.C != 29 {
-		t.Errorf("C: got %d, want 29 (ceil(23h59m / 50m))", got.C)
+	if got.C != 39 {
+		t.Errorf("C: got %d, want 39 (ceil(23h59m / 37m))", got.C)
 	}
 
 	// Regression guard: the pre-fix WindowLen=0 drives C to zero, which layer 2
@@ -68,8 +68,8 @@ func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 
 // TestDerivedThresholdsPassesIdleGap covers the issue #211 wiring: the carry-over
 // check fires only when the reconciler supplies the schedule's shortest idle gap.
-// The 23h59m daily window closes for one minute, which the 50m forecast denominator
-// (t_rot_est 40m + cooldown 10m) plainly spans; a nil gap (a continuously-open
+// The 23h59m daily window closes for one minute, which the 37m forecast denominator
+// (t_rot_est 27m + cooldown 10m) plainly spans; a nil gap (a continuously-open
 // window, where nothing can carry into a "next" occurrence) must silence the check
 // instead.
 func TestDerivedThresholdsPassesIdleGap(t *testing.T) {
@@ -83,7 +83,7 @@ func TestDerivedThresholdsPassesIdleGap(t *testing.T) {
 
 	got := r.derivedThresholds(pool, res, p, d, &gap, 3)
 	if !hasFinding(got.Findings, "RotationSpansNextWindow") {
-		t.Errorf("RotationSpansNextWindow expected: t_rot_est 40m + cooldown 10m > idle gap %v; findings=%+v", gap, got.Findings)
+		t.Errorf("RotationSpansNextWindow expected: t_rot_est 27m + cooldown 10m > idle gap %v; findings=%+v", gap, got.Findings)
 	}
 
 	none := r.derivedThresholds(pool, res, p, d, nil, 3)
@@ -111,7 +111,7 @@ func TestDerivedThresholdsPassesDrainEstimate(t *testing.T) {
 	if want := 10 * time.Minute; unset.DrainEstimate != want {
 		t.Errorf("unset: DrainEstimate = %v, want %v (min(tGP 30m, default 10m))", unset.DrainEstimate, want)
 	}
-	if want := 40 * time.Minute; unset.TRotEst != want {
+	if want := 27 * time.Minute; unset.TRotEst != want {
 		t.Errorf("unset: TRotEst = %v, want %v", unset.TRotEst, want)
 	}
 
@@ -137,7 +137,7 @@ func TestDerivedThresholdsPassesDrainEstimate(t *testing.T) {
 }
 
 // templateE is the representative NodePool template expireAfter used across the
-// observe tests; with leadTime 49h it yields A = 336h − 49h = 287h, G = 2.
+// observe tests; with leadTime 48h47m it yields A = 336h − 48h47m = 287h13m, G = 2.
 const templateE = 14 * 24 * time.Hour
 
 // withExpireAfter stamps the NodePool template's representative expireAfter so the
@@ -150,8 +150,8 @@ func withExpireAfter(p *karpv1.NodePool) *karpv1.NodePool {
 
 // TestObserveIdlePoolGauges asserts the §4.2 reconcile-time gauges for a pool
 // with no in-flight rotation. With withTGP, t_rot = readyTimeout 15m + tGP 30m +
-// buffer 15m = 1h; the all-week window gives P = 24h; K = 2 ⇒ leadTime = 49h.
-// Template E = 14d = 336h ⇒ A = 287h, G = 2.
+// buffer 2m = 47m; the all-week window gives P = 24h; K = 2 ⇒ leadTime = 48h47m.
+// Template E = 14d = 336h ⇒ A = 287h13m, G = 2.
 func TestObserveIdlePoolGauges(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	cand := testClaim("nc-cand", 20*24*time.Hour, ncNode(candNode)) // eligible
@@ -188,8 +188,8 @@ func TestObserveIdlePoolGauges(t *testing.T) {
 	if o.WindowPeriod != 24*time.Hour {
 		t.Errorf("window-period: got %v, want 24h", o.WindowPeriod)
 	}
-	if o.AgeThreshold != 287*time.Hour {
-		t.Errorf("age-threshold: got %v, want 287h", o.AgeThreshold)
+	if want := 287*time.Hour + 13*time.Minute; o.AgeThreshold != want {
+		t.Errorf("age-threshold: got %v, want %v", o.AgeThreshold, want)
 	}
 	if o.RotationChances != 2 {
 		t.Errorf("rotation-chances: got %d, want 2", o.RotationChances)
@@ -221,7 +221,7 @@ func TestReconcileForgetsDeletedPool(t *testing.T) {
 }
 
 // TestObserveShortLeadNodes counts claims whose own expireAfter can no longer
-// guarantee K chances (per-node A ≤ 0; §3.2 layer 3). leadTime = 49h here.
+// guarantee K chances (per-node A ≤ 0; §3.2 layer 3). leadTime = 48h47m here.
 func TestObserveShortLeadNodes(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	short := testClaim("nc-short", 1*24*time.Hour) // expireAfter set below
@@ -238,7 +238,7 @@ func TestObserveShortLeadNodes(t *testing.T) {
 }
 
 // TestObserveDrainStuckAndInProgress: an anchored, draining rotation whose old
-// NodeClaim has been deleting past the drain bound (tGP 30m + buffer 15m = 45m).
+// NodeClaim has been deleting past the drain bound (tGP 30m + buffer 2m = 32m).
 func TestObserveDrainStuckAndInProgress(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(map[string]string{
 		annotations.ActiveRotation:      "nc-old",
@@ -246,7 +246,7 @@ func TestObserveDrainStuckAndInProgress(t *testing.T) {
 	})))
 	old := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
 		ncAnn(annotations.State, annotations.StateDraining))
-	dt := metav1.NewTime(testNow.Add(-2 * time.Hour)) // > 45m bound
+	dt := metav1.NewTime(testNow.Add(-2 * time.Hour)) // > 32m bound
 	old.DeletionTimestamp = &dt
 	node := testK8sNode(candNode, true, nil, false)
 

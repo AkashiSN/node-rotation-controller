@@ -94,10 +94,10 @@
   なく、`C` にはもはや一切現れない。
 
 #212 以前はモデルが `C` に `tGP` 全量を見込んでいたため、素の Auto Mode
-（`tGP = 24h`、`t_rot ≈ 24.5h`）では 4 時間ウィンドウが `C = 1` を計算し、見かけ上の対処は
+（`tGP = 24h`、`t_rot ≈ 24h17m`）では 4 時間ウィンドウが `C = 1` を計算し、見かけ上の対処は
 `tGP` を下げることだった。もはやそれはスループットの上げ方ではない。既定の
-`drainEstimate = min(24h, 10m) = 10m` では `t_rot_est = 40m` となり、同じ 4 時間ウィンドウは
-`tGP` によらず `C = ceil(4h / (40m + 10m)) = 5` を計算する。
+`drainEstimate = min(24h, 10m) = 10m` では `t_rot_est = 27m` となり、同じ 4 時間ウィンドウは
+`tGP` によらず `C = ceil(4h / (27m + 10m)) = 7` を計算する。
 
 **スループットを上げる。** `C` は `terminationGracePeriod`（強制 kill の deadline）ではなく
 `surge.drainEstimate`（期待される健全な drain）から予測される。`C` が低すぎるように見えるなら、
