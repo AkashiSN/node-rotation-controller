@@ -131,6 +131,11 @@ func TestLifecycleStartToComplete(t *testing.T) {
 	if p.Annotations[annotations.DrainingAt] == "" {
 		t.Fatal("step 2: draining-at must be stamped at pending → draining")
 	}
+	// surge-wait is stamped write-once in the same update, carrying the surge phase
+	// (2m of chained wall time) forward to the completion line (#228).
+	if got := p.Annotations[annotations.SurgeWait]; got != "2m0s" {
+		t.Fatalf("step 2: surge-wait must be stamped with the surge-phase duration at pending → draining: got %q, want 2m0s", got)
+	}
 	if n := getNodeObj(t, r, surgeNode); n.Annotations[annotations.SurgeFor] != "nc-old" {
 		t.Fatalf("step 2: surge target must be frozen with the rotation marker: %+v", n.Annotations)
 	}
@@ -154,6 +159,9 @@ func TestLifecycleStartToComplete(t *testing.T) {
 	}
 	if p.Annotations[annotations.DrainingAt] != "" {
 		t.Error("step 3: draining-at must be cleared on completion")
+	}
+	if p.Annotations[annotations.SurgeWait] != "" {
+		t.Error("step 3: surge-wait must be cleared with the anchor on completion")
 	}
 	if p.Annotations[annotations.LastRotationAt] == "" {
 		t.Error("step 3: last-rotation-at must be stamped on success")

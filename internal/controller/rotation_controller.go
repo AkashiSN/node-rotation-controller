@@ -849,6 +849,11 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 		m[annotations.ActiveRotationState] = annotations.StateDraining
 		if m[annotations.DrainingAt] == "" {
 			m[annotations.DrainingAt] = rfc3339(r.now())
+			// Carry surge_wait forward write-once alongside draining-at: the old
+			// NodeClaim (and its started-at) is deleted just below, so completion —
+			// a different reconcile pass — could not otherwise recover it to report
+			// the whole rotation's total = surge_wait + drain (#228, spec §5.3).
+			m[annotations.SurgeWait] = surgeWait.String()
 		}
 	}); err != nil {
 		return ctrl.Result{}, err
@@ -1107,6 +1112,9 @@ func (r *RotationReconciler) advanceExpired(ctx context.Context, pool *karpv1.No
 // gone. The mirror decides the outcome: draining → success + cooldown; absent →
 // expired + alert, no cooldown (spec §5.2).
 func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.NodePool, name string) (ctrl.Result, error) {
+	// Recover the surge node for the completion line BEFORE unfreezeNodes strips its
+	// surge-for marker (#228). "" on the surge-less forceful-fallback path.
+	surgeNode := r.surgeHostFor(ctx, name)
 	if err := r.deletePlaceholder(ctx, name); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1122,15 +1130,30 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 		// erases them, but observe the histogram and log only after it lands.
 		drain, hasDrain := time.Duration(0), false
 		kv := []any{"nodeclaim", name, "mode", rotationMode(pool)}
+		if surgeNode != "" {
+			kv = append(kv, "surgeNode", surgeNode)
+		}
+		// surge_wait was carried forward from the transition (#228); absent on the
+		// surge-less forceful-fallback path, which has no surge phase.
+		surgeWait, hasSurgeWait := parseDuration(pool.Annotations[annotations.SurgeWait])
+		if hasSurgeWait {
+			kv = append(kv, "surgeWait", surgeWait.Round(time.Second).String())
+		}
 		if drainingAt, ok := parseTime(pool.Annotations[annotations.DrainingAt]); ok {
 			drain, hasDrain = r.now().Sub(drainingAt), true
 			kv = append(kv, "drain", drain.Round(time.Second).String())
+		}
+		// total = surge_wait + drain: the whole rotation on one line, but only when
+		// both phases are known — never a partial sum mislabelled as the total.
+		if hasSurgeWait && hasDrain {
+			kv = append(kv, "total", (surgeWait + drain).Round(time.Second).String())
 		}
 		if err := r.patchPool(ctx, pool, func(m map[string]string) {
 			m[annotations.LastRotationAt] = rfc3339(r.now())
 			delete(m, annotations.ActiveRotation)
 			delete(m, annotations.ActiveRotationState)
 			delete(m, annotations.DrainingAt)
+			delete(m, annotations.SurgeWait)
 			delete(m, annotations.RotationMode)
 		}); err != nil {
 			return ctrl.Result{}, err
@@ -1611,6 +1634,7 @@ func (r *RotationReconciler) clearAnchor(ctx context.Context, pool *karpv1.NodeP
 		delete(m, annotations.ActiveRotation)
 		delete(m, annotations.ActiveRotationState)
 		delete(m, annotations.DrainingAt)
+		delete(m, annotations.SurgeWait)
 		delete(m, annotations.RotationMode)
 	})
 }
@@ -1698,6 +1722,32 @@ func (r *RotationReconciler) unfreezeNodes(ctx context.Context, claimName string
 		}
 	}
 	return nil
+}
+
+// surgeHostFor returns the surge target node still carrying this rotation's
+// surge-for marker, for the self-contained completion line (#228). Callers must
+// invoke it BEFORE unfreezeNodes, which strips the marker. On the success path
+// the old node's NodeClaim has finalized away with its Node, so the surge target
+// is the sole marked node; it returns "" when none survives (the surge-less
+// forceful-fallback path, or already swept) and "" — rather than a guess — if
+// more than one node is still marked, since this decorates a log line and must
+// never fail a completion or name the wrong node.
+func (r *RotationReconciler) surgeHostFor(ctx context.Context, claimName string) string {
+	var nodes corev1.NodeList
+	if err := r.List(ctx, &nodes); err != nil {
+		return ""
+	}
+	host := ""
+	for i := range nodes.Items {
+		if nodes.Items[i].Annotations[annotations.SurgeFor] != claimName {
+			continue
+		}
+		if host != "" {
+			return "" // ambiguous (old node still marked) — omit rather than guess
+		}
+		host = nodes.Items[i].Name
+	}
+	return host
 }
 
 func (r *RotationReconciler) deletePlaceholder(ctx context.Context, claimName string) error {
@@ -1793,6 +1843,17 @@ func parseInt(s string) int {
 		return 0
 	}
 	return n
+}
+
+// parseDuration parses a Go duration string (as time.Duration.String() emits),
+// reporting false on an absent or malformed value so an unset surge-wait anchor
+// simply omits the completion line's total rather than reporting a zero (#228).
+func parseDuration(s string) (time.Duration, bool) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, false
+	}
+	return d, true
 }
 
 // maxRFC3339 returns the later of two RFC3339 timestamps, formatted; an

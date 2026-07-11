@@ -203,7 +203,7 @@ sequenceDiagram
     end
     PH-->>C: Running on a Ready host (not the candidate) = surge_ready
     C->>New: freeze surge target
-    C->>NP: active-rotation-state=draining, draining-at
+    C->>NP: active-rotation-state=draining, draining-at, surge-wait
     C->>Old: state=draining, delete NodeClaim
     K->>Old: graceful drain via termination controller (Eviction API, PDBs apply)
     Old-->>New: evicted pods reschedule onto the reserved capacity

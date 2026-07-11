@@ -81,7 +81,7 @@ best-effort narration of it, not a ledger.
 | `surge node ready` | `surgeNode`, `surgeWait` |
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
-| `rotation complete` | `mode`, `drain` |
+| `rotation complete` | `mode`, `drain`; on the surge path also `surgeNode`, `surgeWait`, and `total` (= `surgeWait` + `drain`) — the whole rotation on one self-contained line, so auditing it end-to-end needs no join back to the `surge node ready` line emitted in an earlier pass. `surgeWait` is carried forward on the NodePool `surge-wait` anchor (§5.3); `surgeNode` is recovered from the surge target's `surge-for` marker before unfreeze. All three are absent on the surge-less forceful-fallback path, which has no surge phase |
 
 Two of these describe **level-triggered** conditions rather than edges — the
 reconcile re-evaluates them every pass — so they carry the same transition dedup
