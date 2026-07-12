@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -140,6 +141,17 @@ func (r *RotationPolicyStatusReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 	target.Status = desired
 	if err := r.Status().Update(ctx, &target); err != nil {
+		// A conflict is benign: another reconcile (the NodePool anchor flips in
+		// bursts during a rotation, firing this status-only reconciler concurrently)
+		// already superseded this version. The status is purely observational and
+		// self-heals on the requeue's fresh recompute, so treat it as a silent
+		// requeue rather than a reconcile error — controller-runtime logs any
+		// returned error at ERROR + stack trace, and this controller's ERROR channel
+		// must stay meaningful. Mirrors the anchor write in rotation_controller.go
+		// (spec §5.2/§5.4, #236).
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{RequeueAfter: shortRequeue}, nil
+		}
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
