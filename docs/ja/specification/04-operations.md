@@ -26,12 +26,15 @@
 | `noderotation_freeze_until_timestamp` | Gauge | `nodepool` | 凍結期限 Unix 時刻（0 = 凍結なし）|
 | `noderotation_age_threshold_seconds` | Gauge | `nodepool` | 導出された `ageThreshold`（§3.2）|
 | `noderotation_rotation_chances` | Gauge | `nodepool` | 導出閾値での保証ローテーション回数 `G` |
+| `noderotation_throughput_capacity` | Gauge | `nodepool` | レイヤ 2 スループット予測 `C` — ウィンドウ出現あたりのローテーション開始数（§3.2 レイヤ 2）。これを出すことで `ThroughputBelowArrival`/`ThroughputBurstShortfall` の finding を capacity 側の入力まで辿れる（到着側 `N` はノード数で、kube-state/Karpenter 由来。`noderotation_*` 系列ではない）|
+| `noderotation_t_rot_estimate_seconds` | Gauge | `nodepool` | 予測サービス時間 `t_rot_est = provisioningEstimate + drainEstimate` — 健全なローテーションに要する時間。`C` を生むレイヤ 2 の分母（ADR-0003）|
+| `noderotation_t_rot_bound_seconds` | Gauge | `nodepool` | デッドライン側のローテーション所要時間上界 `t_rot = readyTimeout + tGP + buffer` — 試行開始から surge 待ち + 強制完了 drain まで。`leadTime`/`short_lead` と forceful-fallback デッドラインレースに効く。`drain_stuck` の境界（旧 NodeClaim の `deletionTimestamp` 起点の `tGP + buffer`）とは**別物** |
 | `noderotation_window_period_seconds` | Gauge | `nodepool` | スケジュール和集合の最悪ウィンドウ周期 `P` |
 | `noderotation_short_lead_nodes` | Gauge | `nodepool` | **自身の** `spec.expireAfter` ではもはや `K` 回を保証できない NodeClaim 数（ノード単位の `A ≤ 0`、§3.2 レイヤ 3）|
 | `noderotation_drain_stuck` | Gauge | `nodepool` | 0/1: 進行中ローテーションの drain が `tGP + buffer` を超過（§5.2）|
 | `noderotation_retry_count` | Gauge | `nodepool` | その NodePool の NodeClaim 群における `noderotation.io/retry-count`（§5.3）の最大値（無ければ 0）— 系統的失敗のシグナル。annotation だけでは Prometheus アラートの入力にならない |
 
-> **ラベルに関する注記。** per-NodePool のメンテナンスウィンドウ（各 NodePool が自身の統治 `RotationPolicy` を解決する、§5.4）により、`noderotation_window_period_seconds` と `noderotation_window_active` はいずれも**意味を持つ** `nodepool` ラベルを持つ — ポリシーが異なる `maintenanceWindows` を持てば `P` とウィンドウ*への所属* はプール間で異なりうる。`noderotation_age_threshold_seconds` と `noderotation_rotation_chances` も同様に NodePool ごとに値が変わる（各プールの代表 `expireAfter`/`terminationGracePeriod` *と* そのポリシーの `K` を畳み込むため）。これは、単一のクラスタ共通ウィンドウがこれらの系列をプール間で同一にしていた以前の草案の v1 簡略化を解消する。
+> **ラベルに関する注記。** per-NodePool のメンテナンスウィンドウ（各 NodePool が自身の統治 `RotationPolicy` を解決する、§5.4）により、`noderotation_window_period_seconds` と `noderotation_window_active` はいずれも**意味を持つ** `nodepool` ラベルを持つ — ポリシーが異なる `maintenanceWindows` を持てば `P` とウィンドウ*への所属* はプール間で異なりうる。`noderotation_age_threshold_seconds` と `noderotation_rotation_chances` も同様に NodePool ごとに値が変わる（各プールの代表 `expireAfter`/`terminationGracePeriod` *と* そのポリシーの `K` を畳み込むため）。`noderotation_throughput_capacity`、`noderotation_t_rot_estimate_seconds`、`noderotation_t_rot_bound_seconds` も NodePool ごとに値が変わる。「導出なし」の 2 ケースは挙動が異なる: `expireAfter: Never` では 3 つとも 0（導出自体をスキップ）だが、期限付きテンプレートでウィンドウ出現が無い（`P ≤ 0`）場合は bound と estimate が非ゼロで `throughput_capacity` だけ 0 になる — サービス時間とデッドラインの予測はウィンドウ無しでも定義でき、出現あたりのスループットだけが未定義だからである。これは、単一のクラスタ共通ウィンドウがこれらの系列をプール間で同一にしていた以前の草案の v1 簡略化を解消する。
 
 > **ライフサイクルに関する注記。** `nodepool` 単位の系列は **NodePool が削除された時点で消去する** — コントローラが削除 reconcile で破棄する。ゲージは reconcile ごとに再計算されるため、削除されて reconcile が止まったプールはそのままだと最後の値を永遠にラッチしてしまう（消えたはずの `noderotation_drain_stuck = 1` が無限にアラートし続ける）。統治ポリシーを失った NodePool（もはやどの `RotationPolicy` にもマッチしない）も、もはやローテーションされないため同様にその系列が破棄される（§5.4）。そのようなプールにアンカーされた進行中ローテーションは、placeholder と `do-not-disrupt` マーカーが孤児化しないよう先にロールバックされる（§5.4）。
 
