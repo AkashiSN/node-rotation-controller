@@ -341,3 +341,42 @@ tests:
       - equal:
           path: spec.surge.forcefulFallback.enabled
           value: true
+
+  # ADR-0004: surge.cooldownAfter may be 0 (PDBs are the primary settle). The
+  # schema routes it through goDurationNonNegative, not goDuration — the latter
+  # requires a non-zero duration and would reject `0m` at chart-schema validation,
+  # blocking Helm users from enabling the ADR-0004 throughput reclaim via values.
+  - it: accepts surge.cooldownAfter 0m (ADR-0004, goDurationNonNegative)
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - { timezone: UTC, days: [Wed], start: "02:00", end: "06:00" }
+            surge:
+              maxUnavailable: 1
+              cooldownAfter: 0m
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.surge.cooldownAfter
+          value: 0m
+
+  # Negative bound still holds: a negative cooldownAfter is rejected at schema
+  # validation (the controller also rejects it — internal/policy).
+  - it: rejects a negative surge.cooldownAfter
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - { timezone: UTC, days: [Wed], start: "02:00", end: "06:00" }
+            surge:
+              maxUnavailable: 1
+              cooldownAfter: -5m
+    asserts:
+      - failedTemplate: {}

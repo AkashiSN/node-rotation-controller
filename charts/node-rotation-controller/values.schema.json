@@ -160,7 +160,7 @@
                 },
                 "readyTimeout": { "$ref": "#/definitions/goDuration" },
                 "cooldownAfter": {
-                  "allOf": [{ "$ref": "#/definitions/goDuration" }],
+                  "allOf": [{ "$ref": "#/definitions/goDurationNonNegative" }],
                   "description": "Post-success settle pause (gate A, spec §5.2) and a layer-2 throughput term (§3.2). May be 0 — PDBs are the primary settle (ADR-0004). Does not cover the post-failure pause (see failurePause)."
                 },
                 "failurePause": {
@@ -213,6 +213,11 @@
       "type": "string",
       "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*([0-9]*[1-9][0-9]*(\\.[0-9]+)?|[0-9]+\\.[0-9]*[1-9][0-9]*)(ns|us|ms|s|m|h)([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$",
       "description": "A positive Go duration string (e.g. \"15m\", \"1h30m\")."
+    },
+    "goDurationNonNegative": {
+      "type": "string",
+      "pattern": "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$",
+      "description": "A non-negative Go duration string: either the bare zero \"0\" or one or more unit terms (e.g. \"0m\", \"15m\", \"1h30m\"). Allows 0 for cooldownAfter (ADR-0004)."
     },
     "promDuration": {
       "type": "string",
