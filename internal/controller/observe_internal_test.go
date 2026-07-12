@@ -66,6 +66,37 @@ func TestDerivedThresholdsPopulatesThroughputInputs(t *testing.T) {
 	}
 }
 
+// TestDerivedThresholdsNoWindowsPopulatesForecast is the controller-level
+// counterpart to schedule.TestDeriveNoWindowsStillPopulatesForecast (issue #218,
+// Codex review): with an expiring template but no window occurrence (P <= 0),
+// derivedThresholds still returns a non-zero deadline bound and service-time
+// forecast while throughput C is zero — the exact PoolObservation shape observe()
+// then copies verbatim (the copy itself is covered by TestObserveIdlePoolGauges).
+// This pins the real pool's numbers through the controller path: t_rot = 15m + tGP
+// 30m + buffer 2m = 47m; t_rot_est = min(15m,5m) + min(30m,10m) = 15m.
+func TestDerivedThresholdsNoWindowsPopulatesForecast(t *testing.T) {
+	pool := withExpireAfter(withTGP(testNodePool(nil)))
+	r := newReconciler(t, testNow, nil, pool)
+	sched := mustSchedule(t)
+	res := r.resolve(pool, testPolicy(), sched)
+	d, _ := sched.ShortestWindow()
+	gap, _ := sched.ShortestIdleGap()
+
+	got := r.derivedThresholds(pool, res, 0, d, &gap, 3) // P = 0: no window occurrence
+	if !hasFinding(got.Findings, "NoWindows") {
+		t.Errorf("want a NoWindows finding for P=0; findings=%+v", got.Findings)
+	}
+	if want := 47 * time.Minute; got.TRot != want {
+		t.Errorf("TRot: got %v, want %v (populated before the P<=0 guard)", got.TRot, want)
+	}
+	if want := 15 * time.Minute; got.TRotEst != want {
+		t.Errorf("TRotEst: got %v, want %v (populated before the P<=0 guard)", got.TRotEst, want)
+	}
+	if got.C != 0 {
+		t.Errorf("C: got %d, want 0 (throughput undefined without a window)", got.C)
+	}
+}
+
 // TestDerivedThresholdsPassesIdleGap covers the issue #211 wiring: the carry-over
 // check fires only when the reconciler supplies the schedule's shortest idle gap.
 // The 23h59m daily window closes for one minute, which the 25m forecast denominator
