@@ -83,6 +83,20 @@ type PoolObservation struct {
 	// RetryCount is the highest retry-count across the pool's claims
 	// (noderotation_retry_count); 0 when none.
 	RetryCount int
+	// ThroughputCapacity is the layer-2 forecast C, rotation starts per window
+	// occurrence (noderotation_throughput_capacity; §3.2 layer 2). 0 when the pool
+	// has no window (P <= 0) or no derivation (expireAfter: Never) — note TRotBound
+	// and TRotEstimate can be non-zero while this is 0 (schedule.Derive sets them
+	// before the P<=0 guard).
+	ThroughputCapacity int
+	// TRotEstimate is the forecast service time t_rot_est =
+	// provisioningEstimate + drainEstimate (noderotation_t_rot_estimate_seconds).
+	TRotEstimate time.Duration
+	// TRotBound is the deadline-side rotation-duration bound
+	// t_rot = readyTimeout + tGP + Buffer (noderotation_t_rot_bound_seconds):
+	// attempt start through surge wait + force-completed drain. NOT the drain_stuck
+	// threshold (that is drainBound = tGP + Buffer, measured off deletionTimestamp).
+	TRotBound time.Duration
 }
 
 // noopRecorder is the default when no Recorder is supplied.

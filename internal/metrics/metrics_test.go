@@ -77,6 +77,10 @@ func TestObservePoolSetsAllGauges(t *testing.T) {
 		RotationChances: 2,
 		WindowPeriod:    24 * time.Hour,
 		FreezeUntil:     time.Unix(1700000000, 0),
+
+		ThroughputCapacity: 58,
+		TRotEstimate:       15 * time.Minute,
+		TRotBound:          47 * time.Minute,
 	})
 
 	pool := map[string]string{"nodepool": "api"}
@@ -93,6 +97,9 @@ func TestObservePoolSetsAllGauges(t *testing.T) {
 		{"noderotation_rotation_chances", 2},
 		{"noderotation_window_period_seconds", (24 * time.Hour).Seconds()},
 		{"noderotation_freeze_until_timestamp", 1700000000},
+		{"noderotation_throughput_capacity", 58},
+		{"noderotation_t_rot_estimate_seconds", (15 * time.Minute).Seconds()},
+		{"noderotation_t_rot_bound_seconds", (47 * time.Minute).Seconds()},
 	} {
 		if got := metricValue(t, reg, tc.name, pool); got != tc.want {
 			t.Errorf("%s = %v, want %v", tc.name, got, tc.want)
@@ -270,6 +277,7 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 		"noderotation_retry_count", "noderotation_short_lead_nodes", "noderotation_freeze_until_timestamp",
 		"noderotation_age_threshold_seconds", "noderotation_rotation_chances", "noderotation_window_period_seconds",
 		"noderotation_window_active", "noderotation_policy_conflict",
+		"noderotation_throughput_capacity", "noderotation_t_rot_estimate_seconds", "noderotation_t_rot_bound_seconds",
 	} {
 		if metricPresent(t, reg, name, api) {
 			t.Errorf("%s{nodepool=api} still present after ForgetPool", name)

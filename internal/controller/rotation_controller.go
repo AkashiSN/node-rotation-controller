@@ -616,6 +616,10 @@ func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now ti
 		WindowPeriod:    p,
 		AgeThreshold:    derived.A,
 		RotationChances: derived.G,
+
+		ThroughputCapacity: derived.C,
+		TRotEstimate:       derived.TRotEst,
+		TRotBound:          derived.TRot,
 	}
 	if pool.Annotations[annotations.ActiveRotation] != "" {
 		o.InProgress = 1 // serial per NodePool in v1 (0 or 1)
