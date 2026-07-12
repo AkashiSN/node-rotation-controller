@@ -35,6 +35,10 @@ type Recorder struct {
 	retryCount       *prometheus.GaugeVec
 	policyConflict   *prometheus.GaugeVec
 	windowActive     *prometheus.GaugeVec
+
+	throughputCapacity *prometheus.GaugeVec
+	tRotEstimate       *prometheus.GaugeVec
+	tRotBound          *prometheus.GaugeVec
 }
 
 var _ controller.Recorder = (*Recorder)(nil)
@@ -103,11 +107,24 @@ func New(reg prometheus.Registerer) *Recorder {
 			Name: "noderotation_window_active",
 			Help: "0/1 indicator of the NodePool's governing-policy maintenance-window membership.",
 		}, poolLabel),
+		throughputCapacity: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "noderotation_throughput_capacity",
+			Help: "Layer-2 throughput forecast C: rotation starts per window occurrence (§3.2 layer 2).",
+		}, poolLabel),
+		tRotEstimate: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "noderotation_t_rot_estimate_seconds",
+			Help: "Forecast service time t_rot_est = provisioningEstimate + drainEstimate, in seconds (§3.2 layer 2).",
+		}, poolLabel),
+		tRotBound: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "noderotation_t_rot_bound_seconds",
+			Help: "Deadline-side rotation-duration bound t_rot = readyTimeout + tGP + buffer, in seconds. Not the drain_stuck bound (tGP + buffer off deletionTimestamp).",
+		}, poolLabel),
 	}
 	reg.MustRegister(
 		r.completed, r.forcefulFallback, r.duration, r.candidates, r.inProgress, r.freezeUntil,
 		r.ageThreshold, r.rotationChances, r.windowPeriod, r.shortLead,
 		r.drainStuck, r.retryCount, r.policyConflict, r.windowActive,
+		r.throughputCapacity, r.tRotEstimate, r.tRotBound,
 	)
 	return r
 }
@@ -148,6 +165,9 @@ func (r *Recorder) ObservePool(nodePool string, o controller.PoolObservation) {
 	r.ageThreshold.WithLabelValues(nodePool).Set(o.AgeThreshold.Seconds())
 	r.rotationChances.WithLabelValues(nodePool).Set(float64(o.RotationChances))
 	r.windowPeriod.WithLabelValues(nodePool).Set(o.WindowPeriod.Seconds())
+	r.throughputCapacity.WithLabelValues(nodePool).Set(float64(o.ThroughputCapacity))
+	r.tRotEstimate.WithLabelValues(nodePool).Set(o.TRotEstimate.Seconds())
+	r.tRotBound.WithLabelValues(nodePool).Set(o.TRotBound.Seconds())
 
 	freeze := 0.0
 	if !o.FreezeUntil.IsZero() {
@@ -164,6 +184,7 @@ func (r *Recorder) ForgetPool(nodePool string) {
 	for _, g := range []*prometheus.GaugeVec{
 		r.candidates, r.inProgress, r.freezeUntil, r.ageThreshold, r.rotationChances,
 		r.windowPeriod, r.shortLead, r.drainStuck, r.retryCount, r.policyConflict, r.windowActive,
+		r.throughputCapacity, r.tRotEstimate, r.tRotBound,
 	} {
 		g.DeleteLabelValues(nodePool)
 	}
