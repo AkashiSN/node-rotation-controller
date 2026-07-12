@@ -71,7 +71,7 @@ The practical consequence: in any non-trivial cluster, nodes **will be force-dra
 | `C` | per-occurrence window capacity — rotations one window occurrence can start, `C = m · ceil(D / (t_rot_est + cooldownAfter))` (§3.2 layer 2) |
 | `N` | NodePool node count — used only by the layer-2 throughput check, not by the per-node derivation (§3.2) |
 
-> `cooldownAfter`, `drainEstimate`, `provisioningEstimate`, and `readyTimeout` are configuration fields (§5.4), not derived symbols. `readyTimeout` feeds `t_rot` (the deadline bound); `drainEstimate` and `provisioningEstimate` feed `t_rot_est` (the forecast); `cooldownAfter` feeds `C`. `buffer` feeds `t_rot` too but is **not** a configuration field — it is a fixed controller constant (`4·shortRequeue = 2m`) covering the controller's own detection lag (§3.2), and it is deadline-side only (it does **not** feed `t_rot_est`).
+> `cooldownAfter`, `drainEstimate`, `provisioningEstimate`, and `readyTimeout` are configuration fields (§5.4), not derived symbols. `readyTimeout` feeds `t_rot` (the deadline bound); `drainEstimate` and `provisioningEstimate` feed `t_rot_est` (the forecast); `cooldownAfter` (the post-success settle, gate A) feeds `C`. `buffer` feeds `t_rot` too but is **not** a configuration field — it is a fixed controller constant (`4·shortRequeue = 2m`) covering the controller's own detection lag (§3.2), and it is deadline-side only (it does **not** feed `t_rot_est`). `failurePause` (the post-failure pause, gate B, §4.4, ADR-0004) is a configuration field too but feeds **no** derived symbol — it is a start gate only.
 
 ## 1.5 Position in the Karpenter Ecosystem
 

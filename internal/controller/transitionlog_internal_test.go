@@ -121,10 +121,48 @@ func TestStartGatesReportsTheBlockingGate(t *testing.T) {
 	t.Run("post-failure pause", func(t *testing.T) {
 		pool := testNodePool(map[string]string{annotations.LastFailureAt: rfc(testNow.Add(-time.Minute))})
 		ok, reason := r.startGates(pool, res, testNow)
-		if ok || reason != gateCooldownAfterFailure {
-			t.Errorf("got (%v, %q), want (false, %q)", ok, reason, gateCooldownAfterFailure)
+		if ok || reason != gateFailurePause {
+			t.Errorf("got (%v, %q), want (false, %q)", ok, reason, gateFailurePause)
 		}
 	})
+}
+
+// TestStartGatesFailurePauseSplitFromCooldown pins ADR-0004: gate B (post-failure)
+// reads surge.failurePause and gate A (post-success) reads surge.cooldownAfter, so the
+// two are independent. With cooldownAfter lowered to 1m for throughput and failurePause
+// unset (→ max(floor 10m, 1m) = 10m), a success 5m ago no longer blocks while a failure
+// 5m ago still does — the exact case the shared value could not express (issue #216).
+func TestStartGatesFailurePauseSplitFromCooldown(t *testing.T) {
+	r := newReconciler(t, testNow, nil)
+	sched := mustSchedule(t)
+
+	pol := testPolicy()
+	pol.Surge.CooldownAfter = &metav1.Duration{Duration: time.Minute}
+	res := r.resolve(withTGP(testNodePool(nil)), pol, sched)
+	if want := 10 * time.Minute; res.failurePause != want {
+		t.Fatalf("failurePause = %v, want %v (max(floor 10m, cooldownAfter 1m))", res.failurePause, want)
+	}
+
+	// success 5m ago: gate A (cooldown 1m) is satisfied → open.
+	openPool := testNodePool(map[string]string{annotations.LastRotationAt: rfc(testNow.Add(-5 * time.Minute))})
+	if ok, reason := r.startGates(openPool, res, testNow); !ok {
+		t.Errorf("post-success 5m > cooldown 1m: got (false, %q), want open", reason)
+	}
+	// failure 5m ago: gate B (failurePause 10m) still blocks, and names its own gate.
+	blockPool := testNodePool(map[string]string{annotations.LastFailureAt: rfc(testNow.Add(-5 * time.Minute))})
+	if ok, reason := r.startGates(blockPool, res, testNow); ok || reason != gateFailurePause {
+		t.Errorf("post-failure 5m < failurePause 10m: got (%v, %q), want (false, %q)", ok, reason, gateFailurePause)
+	}
+
+	// An explicit failurePause overrides the max(floor, cooldownAfter) default.
+	pol.Surge.FailurePause = &metav1.Duration{Duration: 2 * time.Minute}
+	res = r.resolve(withTGP(testNodePool(nil)), pol, sched)
+	if res.failurePause != 2*time.Minute {
+		t.Fatalf("explicit failurePause = %v, want 2m", res.failurePause)
+	}
+	if ok, _ := r.startGates(blockPool, res, testNow); !ok {
+		t.Error("post-failure 5m > explicit failurePause 2m: want open")
+	}
 }
 
 // A blocked start gate names the gate, once. The reconcile self-requeues every

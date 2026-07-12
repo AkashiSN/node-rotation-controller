@@ -139,6 +139,7 @@ func toSurge(in nrv1.Surge) policy.Surge {
 		RetryBackoff:         in.RetryBackoff,
 		DrainEstimate:        in.DrainEstimate,
 		ProvisioningEstimate: in.ProvisioningEstimate,
+		FailurePause:         in.FailurePause,
 		MatchNodeRequirements: policy.MatchNodeRequirements{
 			Required:  append([]string(nil), in.MatchNodeRequirements.Required...),
 			Preferred: append([]string(nil), in.MatchNodeRequirements.Preferred...),

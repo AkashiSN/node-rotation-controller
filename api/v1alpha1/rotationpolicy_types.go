@@ -103,12 +103,30 @@ type Surge struct {
 	// +optional
 	ReadyTimeout *metav1.Duration `json:"readyTimeout,omitempty"`
 
-	// cooldownAfter is the settle pause between consecutive rotations in a window,
-	// also reused as the pool-level inter-attempt pause after a failed attempt
-	// (spec §5.2); must be positive (validated at runtime).
+	// cooldownAfter is the post-success settle pause between consecutive rotations in
+	// a window (gate A, spec §5.2). It also feeds the layer-2 throughput forecast
+	// (C = m·ceil(D / (provisioningEstimate + drainEstimate + cooldownAfter)), §3.2):
+	// every second of it is dead time inside a window. PDBs are the primary settle
+	// mechanism — an Eviction with maxUnavailable serializes drains demand-driven — so
+	// this may be 0 (rely on PDBs) and is validated non-negative, not positive. It no
+	// longer covers the post-failure pause; that is surge.failurePause (ADR-0004).
 	// +kubebuilder:default="10m"
 	// +optional
 	CooldownAfter *metav1.Duration `json:"cooldownAfter,omitempty"`
+
+	// failurePause is the pool-level inter-attempt pause after a FAILED attempt (gate
+	// B, spec §5.2, §4.4): it bounds candidate cycling under a systematic failure cause
+	// (zonal capacity shortage, instance-type unavailability, limits headroom) so a
+	// NodePool runs at most one attempt per readyTimeout + failurePause. It is read
+	// only against last-failure-at and feeds NO throughput forecast — C and
+	// RotationSpansNextWindow model only successful rotations (ADR-0004).
+	//
+	// Unset resolves to max(10m, cooldownAfter). There is deliberately no schema
+	// default: the fallback depends on cooldownAfter, which an operator may override,
+	// and admission cannot compute max() across fields. Must be positive (validated at
+	// runtime) — a 0 pause would disable the cost-bounding this exists for.
+	// +optional
+	FailurePause *metav1.Duration `json:"failurePause,omitempty"`
 
 	// retryBackoff is the base wait before re-selecting a failed NodeClaim; doubles
 	// per consecutive failure, capped at 8x (spec §5.3); must be positive.

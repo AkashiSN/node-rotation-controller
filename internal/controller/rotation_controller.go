@@ -337,7 +337,8 @@ type resolved struct {
 	override             *time.Duration     // explicit ageThreshold, nil in auto mode
 	retryBackoff         time.Duration
 	readyTimeout         time.Duration
-	cooldown             time.Duration
+	cooldown             time.Duration  // surge.cooldownAfter; gate A (post-success settle) + layer-2 forecast (§3.2). May be 0 (ADR-0004)
+	failurePause         time.Duration  // surge.failurePause; gate B (post-failure inter-attempt pause); nil => max(FailurePauseFloor, cooldown) (§4.4, ADR-0004)
 	drainBound           time.Duration  // tGP + buffer; DrainFallback when tGP unset (§5.2)
 	drainEstimate        *time.Duration // surge.drainEstimate; nil => schedule resolves min(tGP, default). Layer-2 forecast only (§3.2)
 	provisioningEstimate *time.Duration // surge.provisioningEstimate; nil => schedule resolves min(readyTimeout, default). Layer-2 forecast only (§3.2)
@@ -374,6 +375,15 @@ func (r *RotationReconciler) resolve(pool *karpv1.NodePool, pol *policy.Policy, 
 		provEst = new(s.ProvisioningEstimate.Duration)
 	}
 
+	// gate B (post-failure pause): an unset failurePause defaults to
+	// max(FailurePauseFloor, cooldownAfter) so lowering cooldownAfter for throughput
+	// never silently shortens the failure pause (§4.4, ADR-0004). cooldownAfter is
+	// always non-nil after ApplyDefaults.
+	failurePause := max(policy.FailurePauseFloor, s.CooldownAfter.Duration)
+	if s.FailurePause != nil {
+		failurePause = s.FailurePause.Duration
+	}
+
 	return resolved{
 		pol:   pol,
 		sched: sched,
@@ -389,6 +399,7 @@ func (r *RotationReconciler) resolve(pool *karpv1.NodePool, pol *policy.Policy, 
 		retryBackoff:         s.RetryBackoff.Duration,
 		readyTimeout:         s.ReadyTimeout.Duration,
 		cooldown:             s.CooldownAfter.Duration,
+		failurePause:         failurePause,
 		drainBound:           drainBound,
 		drainEstimate:        drainEst,
 		provisioningEstimate: provEst,
@@ -717,7 +728,7 @@ const (
 	gateOutOfWindow          = "outOfWindow"
 	gateFrozen               = "frozen"
 	gateCooldownAfterSuccess = "cooldownAfterSuccess"
-	gateCooldownAfterFailure = "cooldownAfterFailure"
+	gateFailurePause         = "failurePause" // post-failure inter-attempt pause (gate B, §4.4, ADR-0004)
 )
 
 // startGates is the §5.2 step-2 gate set, shared verbatim with the failed →
@@ -731,8 +742,8 @@ func (r *RotationReconciler) startGates(pool *karpv1.NodePool, res resolved, now
 		return false, gateFrozen
 	case since(pool.Annotations[annotations.LastRotationAt], now) < res.cooldown:
 		return false, gateCooldownAfterSuccess
-	case since(pool.Annotations[annotations.LastFailureAt], now) < res.cooldown:
-		return false, gateCooldownAfterFailure
+	case since(pool.Annotations[annotations.LastFailureAt], now) < res.failurePause:
+		return false, gateFailurePause
 	}
 	return true, ""
 }

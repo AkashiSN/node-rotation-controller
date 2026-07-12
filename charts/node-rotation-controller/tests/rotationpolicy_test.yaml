@@ -233,6 +233,34 @@ tests:
       - notExists:
           path: spec.surge.provisioningEstimate
 
+  # Issue #216 / ADR-0004: surge.failurePause is the post-failure inter-attempt pause
+  # (gate B), split off cooldownAfter. Rendered verbatim like any other surge field.
+  - it: renders an explicit surge.failurePause when set
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - timezone: Asia/Tokyo
+                days: [Wed]
+                start: "02:00"
+                end: "06:00"
+            surge:
+              failurePause: 20m
+    asserts:
+      - equal:
+          path: spec.surge.failurePause
+          value: 20m
+
+  # Unset resolves in the controller to max(10m, cooldownAfter); the chart must not
+  # inject a default (admission cannot compute max() across fields).
+  - it: leaves surge.failurePause unset by default so the controller resolves max(10m, cooldownAfter)
+    asserts:
+      - notExists:
+          path: spec.surge.failurePause
+
   # Issue #219: the RotationPolicy value subtree is sealed with
   # additionalProperties:false, so a typo'd key is rejected at render time
   # instead of being silently dropped by the CRD's structural schema. helm
@@ -288,6 +316,7 @@ tests:
               maxUnavailable: 1
               readyTimeout: 15m
               cooldownAfter: 10m
+              failurePause: 20m
               drainEstimate: 20m
               provisioningEstimate: 3m
               retryBackoff: 30m
@@ -306,6 +335,9 @@ tests:
       - equal:
           path: spec.surge.provisioningEstimate
           value: 3m
+      - equal:
+          path: spec.surge.failurePause
+          value: 20m
       - equal:
           path: spec.surge.forcefulFallback.enabled
           value: true

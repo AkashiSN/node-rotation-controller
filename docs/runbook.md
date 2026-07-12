@@ -137,6 +137,15 @@ are: space the window occurrences further apart; lower `cooldownAfter`; correct
 Lowering `tGP` does **not** help — the predicate is evaluated on `t_rot_est`,
 which no longer contains it.
 
+> **`cooldownAfter` is the post-success settle only.** Lowering it to reclaim window
+> throughput is safe: it no longer shortens the post-failure pause, which is the
+> separate `surge.failurePause` (ADR-0004). `cooldownAfter` may even be `0` when PDBs
+> already serialize drains (an Eviction with `maxUnavailable` blocks the next node's
+> eviction until the drained node's replacement is `Ready`). The failure pause bounds
+> candidate cycling under a systematic cause and defaults to `max(10m, cooldownAfter)`,
+> so it never silently follows `cooldownAfter` down — raise `failurePause` to harden it
+> without touching throughput.
+
 **Still reasons to lower `tGP`.** Lowering `terminationGracePeriod` remains a
 legitimate operational choice, just not for throughput:
 

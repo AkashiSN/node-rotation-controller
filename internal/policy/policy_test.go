@@ -166,9 +166,11 @@ func TestValidateStructuralErrors(t *testing.T) {
 		{"negative readyTimeout", func(p *Policy) { p.Surge.ReadyTimeout = durPtr(-1 * time.Minute) }},
 		{"negative cooldownAfter", func(p *Policy) { p.Surge.CooldownAfter = durPtr(-1 * time.Minute) }},
 		{"negative retryBackoff", func(p *Policy) { p.Surge.RetryBackoff = durPtr(-1 * time.Minute) }},
+		{"negative failurePause", func(p *Policy) { p.Surge.FailurePause = durPtr(-1 * time.Minute) }},
 		{"explicit zero readyTimeout", func(p *Policy) { p.Surge.ReadyTimeout = durPtr(0) }},
-		{"explicit zero cooldownAfter", func(p *Policy) { p.Surge.CooldownAfter = durPtr(0) }},
 		{"explicit zero retryBackoff", func(p *Policy) { p.Surge.RetryBackoff = durPtr(0) }},
+		// cooldownAfter: 0 is NOT here — it is valid (gate A off, PDBs settle; ADR-0004).
+		{"explicit zero failurePause", func(p *Policy) { p.Surge.FailurePause = durPtr(0) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,6 +201,17 @@ func TestApplyDefaultsLeavesDrainEstimateUnset(t *testing.T) {
 	p.ApplyDefaults()
 	if p.Surge.DrainEstimate != nil {
 		t.Errorf("drainEstimate defaulted to %v, want nil (resolved against the NodePool tGP)", p.Surge.DrainEstimate)
+	}
+}
+
+// TestApplyDefaultsLeavesFailurePauseUnset: the default is max(FailurePauseFloor,
+// cooldownAfter), computed in the controller's resolve() because it depends on
+// cooldownAfter. nil must survive ApplyDefaults so resolve() can apply it (issue #216).
+func TestApplyDefaultsLeavesFailurePauseUnset(t *testing.T) {
+	p := &Policy{}
+	p.ApplyDefaults()
+	if p.Surge.FailurePause != nil {
+		t.Errorf("failurePause defaulted to %v, want nil (resolved in controller as max(floor, cooldownAfter))", p.Surge.FailurePause)
 	}
 }
 
@@ -233,5 +246,45 @@ func TestValidateAcceptsPositiveAndUnsetDrainEstimate(t *testing.T) {
 	p.Surge.DrainEstimate = nil
 	if err := p.Validate(); err != nil {
 		t.Errorf("unset drainEstimate: Validate() = %v, want nil", err)
+	}
+}
+
+// TestValidateAcceptsZeroCooldownAfter pins the ADR-0004 relaxation: cooldownAfter
+// is the post-success settle only and may be 0 (PDBs are the primary settle), unlike
+// the other surge durations which must be positive. Negative stays rejected.
+func TestValidateAcceptsZeroCooldownAfter(t *testing.T) {
+	p := validPolicy()
+	p.ApplyDefaults()
+	p.Surge.CooldownAfter = durPtr(0)
+	if err := p.Validate(); err != nil {
+		t.Errorf("zero cooldownAfter: Validate() = %v, want nil (settle off, PDBs settle)", err)
+	}
+}
+
+// TestValidateFailurePause mirrors the drainEstimate positive/unset/non-positive
+// contract for the new gate-B field (ADR-0004): unset and positive validate, 0 and
+// negative are rejected (a 0 pause disables the §4.4 cost bound).
+func TestValidateFailurePause(t *testing.T) {
+	for _, d := range []time.Duration{0, -1 * time.Minute} {
+		p := validPolicy()
+		p.ApplyDefaults()
+		p.Surge.FailurePause = durPtr(d)
+		if err := p.Validate(); err == nil {
+			t.Errorf("failurePause %v: Validate() = nil, want an error", d)
+		}
+	}
+
+	p := validPolicy()
+	p.ApplyDefaults()
+	p.Surge.FailurePause = durPtr(20 * time.Minute)
+	if err := p.Validate(); err != nil {
+		t.Errorf("positive failurePause: Validate() = %v, want nil", err)
+	}
+
+	p = validPolicy()
+	p.ApplyDefaults()
+	p.Surge.FailurePause = nil
+	if err := p.Validate(); err != nil {
+		t.Errorf("unset failurePause: Validate() = %v, want nil (resolved in controller)", err)
 	}
 }

@@ -159,7 +159,14 @@
                   "description": "v1 is surge-only and serial per NodePool (spec §5.4)."
                 },
                 "readyTimeout": { "$ref": "#/definitions/goDuration" },
-                "cooldownAfter": { "$ref": "#/definitions/goDuration" },
+                "cooldownAfter": {
+                  "allOf": [{ "$ref": "#/definitions/goDuration" }],
+                  "description": "Post-success settle pause (gate A, spec §5.2) and a layer-2 throughput term (§3.2). May be 0 — PDBs are the primary settle (ADR-0004). Does not cover the post-failure pause (see failurePause)."
+                },
+                "failurePause": {
+                  "allOf": [{ "$ref": "#/definitions/goDuration" }],
+                  "description": "Pool-level inter-attempt pause after a FAILED attempt (gate B, spec §5.2/§4.4, ADR-0004). Bounds candidate cycling under a systematic failure cause. Unset resolves to max(10m, cooldownAfter). Must be positive."
+                },
                 "drainEstimate": {
                   "allOf": [{ "$ref": "#/definitions/goDuration" }],
                   "description": "Expected drain duration for the layer-2 throughput forecast (spec §3.2). Unset resolves to min(terminationGracePeriod, 10m). Not a bound — terminationGracePeriod remains the force-kill deadline."
