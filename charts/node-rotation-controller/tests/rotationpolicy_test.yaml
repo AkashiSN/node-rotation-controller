@@ -233,6 +233,34 @@ tests:
       - notExists:
           path: spec.surge.provisioningEstimate
 
+  # Issue #216 / ADR-0004: surge.failurePause is the post-failure inter-attempt pause
+  # (gate B), split off cooldownAfter. Rendered verbatim like any other surge field.
+  - it: renders an explicit surge.failurePause when set
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - timezone: Asia/Tokyo
+                days: [Wed]
+                start: "02:00"
+                end: "06:00"
+            surge:
+              failurePause: 20m
+    asserts:
+      - equal:
+          path: spec.surge.failurePause
+          value: 20m
+
+  # Unset resolves in the controller to max(10m, cooldownAfter); the chart must not
+  # inject a default (admission cannot compute max() across fields).
+  - it: leaves surge.failurePause unset by default so the controller resolves max(10m, cooldownAfter)
+    asserts:
+      - notExists:
+          path: spec.surge.failurePause
+
   # Issue #219: the RotationPolicy value subtree is sealed with
   # additionalProperties:false, so a typo'd key is rejected at render time
   # instead of being silently dropped by the CRD's structural schema. helm
@@ -288,6 +316,7 @@ tests:
               maxUnavailable: 1
               readyTimeout: 15m
               cooldownAfter: 10m
+              failurePause: 20m
               drainEstimate: 20m
               provisioningEstimate: 3m
               retryBackoff: 30m
@@ -307,5 +336,47 @@ tests:
           path: spec.surge.provisioningEstimate
           value: 3m
       - equal:
+          path: spec.surge.failurePause
+          value: 20m
+      - equal:
           path: spec.surge.forcefulFallback.enabled
           value: true
+
+  # ADR-0004: surge.cooldownAfter may be 0 (PDBs are the primary settle). The
+  # schema routes it through goDurationNonNegative, not goDuration — the latter
+  # requires a non-zero duration and would reject `0m` at chart-schema validation,
+  # blocking Helm users from enabling the ADR-0004 throughput reclaim via values.
+  - it: accepts surge.cooldownAfter 0m (ADR-0004, goDurationNonNegative)
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - { timezone: UTC, days: [Wed], start: "02:00", end: "06:00" }
+            surge:
+              maxUnavailable: 1
+              cooldownAfter: 0m
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.surge.cooldownAfter
+          value: 0m
+
+  # Negative bound still holds: a negative cooldownAfter is rejected at schema
+  # validation (the controller also rejects it — internal/policy).
+  - it: rejects a negative surge.cooldownAfter
+    set:
+      rotationPolicies:
+        - name: p
+          spec:
+            nodePoolSelector:
+              matchLabels: { workload: api }
+            maintenanceWindows:
+              - { timezone: UTC, days: [Wed], start: "02:00", end: "06:00" }
+            surge:
+              maxUnavailable: 1
+              cooldownAfter: -5m
+    asserts:
+      - failedTemplate: {}

@@ -64,7 +64,19 @@ type Surge struct {
 	// — the default is min(readyTimeout, 5m), resolved in internal/schedule alongside
 	// drainEstimate so both forecast terms share one resolution path.
 	ProvisioningEstimate *metav1.Duration `json:"provisioningEstimate"`
+	// FailurePause is the pool-level inter-attempt pause after a FAILED attempt (gate B,
+	// spec §5.2, §4.4, ADR-0004). It is read only against last-failure-at and feeds no
+	// throughput forecast. nil means unset and is NOT defaulted here — the default is
+	// max(FailurePauseFloor, cooldownAfter), resolved in the controller alongside the
+	// other gate values (it depends on cooldownAfter, which an operator may override).
+	FailurePause *metav1.Duration `json:"failurePause"`
 }
+
+// FailurePauseFloor is the lower bound of surge.failurePause's default: an unset
+// failurePause resolves to max(FailurePauseFloor, cooldownAfter), so no install's
+// post-failure pause shortens on upgrade even if cooldownAfter is lowered for
+// throughput, and a pause is always at least this long (spec §4.4, ADR-0004).
+const FailurePauseFloor = 10 * time.Minute
 
 // MatchNodeRequirements selects which candidate-node requirements the
 // placeholder Pod replicates (spec §3.3). The required karpenter.sh/nodepool
@@ -139,11 +151,12 @@ func (p *Policy) ApplyDefaults() {
 	if len(p.Surge.MatchNodeRequirements.Required) == 0 {
 		p.Surge.MatchNodeRequirements.Required = append([]string(nil), defaultRequiredRequirements...)
 	}
-	// surge.drainEstimate and surge.provisioningEstimate are deliberately NOT
-	// defaulted: their defaults are min(tGP, DrainEstimateDefault) and
-	// min(readyTimeout, ProvisioningEstimateDefault), which depend on values resolved
-	// elsewhere (tGP on the NodePool template; readyTimeout may be operator-overridden).
-	// nil is carried into schedule.Derive, which resolves both (issues #212, #220).
+	// surge.drainEstimate, surge.provisioningEstimate and surge.failurePause are
+	// deliberately NOT defaulted here: their defaults are min(tGP, DrainEstimateDefault),
+	// min(readyTimeout, ProvisioningEstimateDefault) and max(FailurePauseFloor,
+	// cooldownAfter) — each depends on a value resolved elsewhere or on another field.
+	// nil is carried onward: the two estimates into schedule.Derive (issues #212, #220),
+	// failurePause into the controller's resolve() (issue #216).
 }
 
 // Validate runs structural checks only (shape, enums, formats, the v1 surge
@@ -172,32 +185,40 @@ func (p *Policy) Validate() error {
 	}
 
 	// Surge durations drive safety-critical timing in the rotation state machine
-	// and schedule derivation (spec §5.2/§3.2). An unset field is defaulted to a
-	// positive value in ApplyDefaults; an explicitly configured non-positive value
-	// (0m, -1m) is preserved and rejected here rather than silently entering an
-	// unsafe mode — a non-positive readyTimeout fails attempts instantly, a
-	// non-positive cooldownAfter bypasses the start gates, a non-positive
-	// retryBackoff makes failed-claim retry timing nonsensical, and a non-positive
-	// drainEstimate or provisioningEstimate would make the layer-2 throughput forecast
-	// meaningless (t_rot_est is their sum). The nil guard only matters when Validate
-	// runs without ApplyDefaults; Load always defaults first. drainEstimate and
-	// provisioningEstimate are exempt from that defaulting (their fallbacks need the
-	// NodePool's tGP and the resolved readyTimeout, resolved in internal/schedule), so
-	// nil reaches this loop as the normal, valid "unset" case and is skipped just like
-	// the others.
+	// and schedule derivation (spec §5.2/§3.2). An unset field is defaulted in
+	// ApplyDefaults; an explicitly configured non-positive value (0m, -1m) is
+	// preserved and rejected here rather than silently entering an unsafe mode — a
+	// non-positive readyTimeout fails attempts instantly, a non-positive retryBackoff
+	// makes failed-claim retry timing nonsensical, a non-positive failurePause disables
+	// the §4.4 cost bound on candidate cycling, and a non-positive drainEstimate or
+	// provisioningEstimate would make the layer-2 throughput forecast meaningless
+	// (t_rot_est is their sum). The nil guard only matters when Validate runs without
+	// ApplyDefaults; Load always defaults first. drainEstimate, provisioningEstimate and
+	// failurePause are exempt from that defaulting (their fallbacks depend on values
+	// resolved elsewhere — §3.2 for the estimates, cooldownAfter for failurePause), so
+	// nil reaches this loop as the normal, valid "unset" case and is skipped like the
+	// others. cooldownAfter is checked separately below: it may be 0 (ADR-0004).
 	for _, d := range []struct {
 		name string
 		val  *metav1.Duration
 	}{
 		{"surge.readyTimeout", p.Surge.ReadyTimeout},
-		{"surge.cooldownAfter", p.Surge.CooldownAfter},
 		{"surge.retryBackoff", p.Surge.RetryBackoff},
 		{"surge.drainEstimate", p.Surge.DrainEstimate},
 		{"surge.provisioningEstimate", p.Surge.ProvisioningEstimate},
+		{"surge.failurePause", p.Surge.FailurePause},
 	} {
 		if d.val != nil && d.val.Duration <= 0 {
 			errs = append(errs, fmt.Errorf("%s must be positive, got %v", d.name, d.val.Duration))
 		}
+	}
+
+	// cooldownAfter is the post-success settle only (gate A, ADR-0004). It may be 0 —
+	// PDBs are the primary settle mechanism, so an operator who serializes drains with
+	// PDBs can reclaim the window throughput this pause would otherwise consume. A
+	// negative value is still nonsensical and rejected.
+	if p.Surge.CooldownAfter != nil && p.Surge.CooldownAfter.Duration < 0 {
+		errs = append(errs, fmt.Errorf("surge.cooldownAfter must not be negative, got %v", p.Surge.CooldownAfter.Duration))
 	}
 
 	if _, _, err := p.AgeThresholdOverride(); err != nil {

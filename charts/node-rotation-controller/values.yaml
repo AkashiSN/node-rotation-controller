@@ -236,9 +236,17 @@ rotationPolicies:
         maxUnavailable: 1
         # Surge node must reach Ready within this, else the attempt fails.
         readyTimeout: 15m
-        # Settle pause between rotations; also the post-failure inter-attempt
-        # pause (spec §5.2 / §4.4).
+        # Post-success settle pause between rotations (gate A, spec §5.2); also feeds
+        # the layer-2 throughput forecast (§3.2). PDBs are the primary settle mechanism
+        # (an Eviction with maxUnavailable serializes drains), so this MAY be 0 to
+        # reclaim window throughput. It no longer covers the post-failure pause — that
+        # is failurePause (ADR-0004).
         cooldownAfter: 10m
+        # Pool-level inter-attempt pause after a FAILED attempt (gate B, spec §5.2 /
+        # §4.4): bounds candidate cycling under a systematic failure cause. Leave it
+        # unset and the controller uses max(10m, cooldownAfter) so lowering cooldownAfter
+        # for throughput never shortens the failure pause. Must be > 0.
+        # failurePause: 10m
         # Base wait before re-selecting a failed NodeClaim; doubles per
         # consecutive failure, capped at 8x (spec §5.3).
         retryBackoff: 30m

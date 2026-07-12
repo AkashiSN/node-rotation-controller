@@ -264,6 +264,7 @@ func TestToSurgeCopiesEveryField(t *testing.T) {
 		ForcefulFallback:     nrv1.FeatureToggle{Enabled: true},
 		DrainEstimate:        &metav1.Duration{Duration: 20 * time.Minute},
 		ProvisioningEstimate: &metav1.Duration{Duration: 3 * time.Minute},
+		FailurePause:         &metav1.Duration{Duration: 25 * time.Minute},
 	}
 
 	got := reflect.ValueOf(toSurge(in))

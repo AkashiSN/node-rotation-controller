@@ -202,6 +202,11 @@ func (in *Surge) DeepCopyInto(out *Surge) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.FailurePause != nil {
+		in, out := &in.FailurePause, &out.FailurePause
+		*out = new(v1.Duration)
+		**out = **in
+	}
 	if in.RetryBackoff != nil {
 		in, out := &in.RetryBackoff, &out.RetryBackoff
 		*out = new(v1.Duration)

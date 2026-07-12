@@ -120,7 +120,8 @@ spec:
   surge:
     maxUnavailable: 1       # v1 fixed at 1 (serial); > 1 reserved for later
     readyTimeout: 15m       # surge node must reach Ready within this, else fail
-    cooldownAfter: 10m      # settle pause between rotations; also post-failure pause
+    cooldownAfter: 10m      # post-success settle (gate A); may be 0, PDBs settle (ADR-0004)
+    # failurePause: 10m     # post-failure inter-attempt pause (gate B, §4.4); unset => max(10m, cooldownAfter)
     retryBackoff: 30m       # base wait before re-selecting a failed NodeClaim;
                             # doubles per consecutive failure, capped at 8x
     # drainEstimate: 10m    # expected healthy drain; feeds the layer-2 throughput

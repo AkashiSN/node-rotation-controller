@@ -83,10 +83,12 @@ reconcile_nodepool(np):
   #       below): a re-entry is a NEW attempt, so the two gate sets must never diverge.
   start_gates(np) :=
       in_window(now) and not frozen(np)
-      and since_last_rotation(np) >= cooldownAfter   # settle pause after a success; since_* = now − the
-      and since_last_failure(np)  >= cooldownAfter   #   NodePool annotation, +∞ when unset. The failure-side
-                                                     #   pause bounds candidate cycling under a systematic
-                                                     #   failure cause (§4.4)
+      and since_last_rotation(np) >= cooldownAfter   # gate A: post-success settle; since_* = now − the
+      and since_last_failure(np)  >= failurePause    #   NodePool annotation, +∞ when unset. gate B: the
+                                                     #   post-failure pause bounds candidate cycling under a
+                                                     #   systematic failure cause (§4.4). cooldownAfter may be
+                                                     #   0 (PDBs settle); failurePause defaults to
+                                                     #   max(10m, cooldownAfter) (ADR-0004)
   if not start_gates(np): return Requeue(1m)
 
   # ── 3. Start a new rotation: pick the candidate, gate on ITS headroom, then anchor ──
@@ -307,7 +309,7 @@ Progress state lives entirely on Kubernetes objects (the NodePool, the old `Node
 | `noderotation.io/do-not-disrupt-owned` | Old node + surge target node | `true` | Marks the node `karpenter.sh/do-not-disrupt` as **controller-applied**, so rollback and the startup sweep remove only what the controller set — an operator's pre-existing `do-not-disrupt` (no marker) is never touched. The do-not-disrupt analogue of `noderotation.io/cordoned`: `freeze()` sets it only when the controller actually applies `do-not-disrupt`, never on a node already carrying an operator's active `do-not-disrupt: true` without the marker; a non-`true` value is not operator protection (Karpenter honors only `true`) and is overwritten and owned (§3.3) |
 | `karpenter.sh/do-not-disrupt` | Placeholder Pod | `true` | **Pod-level** annotation, distinct from the node-level row above: blocks voluntary disruption of whatever node the placeholder is *running on*, covering the surge target in the bind → `surge_ready` gap before the controller's node-level freeze lands (§3.3 diagram; set in `create_placeholder`, §5.2). Paired with the `surge-for` **label** on the Pod |
 | `noderotation.io/cordoned` | Old (candidate) node | `true` | Marks the cordon (`spec.unschedulable`, §3.3) as **controller-applied**, so rollback and the startup sweep uncordon only what the controller cordoned — an operator's pre-existing cordon (no marker) is never touched. Set only when the controller itself flipped the flag: `cordon()` is a no-op — no flag write, no marker — on a node already unschedulable without the marker (§3.3) |
-| `noderotation.io/last-failure-at` | NodePool | RFC3339 timestamp | Failure-side counterpart of `last-rotation-at`: anchors the pool-level **inter-attempt pause** (gated with `cooldownAfter` in §5.2 step 2), bounding candidate cycling under a systematic failure cause (§4.4). Written in the same update that clears the anchor on the failure path; re-stamped (`max` with the claim's `failed-at`) by the `case failed` crash-recovery branch when it clears a stale anchor, so a torn failure write cannot void the pause (§5.2) |
+| `noderotation.io/last-failure-at` | NodePool | RFC3339 timestamp | Failure-side counterpart of `last-rotation-at`: anchors the pool-level **inter-attempt pause** (gated with `failurePause` in §5.2 step 2, ADR-0004), bounding candidate cycling under a systematic failure cause (§4.4). Written in the same update that clears the anchor on the failure path; re-stamped (`max` with the claim's `failed-at`) by the `case failed` crash-recovery branch when it clears a stale anchor, so a torn failure write cannot void the pause (§5.2) |
 | `noderotation.io/freeze` | NodePool | RFC3339 timestamp (freeze-until) | Suppresses rotation until the given time |
 | `noderotation.io/last-rotation-at` | NodePool | RFC3339 timestamp | Completion time of the NodePool's last rotation; the `cooldownAfter` start-gate anchor (§5.2 step 2). Lives on the **NodePool** because the old NodeClaim that carries per-rotation state is deleted on success, so the pause must survive that deletion |
 
@@ -392,7 +394,12 @@ spec:
   surge:
     maxUnavailable: 1             # v1 fixed at 1 (serial); the OpenAPI schema rejects any other value
     readyTimeout: 15m             # must be > 0 (validated at runtime)
-    cooldownAfter: 10m            # must be > 0
+    cooldownAfter: 10m            # gate A: post-success settle + layer-2 term (§3.2). MAY be 0 —
+                                  #   PDBs are the primary settle (ADR-0004); validated non-negative
+    # failurePause: 10m           # optional; gate B: post-failure inter-attempt pause (§4.4) — bounds
+                                  #   candidate cycling under a systematic failure cause. No default:
+                                  #   unset resolves to max(10m, cooldownAfter) in the controller (it
+                                  #   depends on cooldownAfter). Must be > 0.
     # drainEstimate: 10m          # optional; expected healthy PDB-respecting drain. Feeds ONLY the
                                   #   layer-2 throughput forecast (t_rot_est, §3.2) — not a bound, no
                                   #   rotation timing changes. No default: unset resolves to

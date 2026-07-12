@@ -71,7 +71,7 @@ EKS Auto Mode はさらに **21 日のノード最大寿命**を、ユーザが*
 | `C` | ウィンドウ機会あたりの処理容量 — 1 回のウィンドウ機会で開始できるローテーション数。`C = m · ceil(D / (t_rot_est + cooldownAfter))`（§3.2 レイヤ 2）|
 | `N` | NodePool のノード台数 — レイヤ 2 のスループット検証でのみ使い、ノード単位の導出には用いない（§3.2）|
 
-> `cooldownAfter`・`drainEstimate`・`provisioningEstimate`・`readyTimeout` は導出記号ではなく設定フィールド（§5.4）である。`readyTimeout` は `t_rot`（deadline 上界）に効き、`drainEstimate` と `provisioningEstimate` は `t_rot_est`（予測）に効き、`cooldownAfter` は `C` に効く。`buffer` も `t_rot` に効くが設定フィールドではなく、コントローラの検出ラグを覆う固定のコントローラ定数（`4·shortRequeue = 2m`）であり（§3.2）、deadline 側のみに効く（`t_rot_est` には効かない）。
+> `cooldownAfter`・`drainEstimate`・`provisioningEstimate`・`readyTimeout` は導出記号ではなく設定フィールド（§5.4）である。`readyTimeout` は `t_rot`（deadline 上界）に効き、`drainEstimate` と `provisioningEstimate` は `t_rot_est`（予測）に効き、`cooldownAfter`（成功後の整定休止、gate A）は `C` に効く。`buffer` も `t_rot` に効くが設定フィールドではなく、コントローラの検出ラグを覆う固定のコントローラ定数（`4·shortRequeue = 2m`）であり（§3.2）、deadline 側のみに効く（`t_rot_est` には効かない）。`failurePause`（失敗後の休止、gate B、§4.4、ADR-0004）も設定フィールドだが導出記号には一切効かない — 開始ゲート専用である。
 
 ## 1.5 Karpenter エコシステムでの位置付け
 
