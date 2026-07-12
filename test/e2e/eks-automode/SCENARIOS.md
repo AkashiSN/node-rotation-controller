@@ -892,16 +892,23 @@ Validates the opt-in window-bounded **surge-less forceful fallback** (spec §3.3
 ADR-0001; #156) end-to-end on real EKS, **without** the KWOK immutable-spec
 expireAfter-raise trick: `nodepool-ff` keeps a **fixed** `expireAfter: 2h`. A
 12-replica PDB-backed workload lands one pod per node (a synchronized batch of 12
-nodes sharing one deadline). Because `N=12 > K·C=2` the serial surge cannot
+nodes sharing one deadline). Because `N=12 > K·C=6` the serial surge cannot
 rotate all of them gracefully within the `K·P=1h` grace, so the surplus is
 rotated **surge-less**. This one scenario also exercises earliest-deadline
 ordering (#157) and do-not-disrupt exclusion (#170).
 
-Firing math (K=2, `t_rot = readyTimeout 5m + tGP 5m + Buffer 15m = 25m`,
-`P=30m`, `WindowLen=28m`, `C=1`, `E=2h`): candidate age `A=35m`, forceful-fire
-age `E − t_rot = 1h35m`, grace `K·P=1h`. Expect the schedule to emit the
-intentional `ThroughputBurstShortfall` (and likely `ThroughputBelowArrival`)
-**warn** findings — these predict the surge-less path and are not errors.
+Firing math (K=2, `t_rot = readyTimeout 5m + tGP 5m + Buffer 2m = 12m`,
+`t_rot_est = provisioningEstimate 5m + drainEstimate 5m = 10m`, `P=30m`,
+`WindowLen=28m`, `cooldownAfter=2m` → `C = ceil(28m / (10m + 2m)) = 3`, `E=2h`):
+candidate age `A = E − (K·P + t_rot) = 48m`, forceful-fire age `E − t_rot = 1h48m`,
+grace `K·P=1h`. `Buffer` is deadline-side only: shrinking it `15m → 2m` (ADR-0002,
+#215) moved `t_rot`, `A` and the forceful-fire age, but **not** `C` — the layer-2
+throughput forecast is budgeted on `t_rot_est`, which carries no buffer (ADR-0003,
+#220). Expect the schedule to emit the intentional `ThroughputBurstShortfall`
+(`N=12 > K·C=6`), `ThroughputBelowArrival`, and `RotationSpansNextWindow`
+(`t_rot_est 10m + cooldown 2m = 12m` exceeds the 2m the window stays closed between
+occurrences) **warn** findings — these predict the surge-less path and are not
+errors.
 
 **Setup (from Shared setup §3, controller installed):**
 
@@ -944,17 +951,20 @@ new node joins, old drains) and the later surplus rotates **surge-less**
 those) — a mix in one pool.
 
 > **Note.** Forceful fallback is still **serial** per NodePool
-> (`surge.maxUnavailable = 1`). If the serial cadence cannot clear all ~10 surplus
+> (`surge.maxUnavailable = 1`). If the serial cadence cannot clear all ~6 surplus
 > nodes before their fixed 2h `expireAfter`, the latest few may surface as
 > Karpenter's native `expired` backstop outcome rather than `ForcefulFallback` —
 > this is expected, not a failure; the forceful-fallback behavior is proven by the
-> first surplus node firing surge-less at age 1h35m.
+> first surplus node firing surge-less at age 1h48m. Note the forceful-fire window
+> is only `t_rot` wide (`E − t_rot` to `E` = 1h48m to 2h = **12m**), narrower than
+> under the old 15m Buffer (25m), so the surge-less surplus must clear faster to
+> beat the backstop.
 
 **If forceful fallback does not appear** (serial surge kept up), tune LIVE (E
 stays fixed):
 
 ```bash
-# slow the serial cadence so the surplus ages past 1h35m before its turn
+# slow the serial cadence so the surplus ages past 1h48m before its turn
 kubectl patch rotationpolicy nrc-ff --type merge -p '{"spec":{"surge":{"cooldownAfter":"10m"}}}'
 # or raise the batch size
 kubectl scale deploy/ff-workload --replicas=16

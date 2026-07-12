@@ -7,64 +7,64 @@ const ja = computed(() => lang.value.startsWith('ja'))
 // 12-node event data (from the source table). Suffixes are the NodeClaim tail.
 // `note` carries the per-row "behavior / evidence" cell, bilingual since it varies per row.
 const nodes = [
-  { n: 1, t: '01:21:57', age: '35m', mode: 'graceful', nc: '2rvd5', note: {
-    ja: 'placeholder surge → make-before-break',
-    en: 'placeholder surge → make-before-break',
+  { n: 1, t: '09:26:24', age: '48m', mode: 'graceful', nc: '52t8h', note: {
+    ja: 'placeholder surge → make-before-break（total 1m2s）',
+    en: 'placeholder surge → make-before-break (total 1m2s)',
   } },
-  { n: 2, t: '01:33:29', age: '47m', mode: 'graceful', nc: '6ssql', note: {
+  { n: 2, t: '09:33:41', age: '55m', mode: 'graceful', nc: '5rp47', note: {
     ja: 'placeholder <code>Pending→Running</code>、<code>mode</code> 空',
     en: 'placeholder <code>Pending→Running</code>, <code>mode</code> empty',
   } },
-  { n: 3, t: '01:45:02', age: '58m', mode: 'graceful', nc: 'dtkgz', note: {
-    ja: '同上（cooldown 10m で間隔 ~12m）',
-    en: 'same as above (cooldown 10m → interval ~12m)',
+  { n: 3, t: '09:41:29', age: '1h03m', mode: 'graceful', nc: '94f5n', note: {
+    ja: '同上（cooldown 6m で間隔 ~7m）',
+    en: 'same as above (cooldown 6m → interval ~7m)',
   } },
-  { n: 4, t: '01:55:42', age: '1h09m', mode: 'graceful', nc: 'fswsg', note: {
+  { n: 4, t: '09:48:45', age: '1h10m', mode: 'graceful', nc: 'fvd7p', note: {
     ja: '同上',
     en: 'same as above',
   } },
-  { n: 5, t: '02:08:07', age: '1h21m', mode: 'graceful', nc: 'gxsfs', note: {
+  { n: 5, t: '09:56:34', age: '1h18m', mode: 'graceful', nc: 'gjgg8', note: {
     ja: '同上',
     en: 'same as above',
   } },
-  { n: 6, t: '02:18:46', age: '1h32m', mode: 'graceful', nc: 'krcdc', note: {
-    ja: '最後の graceful（02:20:33 完了）',
-    en: 'last graceful (completed 02:20:33)',
+  { n: 6, t: '10:04:50', age: '1h26m', mode: 'graceful', nc: 'n8zqt', note: {
+    ja: '同上',
+    en: 'same as above',
   } },
-  { n: 7, t: '02:22:19', age: '1h36m', mode: 'forceful', nc: 'nkfbh', note: {
-    ja: '<code>mode=forceful-fallback</code>、placeholder <code>NotFound</code>、<b>counter 0→1</b>',
-    en: '<code>mode=forceful-fallback</code>, placeholder <code>NotFound</code>, <b>counter 0→1</b>',
+  { n: 7, t: '10:12:40', age: '1h34m', mode: 'graceful', nc: 'p2vdk', note: {
+    ja: '同上',
+    en: 'same as above',
   } },
-  { n: 8, t: '02:25:53', age: '1h39m', mode: 'forceful', nc: 'pdfwl', note: {
+  { n: 8, t: '10:19:54', age: '1h41m', mode: 'graceful', nc: 'phmms', note: {
+    ja: '同上',
+    en: 'same as above',
+  } },
+  { n: 9, t: '10:24:21', age: '1h46m', mode: 'graceful', nc: 'rnwb7', note: {
+    ja: '<b>最後の graceful</b>（age 1h46m、境界 1h48m の直前）',
+    en: '<b>last graceful</b> (age 1h46m, just inside the 1h48m boundary)',
+  } },
+  { n: 10, t: '10:26:55', age: '1h48m', mode: 'forceful', nc: 'sgh57', note: {
+    ja: '<b>最初の forceful</b>（age 1h48m35s）、<code>mode=forceful-fallback</code>、placeholder <code>NotFound</code>、<b>counter 0→1</b>',
+    en: '<b>first forceful</b> (age 1h48m35s), <code>mode=forceful-fallback</code>, placeholder <code>NotFound</code>, <b>counter 0→1</b>',
+  } },
+  { n: 11, t: '10:30:59', age: '1h52m', mode: 'forceful', nc: 't7sb5', note: {
     ja: 'surge-less、Warning event、counter →2',
     en: 'surge-less, Warning event, counter →2',
   } },
-  { n: 9, t: '02:30:19', age: '1h44m', mode: 'forceful', nc: 's7l9r', note: {
-    ja: 'counter →3（cooldown 2m で間隔 ~3m）',
-    en: 'counter →3 (cooldown 2m → interval ~3m)',
-  } },
-  { n: 10, t: '02:33:52', age: '1h47m', mode: 'forceful', nc: 'vvsqr', note: {
-    ja: 'counter →4',
-    en: 'counter →4',
-  } },
-  { n: 11, t: '02:36:32', age: '1h50m', mode: 'forceful', nc: 'w9kx7', note: {
-    ja: 'counter →5',
-    en: 'counter →5',
-  } },
-  { n: 12, t: '02:40:05', age: '1h54m', mode: 'forceful', nc: 'wcmwr', note: {
-    ja: '<b>counter →6 完成</b>、全12本 rotate 完了',
-    en: '<b>counter →6 — complete</b>, all 12 rotations done',
+  { n: 12, t: '10:33:16', age: '1h54m', mode: 'forceful', nc: 'tkkf7', note: {
+    ja: '<b>counter →3 完成</b>、全12本 rotate 完了（deadline 10:38 の ~5m 前）',
+    en: '<b>counter →3 — complete</b>, all 12 rotations done (~5m before the 10:38 deadline)',
   } },
 ]
 
 // Bilingual strings. EN values are translations of the source JA labels.
 const T = computed(() => ja.value ? {
-  eyebrow: 'Scenario O · EKS Auto Mode · 2026-07-05 UTC',
+  eyebrow: 'Scenario O · EKS Auto Mode · 2026-07-12 UTC',
   h1: '共有デッドライン上の 12 ノード rotation — graceful → forceful fallback の分岐',
-  lede: '12 ノードは同時生成で<b>同一 creationTimestamp（デッドライン）</b>を共有。serial（<span class="mono">maxUnavailable=1</span>）で 1 本ずつ処理され、<b>その番が来た時刻がデッドラインまで <span class="mono">t_rot</span>（25m）以上残っているか</b>だけで graceful か forceful かが決まる。<span class="mono">expireAfter</span> は終始 <b>2h 固定</b>（trick-free）。',
+  lede: '12 ノードは同時生成で<b>同一 creationTimestamp（デッドライン）</b>を共有。serial（<span class="mono">maxUnavailable=1</span>）で 1 本ずつ処理され、<b>その番が来た時刻がデッドラインまで <span class="mono">t_rot</span>（12m）以上残っているか</b>だけで graceful か forceful かが決まる。<span class="mono">expireAfter</span> は終始 <b>2h 固定</b>（trick-free）。',
   metrics: {
-    fallback: { k: 'forceful_fallback_total', from: '0', to: '6' },
-    completed: { k: 'completed{success}', v: '12', detail: '6 graceful + 6 forceful' },
+    fallback: { k: 'forceful_fallback_total', from: '0', to: '3' },
+    completed: { k: 'completed{success}', v: '12', detail: '9 graceful + 3 forceful' },
     backstop: { k: 'expireAfter backstop', v: '0', detail: 'expired' },
     restarts: { k: 'controller restarts', v: '0', detail: 'counter 無リセット' },
   },
@@ -75,63 +75,59 @@ const T = computed(() => ja.value ? {
   svg: {
     ariaLabel: '12ノード rotation の比例タイムライン',
     thresholds: {
-      eligible: { time: '01:21:33Z', sub: 'age 35m · eligible' },
-      forceful: { time: '02:21:33Z', sub: 'age 1h35m · forceful 境界' },
-      backstop: { time: '02:46:33Z', sub: 'age 2h · backstop（未到達）' },
+      eligible: { time: '09:26:20Z', sub: 'age 48m · eligible' },
+      forceful: { time: '10:26:20Z', sub: 'age 1h48m · forceful 境界' },
+      backstop: { time: '10:38:20Z', sub: 'age 2h · backstop（未到達）' },
     },
     batch: 'batch',
   },
   legend: {
-    graceful: 'graceful surge（placeholder あり）× 6',
-    forceful: 'forceful fallback（surge-less）× 6',
+    graceful: 'graceful surge（placeholder あり）× 9',
+    forceful: 'forceful fallback（surge-less）× 3',
     backstop: 'expireAfter backstop（今回 0）',
   },
   caseA: {
-    title: 'graceful', rule: '残り ≥ t_rot（25m）',
-    body: 'デッドラインまで surge を完了する余裕がある。<b>placeholder Pod → 新ノード Ready → 旧ノードを voluntary drain</b>（PDB 適用）。<span class="mono">mode</span> は空。番号 <b>1–6</b>。',
+    title: 'graceful', rule: '残り ≥ t_rot（12m）',
+    body: 'デッドラインまで surge を完了する余裕がある。<b>placeholder Pod → 新ノード Ready → 旧ノードを voluntary drain</b>（PDB 適用）。<span class="mono">mode</span> は空。番号 <b>1–9</b>。',
   },
   caseB: {
-    title: 'forceful', rule: '残り < t_rot（25m）',
-    body: 'graceful surge が間に合わない。in-window かつ opt-in なので <b>placeholder なしで NodeClaim を削除</b>（voluntary・PDB 適用）。<span class="mono">mode=forceful-fallback</span>、Warning event、counter +1。番号 <b>7–12</b>。',
+    title: 'forceful', rule: '残り < t_rot（12m）',
+    body: 'graceful surge が間に合わない。in-window かつ opt-in なので <b>placeholder なしで NodeClaim を削除</b>（voluntary・PDB 適用）。<span class="mono">mode=forceful-fallback</span>、Warning event、counter +1。番号 <b>10–12</b>。',
   },
   caseC: {
     title: 'backstop', rule: 'age = 2h に到達',
-    body: 'forceful すら間に合わず期限到達 → Karpenter が強制失効（<span class="mono">outcome=expired</span>）。「fallback の fallback」。<b>今回は forceful が 02:40 までに全て処理し 0 件。</b>',
+    body: 'forceful すら間に合わず期限到達 → Karpenter が強制失効（<span class="mono">outcome=expired</span>）。「fallback の fallback」。<b>今回は forceful が 10:33 までに全て処理し 0 件。</b>',
   },
   cols: { time: '時刻 UTC', age: 'age', phase: 'フェーズ', nc: 'NodeClaim', note: '挙動・証拠' },
   markers: {
     batch: {
       mk: '12ノード同期バッチ生成',
-      rest: '共有デッドライン 02:46:33Z。schedule が意図的 warn（<code class="mono">ThroughputBurstShortfall</code> N=12&gt;K·C=2 ／ <code class="mono">ThroughputBelowArrival</code>）',
+      rest: '共有デッドライン 10:38:20Z。schedule が意図的 warn（<code class="mono">ThroughputBurstShortfall</code> N=12&gt;K·C=6 ／ <code class="mono">ThroughputBelowArrival</code>）',
     },
     eligible: {
-      mk: 'eligible 境界（ageThreshold A=35m）',
+      mk: 'eligible 境界（ageThreshold A=48m）',
       rest: 'ここから候補が rotation 対象に',
     },
     forcefulBoundary: {
       mk: 'forceful 境界通過（deadline − t_rot）',
-      rest: '直前 02:19:48 に cooldown 10m→2m。以降の pick は全て Case B',
+      rest: '直前 10:24:00 に cooldown 6m→1m。以降の pick は全て Case B',
     },
     backstop: {
       mk: 'expireAfter backstop — 未到達（Case C 0件）',
     },
-    doNotDisrupt: {
-      mk: '#170 do-not-disrupt テスト',
-      rest: '候補ノードに <code class="mono">karpenter.sh/do-not-disrupt=true</code> → <code class="mono">candidates</code> 4→3、除去で回復',
-    },
   },
   footer: [
-    '<b>#157（earliest-deadline order）</b>: 12本は creationTimestamp を共有するため順序は <code>Name</code> tiebreak に縮退し、正確に昇順で消費 — <span class="mono">2rvd5 &lt; 6ssql &lt; dtkgz &lt; fswsg &lt; gxsfs &lt; krcdc &lt; nkfbh &lt; pdfwl &lt; s7l9r &lt; vvsqr &lt; w9kx7 &lt; wcmwr</span>。',
-    '<b>mix は cooldown 調整で成形</b>: 実 graceful は ~1–2 分で終わるため放置すると serial surge が全部さばき forceful が出ない。前半 <code>cooldownAfter=10m</code> で surplus をデッドラインまで残し、境界で <code>2m</code> に落として backstop 前に forceful を出し切った。<code>expireAfter</code> は不変なのでトリックではない。',
-    '<b>t_rot = readyTimeout 5m + tGP 5m + Buffer 15m = 25m</b>。分岐点は純粋に「pick 時刻が 02:21:33Z より前か後か」だけで、共有デッドラインゆえ境界をまたいだ瞬間に残り全部が forceful へ一斉に切り替わった。',
+    '<b>#157（earliest-deadline order）</b>: 12本は creationTimestamp を共有するため順序は <code>Name</code> tiebreak に縮退し、正確に昇順で消費 — <span class="mono">52t8h &lt; 5rp47 &lt; 94f5n &lt; fvd7p &lt; gjgg8 &lt; n8zqt &lt; p2vdk &lt; phmms &lt; rnwb7 &lt; sgh57 &lt; t7sb5 &lt; tkkf7</span>。',
+    '<b>mix は cooldown 調整で成形</b>: 実 graceful は ~1 分（46s–1m51s）で終わるため放置すると serial surge が全部さばき forceful が出ない。前半 <code>cooldownAfter=6m</code> で surplus をデッドラインまで残し、境界直前 10:24 に <code>1m</code> に落として backstop 前に forceful を出し切った。<code>expireAfter</code> は不変なのでトリックではない。',
+    '<b>t_rot = readyTimeout 5m + tGP 5m + Buffer 2m = 12m</b>（Buffer は #215 で 15m→2m）。分岐点は純粋に「pick 時刻が 10:26:20Z より前か後か」だけで、共有デッドラインゆえ境界をまたいだ瞬間に残り全部が forceful へ一斉に切り替わった。',
   ],
 } : {
-  eyebrow: 'Scenario O · EKS Auto Mode · 2026-07-05 UTC',
+  eyebrow: 'Scenario O · EKS Auto Mode · 2026-07-12 UTC',
   h1: '12-node rotation on a shared deadline — graceful → forceful fallback split',
-  lede: 'All 12 nodes are created at once and share <b>the same creationTimestamp (deadline)</b>. They are processed one at a time, serially (<span class="mono">maxUnavailable=1</span>), and graceful vs. forceful is decided purely by <b>whether, at the moment a node\'s turn comes up, <span class="mono">t_rot</span> (25m) or more remains until the deadline</b>. <span class="mono">expireAfter</span> stays <b>fixed at 2h</b> throughout (trick-free).',
+  lede: 'All 12 nodes are created at once and share <b>the same creationTimestamp (deadline)</b>. They are processed one at a time, serially (<span class="mono">maxUnavailable=1</span>), and graceful vs. forceful is decided purely by <b>whether, at the moment a node\'s turn comes up, <span class="mono">t_rot</span> (12m) or more remains until the deadline</b>. <span class="mono">expireAfter</span> stays <b>fixed at 2h</b> throughout (trick-free).',
   metrics: {
-    fallback: { k: 'forceful_fallback_total', from: '0', to: '6' },
-    completed: { k: 'completed{success}', v: '12', detail: '6 graceful + 6 forceful' },
+    fallback: { k: 'forceful_fallback_total', from: '0', to: '3' },
+    completed: { k: 'completed{success}', v: '12', detail: '9 graceful + 3 forceful' },
     backstop: { k: 'expireAfter backstop', v: '0', detail: 'expired' },
     restarts: { k: 'controller restarts', v: '0', detail: 'counter never reset' },
   },
@@ -142,55 +138,51 @@ const T = computed(() => ja.value ? {
   svg: {
     ariaLabel: 'Proportional timeline of the 12-node rotation',
     thresholds: {
-      eligible: { time: '01:21:33Z', sub: 'age 35m · eligible' },
-      forceful: { time: '02:21:33Z', sub: 'age 1h35m · forceful boundary' },
-      backstop: { time: '02:46:33Z', sub: 'age 2h · backstop (not reached)' },
+      eligible: { time: '09:26:20Z', sub: 'age 48m · eligible' },
+      forceful: { time: '10:26:20Z', sub: 'age 1h48m · forceful boundary' },
+      backstop: { time: '10:38:20Z', sub: 'age 2h · backstop (not reached)' },
     },
     batch: 'batch',
   },
   legend: {
-    graceful: 'graceful surge (with placeholder) × 6',
-    forceful: 'forceful fallback (surge-less) × 6',
+    graceful: 'graceful surge (with placeholder) × 9',
+    forceful: 'forceful fallback (surge-less) × 3',
     backstop: 'expireAfter backstop (0 this run)',
   },
   caseA: {
-    title: 'graceful', rule: 'remaining ≥ t_rot (25m)',
-    body: 'There is enough time before the deadline to complete the surge. <b>placeholder Pod → new node Ready → voluntary drain of the old node</b> (PDB applies). <span class="mono">mode</span> is empty. Nodes <b>1–6</b>.',
+    title: 'graceful', rule: 'remaining ≥ t_rot (12m)',
+    body: 'There is enough time before the deadline to complete the surge. <b>placeholder Pod → new node Ready → voluntary drain of the old node</b> (PDB applies). <span class="mono">mode</span> is empty. Nodes <b>1–9</b>.',
   },
   caseB: {
-    title: 'forceful', rule: 'remaining < t_rot (25m)',
-    body: 'The graceful surge would not finish in time. Since it is in-window and opt-in, <b>the NodeClaim is deleted without a placeholder</b> (voluntary path, PDB applies). <span class="mono">mode=forceful-fallback</span>, a Warning event, counter +1. Nodes <b>7–12</b>.',
+    title: 'forceful', rule: 'remaining < t_rot (12m)',
+    body: 'The graceful surge would not finish in time. Since it is in-window and opt-in, <b>the NodeClaim is deleted without a placeholder</b> (voluntary path, PDB applies). <span class="mono">mode=forceful-fallback</span>, a Warning event, counter +1. Nodes <b>10–12</b>.',
   },
   caseC: {
     title: 'backstop', rule: 'age reaches 2h',
-    body: 'Even forceful fallback would not finish in time and the deadline is reached → Karpenter force-expires the node (<span class="mono">outcome=expired</span>). The "fallback of the fallback." <b>This run, forceful fallback handled all remaining nodes by 02:40, so this case is 0.</b>',
+    body: 'Even forceful fallback would not finish in time and the deadline is reached → Karpenter force-expires the node (<span class="mono">outcome=expired</span>). The "fallback of the fallback." <b>This run, forceful fallback handled all remaining nodes by 10:33, so this case is 0.</b>',
   },
   cols: { time: 'Time UTC', age: 'age', phase: 'phase', nc: 'NodeClaim', note: 'behavior / evidence' },
   markers: {
     batch: {
       mk: '12-node synchronized batch creation',
-      rest: 'shared deadline 02:46:33Z. schedule intentionally warns (<code class="mono">ThroughputBurstShortfall</code> N=12&gt;K·C=2 / <code class="mono">ThroughputBelowArrival</code>)',
+      rest: 'shared deadline 10:38:20Z. schedule intentionally warns (<code class="mono">ThroughputBurstShortfall</code> N=12&gt;K·C=6 / <code class="mono">ThroughputBelowArrival</code>)',
     },
     eligible: {
-      mk: 'eligible boundary (ageThreshold A=35m)',
+      mk: 'eligible boundary (ageThreshold A=48m)',
       rest: 'from here, candidates become rotation targets',
     },
     forcefulBoundary: {
       mk: 'forceful boundary crossed (deadline − t_rot)',
-      rest: 'cooldown dropped 10m→2m just before, at 02:19:48. Every pick from here on is Case B',
+      rest: 'cooldown dropped 6m→1m just before, at 10:24:00. Every pick from here on is Case B',
     },
     backstop: {
       mk: 'expireAfter backstop — not reached (Case C: 0)',
     },
-    doNotDisrupt: {
-      mk: '#170 do-not-disrupt test',
-      rest: 'candidate node gets <code class="mono">karpenter.sh/do-not-disrupt=true</code> → <code class="mono">candidates</code> 4→3, recovers once removed',
-    },
   },
   footer: [
-    '<b>#157 (earliest-deadline order)</b>: since all 12 share the same creationTimestamp, ordering degenerates to the <code>Name</code> tiebreak, and they are consumed in exact ascending order — <span class="mono">2rvd5 &lt; 6ssql &lt; dtkgz &lt; fswsg &lt; gxsfs &lt; krcdc &lt; nkfbh &lt; pdfwl &lt; s7l9r &lt; vvsqr &lt; w9kx7 &lt; wcmwr</span>.',
-    '<b>The graceful/forceful mix was shaped via cooldown tuning</b>: a real graceful rotation finishes in ~1–2 minutes, so left alone the serial surge would handle all 12 and no forceful fallback would occur. <code>cooldownAfter=10m</code> in the first half held the surplus back until the deadline, then dropping it to <code>2m</code> at the boundary let forceful fallback clear the rest before the backstop. <code>expireAfter</code> never changes, so this is not a trick.',
-    '<b>t_rot = readyTimeout 5m + tGP 5m + buffer 15m = 25m</b>. The split is decided purely by whether the pick time falls before or after 02:21:33Z; because the deadline is shared, the instant that boundary was crossed, every remaining node flipped to forceful at once.',
+    '<b>#157 (earliest-deadline order)</b>: since all 12 share the same creationTimestamp, ordering degenerates to the <code>Name</code> tiebreak, and they are consumed in exact ascending order — <span class="mono">52t8h &lt; 5rp47 &lt; 94f5n &lt; fvd7p &lt; gjgg8 &lt; n8zqt &lt; p2vdk &lt; phmms &lt; rnwb7 &lt; sgh57 &lt; t7sb5 &lt; tkkf7</span>.',
+    '<b>The graceful/forceful mix was shaped via cooldown tuning</b>: a real graceful rotation finishes in ~1 minute (46s–1m51s), so left alone the serial surge would handle all 12 and no forceful fallback would occur. <code>cooldownAfter=6m</code> in the first half held the surplus back until the deadline, then dropping it to <code>1m</code> at 10:24 (just before the boundary) let forceful fallback clear the rest before the backstop. <code>expireAfter</code> never changes, so this is not a trick.',
+    '<b>t_rot = readyTimeout 5m + tGP 5m + buffer 2m = 12m</b> (buffer shrank 15m→2m in #215). The split is decided purely by whether the pick time falls before or after 10:26:20Z; because the deadline is shared, the instant that boundary was crossed, every remaining node flipped to forceful at once.',
   ],
 })
 </script>
@@ -227,27 +219,27 @@ const T = computed(() => ja.value ? {
       <div class="tl-scroll">
         <svg class="tl" viewBox="0 0 1000 172" role="img" :aria-label="T.svg.ariaLabel">
           <!-- zone bands -->
-          <rect class="zband" x="70"    y="44" width="253.8" height="70" fill="var(--fig-idle-fill)"/>
-          <rect class="zband" x="323.8" y="44" width="435.1" height="70" fill="var(--fig-graceful-fill)"/>
-          <rect class="zband" x="758.9" y="44" width="181.1" height="70" fill="var(--fig-forceful-fill)"/>
+          <rect class="zband" x="70"    y="44" width="348" height="70" fill="var(--fig-idle-fill)"/>
+          <rect class="zband" x="418"   y="44" width="435" height="70" fill="var(--fig-graceful-fill)"/>
+          <rect class="zband" x="853"   y="44" width="87"  height="70" fill="var(--fig-forceful-fill)"/>
 
           <!-- zone labels -->
-          <text class="zone-lab" x="196.9" y="38" text-anchor="middle" fill="var(--fig-faint)">{{ T.zones.pre }}</text>
-          <text class="zone-lab" x="541.3" y="38" text-anchor="middle" fill="var(--fig-graceful)">{{ T.zones.graceful }}</text>
-          <text class="zone-lab" x="849.4" y="38" text-anchor="middle" fill="var(--fig-forceful)">{{ T.zones.forceful }}</text>
+          <text class="zone-lab" x="244"   y="38" text-anchor="middle" fill="var(--fig-faint)">{{ T.zones.pre }}</text>
+          <text class="zone-lab" x="635.5" y="38" text-anchor="middle" fill="var(--fig-graceful)">{{ T.zones.graceful }}</text>
+          <text class="zone-lab" x="896.5" y="38" text-anchor="middle" fill="var(--fig-forceful)">{{ T.zones.forceful }}</text>
 
           <!-- threshold lines -->
-          <line class="thr"      x1="323.8" y1="40" x2="323.8" y2="120"/>
-          <line class="thr hard" x1="758.9" y1="40" x2="758.9" y2="120" stroke="var(--fig-forceful)"/>
-          <line class="thr hard" x1="940"   y1="40" x2="940"   y2="120" stroke="var(--fig-backstop)"/>
+          <line class="thr"      x1="418" y1="40" x2="418" y2="120"/>
+          <line class="thr hard" x1="853" y1="40" x2="853" y2="120" stroke="var(--fig-forceful)"/>
+          <line class="thr hard" x1="940" y1="40" x2="940" y2="120" stroke="var(--fig-backstop)"/>
 
           <!-- threshold captions -->
-          <text class="thr-name" x="323.8" y="132" text-anchor="middle">{{ T.svg.thresholds.eligible.time }}</text>
-          <text class="thr-sub"  x="323.8" y="144" text-anchor="middle">{{ T.svg.thresholds.eligible.sub }}</text>
-          <text class="thr-name" x="758.9" y="132" text-anchor="middle" fill="var(--fig-forceful)">{{ T.svg.thresholds.forceful.time }}</text>
-          <text class="thr-sub"  x="758.9" y="144" text-anchor="middle">{{ T.svg.thresholds.forceful.sub }}</text>
-          <text class="thr-name" x="940"   y="132" text-anchor="end" fill="var(--fig-backstop)">{{ T.svg.thresholds.backstop.time }}</text>
-          <text class="thr-sub"  x="940"   y="144" text-anchor="end">{{ T.svg.thresholds.backstop.sub }}</text>
+          <text class="thr-name" x="418" y="132" text-anchor="middle">{{ T.svg.thresholds.eligible.time }}</text>
+          <text class="thr-sub"  x="418" y="144" text-anchor="middle">{{ T.svg.thresholds.eligible.sub }}</text>
+          <text class="thr-name" x="853" y="132" text-anchor="middle" fill="var(--fig-forceful)">{{ T.svg.thresholds.forceful.time }}</text>
+          <text class="thr-sub"  x="853" y="144" text-anchor="middle">{{ T.svg.thresholds.forceful.sub }}</text>
+          <text class="thr-name" x="940" y="132" text-anchor="end" fill="var(--fig-backstop)">{{ T.svg.thresholds.backstop.time }}</text>
+          <text class="thr-sub"  x="940" y="144" text-anchor="end">{{ T.svg.thresholds.backstop.sub }}</text>
 
           <!-- baseline axis -->
           <line class="axis" x1="70" y1="100" x2="940" y2="100"/>
@@ -257,30 +249,30 @@ const T = computed(() => ja.value ? {
           <line class="tick" x1="505" y1="100" x2="505" y2="106"/>
           <line class="tick" x1="722.5" y1="100" x2="722.5" y2="106"/>
           <line class="tick" x1="940" y1="100" x2="940" y2="106"/>
-          <text class="t-lab" x="70"  y="162" text-anchor="middle">00:46</text>
-          <text class="t-lab" x="287.5" y="162" text-anchor="middle">01:16</text>
-          <text class="t-lab" x="505" y="162" text-anchor="middle">01:46</text>
-          <text class="t-lab" x="722.5" y="162" text-anchor="middle">02:16</text>
-          <text class="t-lab" x="940" y="162" text-anchor="middle">02:46</text>
+          <text class="t-lab" x="70"  y="162" text-anchor="middle">08:38</text>
+          <text class="t-lab" x="287.5" y="162" text-anchor="middle">09:08</text>
+          <text class="t-lab" x="505" y="162" text-anchor="middle">09:38</text>
+          <text class="t-lab" x="722.5" y="162" text-anchor="middle">10:08</text>
+          <text class="t-lab" x="940" y="162" text-anchor="middle">10:38</text>
 
           <!-- batch flag -->
           <circle cx="70" cy="100" r="4" class="flag"/>
           <text class="thr-sub" x="70" y="90" text-anchor="middle">{{ T.svg.batch }}</text>
 
-          <!-- graceful pins 1..6 -->
-          <g class="pin-grp" style="animation-delay:.02s"><circle class="pin g" cx="326.7" cy="100" r="11"/><text class="pin-n" x="326.7" y="103.5" text-anchor="middle">1</text></g>
-          <g class="pin-grp" style="animation-delay:.06s"><circle class="pin g" cx="410.3" cy="100" r="11"/><text class="pin-n" x="410.3" y="103.5" text-anchor="middle">2</text></g>
-          <g class="pin-grp" style="animation-delay:.10s"><circle class="pin g" cx="494.0" cy="100" r="11"/><text class="pin-n" x="494.0" y="103.5" text-anchor="middle">3</text></g>
-          <g class="pin-grp" style="animation-delay:.14s"><circle class="pin g" cx="571.4" cy="100" r="11"/><text class="pin-n" x="571.4" y="103.5" text-anchor="middle">4</text></g>
-          <g class="pin-grp" style="animation-delay:.18s"><circle class="pin g" cx="661.5" cy="100" r="11"/><text class="pin-n" x="661.5" y="103.5" text-anchor="middle">5</text></g>
-          <g class="pin-grp" style="animation-delay:.22s"><circle class="pin g" cx="738.7" cy="100" r="11"/><text class="pin-n" x="738.7" y="103.5" text-anchor="middle">6</text></g>
-          <!-- forceful pins 7..12 -->
-          <g class="pin-grp" style="animation-delay:.28s"><circle class="pin f" cx="764.5" cy="100" r="11"/><text class="pin-n" x="764.5" y="103.5" text-anchor="middle">7</text></g>
-          <g class="pin-grp" style="animation-delay:.32s"><circle class="pin f" cx="790.3" cy="78"  r="11"/><text class="pin-n" x="790.3" y="81.5"  text-anchor="middle">8</text><line class="tick" x1="790.3" y1="89" x2="790.3" y2="100"/></g>
-          <g class="pin-grp" style="animation-delay:.36s"><circle class="pin f" cx="822.5" cy="100" r="11"/><text class="pin-n" x="822.5" y="103.5" text-anchor="middle">9</text></g>
-          <g class="pin-grp" style="animation-delay:.40s"><circle class="pin f" cx="848.3" cy="78"  r="11"/><text class="pin-n" x="848.3" y="81.5"  text-anchor="middle">10</text><line class="tick" x1="848.3" y1="89" x2="848.3" y2="100"/></g>
-          <g class="pin-grp" style="animation-delay:.44s"><circle class="pin f" cx="874.1" cy="100" r="11"/><text class="pin-n" x="874.1" y="103.5" text-anchor="middle">11</text></g>
-          <g class="pin-grp" style="animation-delay:.48s"><circle class="pin f" cx="899.9" cy="78"  r="11"/><text class="pin-n" x="899.9" y="81.5"  text-anchor="middle">12</text><line class="tick" x1="899.9" y1="89" x2="899.9" y2="100"/></g>
+          <!-- graceful pins 1..9 (x = 70 + age_min/120*870) -->
+          <g class="pin-grp" style="animation-delay:.02s"><circle class="pin g" cx="418.6" cy="100" r="11"/><text class="pin-n" x="418.6" y="103.5" text-anchor="middle">1</text></g>
+          <g class="pin-grp" style="animation-delay:.06s"><circle class="pin g" cx="471.3" cy="100" r="11"/><text class="pin-n" x="471.3" y="103.5" text-anchor="middle">2</text></g>
+          <g class="pin-grp" style="animation-delay:.10s"><circle class="pin g" cx="527.9" cy="100" r="11"/><text class="pin-n" x="527.9" y="103.5" text-anchor="middle">3</text></g>
+          <g class="pin-grp" style="animation-delay:.14s"><circle class="pin g" cx="580.6" cy="100" r="11"/><text class="pin-n" x="580.6" y="103.5" text-anchor="middle">4</text></g>
+          <g class="pin-grp" style="animation-delay:.18s"><circle class="pin g" cx="637.2" cy="100" r="11"/><text class="pin-n" x="637.2" y="103.5" text-anchor="middle">5</text></g>
+          <g class="pin-grp" style="animation-delay:.22s"><circle class="pin g" cx="697.1" cy="100" r="11"/><text class="pin-n" x="697.1" y="103.5" text-anchor="middle">6</text></g>
+          <g class="pin-grp" style="animation-delay:.26s"><circle class="pin g" cx="754.0" cy="100" r="11"/><text class="pin-n" x="754.0" y="103.5" text-anchor="middle">7</text></g>
+          <g class="pin-grp" style="animation-delay:.30s"><circle class="pin g" cx="806.5" cy="100" r="11"/><text class="pin-n" x="806.5" y="103.5" text-anchor="middle">8</text></g>
+          <g class="pin-grp" style="animation-delay:.34s"><circle class="pin g" cx="838.6" cy="100" r="11"/><text class="pin-n" x="838.6" y="103.5" text-anchor="middle">9</text></g>
+          <!-- forceful pins 10..12 -->
+          <g class="pin-grp" style="animation-delay:.40s"><circle class="pin f" cx="857.2" cy="78"  r="11"/><text class="pin-n" x="857.2" y="81.5"  text-anchor="middle">10</text><line class="tick" x1="857.2" y1="89" x2="857.2" y2="100"/></g>
+          <g class="pin-grp" style="animation-delay:.44s"><circle class="pin f" cx="886.7" cy="100" r="11"/><text class="pin-n" x="886.7" y="103.5" text-anchor="middle">11</text></g>
+          <g class="pin-grp" style="animation-delay:.48s"><circle class="pin f" cx="903.3" cy="78"  r="11"/><text class="pin-n" x="903.3" y="81.5"  text-anchor="middle">12</text><line class="tick" x1="903.3" y1="89" x2="903.3" y2="100"/></g>
         </svg>
       </div>
       <div class="tl-legend">
@@ -293,13 +285,13 @@ const T = computed(() => ja.value ? {
     <p class="section-label">{{ T.sectionLogic }}</p>
     <div class="cases">
       <div class="case g">
-        <span class="count">6</span>
+        <span class="count">9</span>
         <h3><span class="badge g">Case A</span> {{ T.caseA.title }}</h3>
         <p class="rule">{{ T.caseA.rule }}</p>
         <p v-html="T.caseA.body"></p>
       </div>
       <div class="case f">
-        <span class="count">6</span>
+        <span class="count">3</span>
         <h3><span class="badge f">Case B</span> {{ T.caseB.title }}</h3>
         <p class="rule">{{ T.caseB.rule }}</p>
         <p v-html="T.caseB.body"></p>
@@ -319,12 +311,12 @@ const T = computed(() => ja.value ? {
           <tr><th>{{ T.cols.time }}</th><th>{{ T.cols.age }}</th><th>{{ T.cols.phase }}</th><th>{{ T.cols.nc }}</th><th>{{ T.cols.note }}</th></tr>
         </thead>
         <tbody>
-          <tr class="marker"><td class="time">00:46:33</td><td class="age">0</td><td colspan="3"><span class="mk">▸ {{ T.markers.batch.mk }}</span> — <span v-html="T.markers.batch.rest"></span></td></tr>
-          <tr class="marker"><td class="time">01:21:33</td><td class="age">35m</td><td colspan="3"><span class="mk">▸ {{ T.markers.eligible.mk }}</span> — <span v-html="T.markers.eligible.rest"></span></td></tr>
+          <tr class="marker"><td class="time">08:38:20</td><td class="age">0</td><td colspan="3"><span class="mk">▸ {{ T.markers.batch.mk }}</span> — <span v-html="T.markers.batch.rest"></span></td></tr>
+          <tr class="marker"><td class="time">09:26:20</td><td class="age">48m</td><td colspan="3"><span class="mk">▸ {{ T.markers.eligible.mk }}</span> — <span v-html="T.markers.eligible.rest"></span></td></tr>
 
           <template v-for="row in nodes" :key="row.n">
-            <tr class="marker hard" v-if="row.n === 7">
-              <td class="time">02:21:33</td><td class="age">1h35m</td>
+            <tr class="marker hard" v-if="row.n === 10">
+              <td class="time">10:26:20</td><td class="age">1h48m</td>
               <td colspan="3"><span class="mk">▸ {{ T.markers.forcefulBoundary.mk }}</span> — <span v-html="T.markers.forcefulBoundary.rest"></span></td>
             </tr>
             <tr>
@@ -336,8 +328,7 @@ const T = computed(() => ja.value ? {
             </tr>
           </template>
 
-          <tr class="marker bs"><td class="time">02:46:33</td><td class="age">2h</td><td colspan="3"><span class="mk">▸ {{ T.markers.backstop.mk }}</span></td></tr>
-          <tr class="marker"><td class="time">02:42</td><td class="age">—</td><td colspan="3"><span class="mk" style="color:var(--fig-accent)">▸ {{ T.markers.doNotDisrupt.mk }}</span> — <span v-html="T.markers.doNotDisrupt.rest"></span></td></tr>
+          <tr class="marker bs"><td class="time">10:38:20</td><td class="age">2h</td><td colspan="3"><span class="mk">▸ {{ T.markers.backstop.mk }}</span></td></tr>
         </tbody>
       </table>
     </div>

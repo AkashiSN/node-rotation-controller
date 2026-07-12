@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Generates scenarios/nrc-ff-policy.yaml: the nrc-ff RotationPolicy with 48
 # maintenanceWindows (30-min period, 28-min occurrences, all days) so the
-# schedule has P=30m and WindowLen=28m => C=floor(28/(25+2))=1. Trick-free
-# forceful-fallback validation (design 2026-07-04). Re-run and commit the output.
+# schedule has P=30m and WindowLen=28m => C=ceil(28/(t_rot_est 10m + cooldown 2m))
+# =3 (the layer-2 forecast is budgeted on t_rot_est, not the deadline bound t_rot;
+# ADR-0003/#220, ceil per #211). Trick-free forceful-fallback validation (design
+# 2026-07-04). Re-run and commit the output.
 set -euo pipefail
 out="$(dirname "$0")/nrc-ff-policy.yaml"
 {

@@ -139,3 +139,77 @@ forceful fire at `02:22:19Z` = batch age **1h35m46s** (just past `E − t_rot =
   back to 2m fired the surplus quickly ahead of the 2h backstop. `expireAfter`
   never changed — only a policy cadence knob (`SCENARIOS.md` §Scenario O
   documents this).
+
+---
+
+## Run: 2026-07-12 — `test/230-scenario-o-buffer2m` @ `30febf7` (Scenario O re-validation under Buffer=2m, #230)
+
+**Artifacts under test**
+
+| | |
+|---|---|
+| Controller image | branch `test/230-scenario-o-buffer2m` @ `30febf7` (current `main`, `schedule.Buffer = 2m`), built and pushed to the ephemeral stack's ECR as `:poc` (linux/amd64+arm64) |
+| Helm chart | `charts/node-rotation-controller` (this branch), `-f scenarios/controller-values.yaml` |
+| Platform | EKS Auto Mode, Kubernetes 1.36, `karpenter.sh/v1`, `us-west-2` |
+| NodePool | `nodepool-ff`, **fixed `expireAfter: 2h`** (never patched — trick-free invariant), `terminationGracePeriod: 5m`, disruption budgets block Underutilized/Drifted |
+| Policy | `RotationPolicy` `nrc-ff` (`ageThreshold: auto`, `forcefulFallback.enabled: true`, 30-min-period windows `P=30m`/`WindowLen=28m`, `readyTimeout: 5m`, `maxUnavailable: 1`, `retryBackoff: 30m`; `cooldownAfter` tuned live — 6m up-front to hold the surplus to the deadline, auto-dropped to 1m at 10:24 to fire it ahead of the backstop) |
+| Workload | 12-replica PDB-backed Deployment (`minAvailable: 11`, hostname anti-affinity) → one pod per node, a **synchronized 12-node batch** (all `creationTimestamp 08:38:20Z`) sharing one 2h deadline (`10:38:20Z`) |
+
+**Verdict: Scenario O re-validated under `Buffer=2m` (#215). The derived firing
+math moved exactly as the constant predicts, confirmed both by the live schedule
+metrics and by the observed graceful→forceful split.** This run supersedes the
+derived figures of the `Buffer=15m` run above (kept as a dated record); the
+behavior — trick-free forceful fallback, earliest-deadline order, no backstop — is
+unchanged.
+
+Live schedule metrics (read while in-scope, default `cooldownAfter=2m`) matched the
+recomputed constants to the second: `age_threshold_seconds=2880` (**A=48m**, was
+35m), `t_rot_bound_seconds=720` (**t_rot=12m**, was 25m),
+`t_rot_estimate_seconds=600` (**t_rot_est=10m**), `throughput_capacity=3`
+(**C=3**), `rotation_chances=2`, `window_period_seconds=1800`. **`C` did not move
+with the Buffer** — the layer-2 forecast is budgeted on `t_rot_est`
+(`provisioningEstimate 5m + drainEstimate 5m`), which carries no buffer (ADR-0003,
+#220); only the deadline-side `t_rot`, `A`, and the forceful-fire age `E − t_rot`
+shrank/grew with `Buffer 15m → 2m`.
+
+The 12-node batch rotated as a **9 graceful + 3 forceful mix**, and the
+forceful-fire boundary `E − t_rot = 1h48m` was captured to the second: node **9
+(`rnwb7`) rotated gracefully at age 1h46m1s** (just inside the boundary), node **10
+(`sgh57`) went surge-less at age 1h48m35s** (just past it), and every remaining
+node followed. `noderotation_forceful_fallback_total` climbed **0→3** with **zero**
+`expired` backstop outcomes (all 12 rotated in-window, the last forceful completing
+`10:33:37`, ~5m before the `10:38:20` deadline) across **zero** controller
+restarts. `expireAfter` stayed **2h fixed** the whole run.
+
+| Check | Verdict | Evidence observed |
+|-------|---------|-------------------|
+| Derived firing math under `Buffer=2m` (#215/#230) | PASS | live metrics `t_rot_bound=720` (12m), `age_threshold=2880` (48m), `t_rot_estimate=600` (10m), `throughput_capacity=3`; schedule logs echoed `A=48m0s`, `C=3`, `K·C=6` and the `t_rot_est 10m + cooldown 2m = 12m` denominator |
+| Surge-less forceful fallback fires at the new boundary (#156, spec §3.3) | PASS | first surge-less pick `sgh57` at batch age **1h48m35s** (just past `E − t_rot = 1h48m`); `t7sb5` (1h52m39s) and `tkkf7` (1h54m56s) followed; each raised a `Warning`/`ForcefulFallback` Event *"rotating NodeClaim … surge-less: a graceful surge cannot complete before its deadline; deleting in-window via the voluntary path (PDBs apply)"*; `noderotation_forceful_fallback_total{nodepool="nodepool-ff"}` **0→3**, controller `restartCount=0` |
+| Boundary discrimination (graceful vs forceful on remaining-time) | PASS | node 9 `rnwb7` picked at age **1h46m1s** with ≥ `t_rot` to the deadline → **graceful** (placeholder + surge node `i-03ae34219f5057027`); node 10 `sgh57` picked 2m34s later at age **1h48m35s** with < `t_rot` remaining → **forceful** — the split falls exactly on the `1h48m` boundary |
+| No placeholder for a forceful candidate (surge-less) | PASS | `kubectl get pod noderotation-surge-nodepool-ff-sgh57` → `NotFound`; the 9 graceful rotations each staged a placeholder + surge node (`surgeWait` 23–35s, `drain` 22s–1m17s, `total` 46s–1m51s), the 3 forceful none |
+| Graceful + forceful **mix** in one pool | PASS | nodes 1–9 (`52t8h … rnwb7`) rotated gracefully (make-before-break: NodeClaim count `12→13→12` each cycle, surge node Ready before old drained), nodes 10–12 surge-less; **0** `expired`, **0** `failure`, **0** rolled back |
+| Earliest-deadline ordering (#157) | PASS | the 12 shared `creationTimestamp 08:38:20Z`, so the order degrades to the `Name` tiebreak, observed exactly: `52t8h < 5rp47 < 94f5n < fvd7p < gjgg8 < n8zqt < p2vdk < phmms < rnwb7 < sgh57 < t7sb5 < tkkf7`; the earliest-deadline batch was fully consumed before any younger surge-replacement node (later deadline) was touched |
+| Intentional schedule feasibility warns | PASS | the pool logged `ThroughputBurstShortfall` (`N=12 > K·C=6`), `ThroughputBelowArrival` (`N=12, P=30m, A=48m, C=3`), and `RotationSpansNextWindow` (`t_rot_est 10m + cooldown 2m = 12m` > the 2m the window stays closed) each pass — the designed predictors of the surge-less path, not errors |
+| Backstop stays unreached (`expireAfter` retained) | PASS | `noderotation_short_lead_nodes=0` and `noderotation_drain_stuck=0` throughout; no `outcome="expired"` series; the narrower `Buffer=2m` forceful window (`E − t_rot` to `E` = 12m) still cleared all 3 surplus with ~5m to spare |
+
+**Findings (not behavior blockers)**
+
+- **The `9 graceful + 3 forceful` split differs from the `Buffer=15m` run's `6 + 6`,
+  and it is the Buffer change that moved it.** `A` grew `35m → 48m` (eligibility
+  later) and the forceful boundary grew `1h35m → 1h48m`, so the 1h graceful grace
+  band sits later; against the fast real cadence (graceful rotations complete in
+  46s–1m51s here) the serial surge cleared 9 of the batch before the boundary,
+  leaving a 3-node surplus. The mix shape is cadence-dependent (and was shaped by
+  the live `cooldownAfter` tuning, as in the prior run); the load-bearing,
+  Buffer-driven fact is the **boundary position** (`1h48m`), which held to the
+  second.
+- **`#170` do-not-disrupt exclusion was not re-exercised this run.** It is
+  orthogonal to the `Buffer` constant (it gates candidate *eligibility*, not the
+  firing math) and was validated on real EKS in the `2026-07-04/05` run above;
+  its behavior is unchanged here.
+- **Run overran the batch deadline.** The cluster was left rotating past
+  `10:38:20Z` (the ff-workload persists, so surge-replacement nodes aged past
+  `A=48m` and rotated again — 45 total graceful completions by teardown, all
+  graceful, no further forceful since replacements are not deadline-synchronized).
+  Only the original 12-node batch is recorded above; the trailing churn is expected
+  steady-state operation, not part of the Scenario O assertion.
