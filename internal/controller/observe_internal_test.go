@@ -200,6 +200,9 @@ func withExpireAfter(p *karpv1.NodePool) *karpv1.NodePool {
 // with no in-flight rotation. With withTGP, t_rot = readyTimeout 15m + tGP 30m +
 // buffer 2m = 47m; the all-week window gives P = 24h; K = 2 ⇒ leadTime = 48h47m.
 // Template E = 14d = 336h ⇒ A = 287h13m, G = 2.
+// provisioningEstimate = min(readyTimeout 15m, 5m) = 5m; drainEstimate =
+// min(tGP 30m, 10m) = 10m ⇒ t_rot_est = 15m. The 23h59m daily window and
+// cooldown 10m give C = ceil(23h59m / 25m) = 58 (issue #218).
 func TestObserveIdlePoolGauges(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	cand := testClaim("nc-cand", 20*24*time.Hour, ncNode(candNode)) // eligible
@@ -244,6 +247,15 @@ func TestObserveIdlePoolGauges(t *testing.T) {
 	}
 	if o.ShortLeadNodes != 0 {
 		t.Errorf("short-lead: got %d, want 0", o.ShortLeadNodes)
+	}
+	if want := 47 * time.Minute; o.TRotBound != want {
+		t.Errorf("t-rot-bound: got %v, want %v", o.TRotBound, want)
+	}
+	if want := 15 * time.Minute; o.TRotEstimate != want {
+		t.Errorf("t-rot-estimate: got %v, want %v", o.TRotEstimate, want)
+	}
+	if o.ThroughputCapacity != 58 {
+		t.Errorf("throughput-capacity: got %d, want 58 (ceil(23h59m / 25m))", o.ThroughputCapacity)
 	}
 	if len(rec.window) == 0 || !rec.window[len(rec.window)-1] {
 		t.Errorf("window-active: got %v, want last true", rec.window)
