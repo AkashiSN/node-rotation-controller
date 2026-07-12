@@ -285,13 +285,13 @@ const T = computed(() => ja.value ? {
     <p class="section-label">{{ T.sectionLogic }}</p>
     <div class="cases">
       <div class="case g">
-        <span class="count">6</span>
+        <span class="count">9</span>
         <h3><span class="badge g">Case A</span> {{ T.caseA.title }}</h3>
         <p class="rule">{{ T.caseA.rule }}</p>
         <p v-html="T.caseA.body"></p>
       </div>
       <div class="case f">
-        <span class="count">6</span>
+        <span class="count">3</span>
         <h3><span class="badge f">Case B</span> {{ T.caseB.title }}</h3>
         <p class="rule">{{ T.caseB.rule }}</p>
         <p v-html="T.caseB.body"></p>
