@@ -1,8 +1,8 @@
 # Dedicated NodePool for the trick-free forceful-fallback scenario (SCENARIOS.md
 # Scenario O). ff-scope selector isolates it from the nrc-poc policy. E is fixed
 # at 2h and NEVER patched (trick-free): with the nrc-ff schedule (P=30m, t_rot
-# 25m) feasibility passes (E > K*P+t_rot = 1h25m) and each node fires forceful
-# fallback once its age passes E - t_rot = 1h35m. terminationGracePeriod is set
+# 12m) feasibility passes (E > K*P+t_rot = 1h12m) and each node fires forceful
+# fallback once its age passes E - t_rot = 1h48m. terminationGracePeriod is set
 # (5m) so drain is bounded and no TGPUnset finding fires. instance-cpu pinned to
 # 2 so each 1.5-cpu workload pod needs its own node (12 pods => 12 nodes).
 #
