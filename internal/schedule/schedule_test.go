@@ -457,6 +457,28 @@ func TestDeriveNoWindowsFatal(t *testing.T) {
 	has(t, Derive(in), "NoWindows", Fatal)
 }
 
+// TestDeriveNoWindowsStillPopulatesForecast pins the P<=0 split (issue #218,
+// Codex design review): Derive sets TRot and TRotEst BEFORE the NoWindows guard,
+// so a pool with an expiring template but no window occurrence reports a non-zero
+// deadline bound and service-time forecast while its per-occurrence throughput C
+// is zero. The metrics plumbing relies on this: t_rot_bound_seconds and
+// t_rot_estimate_seconds stay populated while throughput_capacity reads 0.
+func TestDeriveNoWindowsStillPopulatesForecast(t *testing.T) {
+	in := baseAuto()
+	in.P = 0
+	r := Derive(in)
+	has(t, r, "NoWindows", Fatal)
+	if want := 77 * time.Minute; r.TRot != want { // readyTimeout 15m + tGP 1h + buffer 2m
+		t.Errorf("TRot: got %v, want %v (populated before the P<=0 guard)", r.TRot, want)
+	}
+	if want := 15 * time.Minute; r.TRotEst != want { // min(15m,5m) + min(60m,10m)
+		t.Errorf("TRotEst: got %v, want %v (populated before the P<=0 guard)", r.TRotEst, want)
+	}
+	if r.C != 0 {
+		t.Errorf("C: got %d, want 0 (throughput undefined without a window)", r.C)
+	}
+}
+
 // pinnedEstimate is baseAuto with both forecast terms pinned explicitly so
 // t_rot_est stays 90m and denom stays 100m regardless of ProvisioningEstimateDefault,
 // DrainEstimateDefault *or* Buffer. Tests about the layer-2 *checks* rather than about
