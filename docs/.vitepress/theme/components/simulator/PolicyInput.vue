@@ -28,6 +28,49 @@ function edit(field: keyof PolicyForm, value: unknown) {
   emit('update:yaml', applyPolicyEdit(props.yaml, field, value))
 }
 
+// The CRD restricts maintenanceWindows[].days to this exact enum
+// (Mon;Tue;Wed;Thu;Fri;Sat;Sun — rotationpolicy_types.go), so the field is a
+// fixed multi-select rather than free text.
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+
+function dayChecked(day: string): boolean {
+  // ParseWeekday is case-insensitive, so match that way — a source YAML with
+  // `sat` must show its checkbox ticked.
+  return form.value.days.some((d) => d.toLowerCase() === day.toLowerCase())
+}
+
+function toggleDay(day: string, checked: boolean) {
+  const present = form.value.days
+  const has = (d: string) => present.some((x) => x.toLowerCase() === d.toLowerCase())
+  // Rebuild in canonical Mon..Sun order regardless of click order…
+  const canonical = WEEKDAYS.filter((d) => (d === day ? checked : has(d)))
+  // …but carry through any day the grid does not model (an unusual case or
+  // spelling in the source YAML), so a toggle never silently drops it.
+  const extras = present.filter(
+    (x) => !WEEKDAYS.some((d) => d.toLowerCase() === x.toLowerCase()),
+  )
+  edit('days', [...canonical, ...extras])
+}
+
+// `timezone` is an IANA tz database name. Intl.supportedValuesOf('timeZone') is
+// the browser's own fixed IANA set — the exact domain the field accepts — so we
+// offer it as a dropdown. Guard the call (unavailable in older engines / SSR)
+// and always keep the YAML's current value selectable even if the engine's list
+// omits it (e.g. "UTC"): the YAML is authoritative and must not be rewritten by
+// merely rendering the form.
+const timezones = computed<string[]>(() => {
+  let zones: string[] = []
+  try {
+    zones = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] })
+      .supportedValuesOf?.('timeZone') ?? []
+  } catch {
+    zones = []
+  }
+  const current = form.value.timezone
+  if (current && !zones.includes(current)) zones = [current, ...zones]
+  return zones
+})
+
 function onMinRotationChancesChange(raw: string) {
   // `Number('')` is `0`, not NaN — clearing the field would otherwise write
   // `minRotationChances: 0` into the YAML, a value the CRD's `minimum: 1`
@@ -47,17 +90,25 @@ function onMinRotationChancesChange(raw: string) {
       <div>
         <fieldset :disabled="broken" class="sim-form">
           <label>{{ t.timezone }}
-            <input :value="form.timezone" @change="edit('timezone', ($event.target as HTMLInputElement).value)" />
+            <select :value="form.timezone" @change="edit('timezone', ($event.target as HTMLSelectElement).value)">
+              <option v-for="tz in timezones" :key="tz" :value="tz">{{ tz }}</option>
+            </select>
           </label>
-          <label>{{ t.days }}
-            <input :value="form.days.join(',')"
-                   @change="edit('days', ($event.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean))" />
-          </label>
+          <div class="sim-days">
+            <span>{{ t.days }}</span>
+            <div class="sim-days-grid">
+              <label v-for="d in WEEKDAYS" :key="d">
+                <input type="checkbox" :checked="dayChecked(d)"
+                       @change="toggleDay(d, ($event.target as HTMLInputElement).checked)" />
+                {{ d }}
+              </label>
+            </div>
+          </div>
           <label>{{ t.windowStart }}
-            <input :value="form.start" @change="edit('start', ($event.target as HTMLInputElement).value)" />
+            <input type="time" :value="form.start" @change="edit('start', ($event.target as HTMLInputElement).value)" />
           </label>
           <label>{{ t.windowEnd }}
-            <input :value="form.end" @change="edit('end', ($event.target as HTMLInputElement).value)" />
+            <input type="time" :value="form.end" @change="edit('end', ($event.target as HTMLInputElement).value)" />
           </label>
           <label>{{ t.minRotationChances }}
             <input type="number" min="1" :value="form.minRotationChances ?? 2"

@@ -72,6 +72,14 @@
 /* The checkbox is a row, bottom-aligned with the inputs beside it. */
 .policy-simulator .sim-form .sim-check { flex-direction: row; align-items: center; gap: 0.4rem; align-self: end; padding-bottom: 5px; }
 .policy-simulator .sim-form .sim-check input { width: auto; }
+/* The weekday enum: a row of checkboxes, not a comma-separated text field. It is a
+   <div>, not a <label>, so it needs the label's own column layout restated. */
+.policy-simulator .sim-days { display: flex; flex-direction: column; font-size: 0.8em; color: var(--vp-c-text-2); min-width: 0; }
+.policy-simulator .sim-days-grid { display: flex; flex-wrap: wrap; gap: 0.15rem 0.7rem; margin-top: 0.25rem; }
+.policy-simulator .sim-days-grid label {
+  flex-direction: row; align-items: center; gap: 0.25rem; font-size: 1em; color: var(--vp-c-text-1);
+}
+.policy-simulator .sim-days-grid input { width: auto; margin: 0; }
 /* Long instants (RFC 3339) get a full row so they are never clipped mid-value. */
 .policy-simulator .sim-form .sim-field-wide { grid-column: 1 / -1; }
 .policy-simulator .sim-form button { align-self: end; justify-self: start; }
