@@ -11,6 +11,16 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/pages.yaml'
+      # The simulator page (issue #240) serves a wasm module built from these — a
+      # change to internal/sim or cmd/wasm changes the page's behaviour, so it must
+      # redeploy.
+      - 'cmd/wasm/**'
+      - 'internal/**'
+      - 'api/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - 'aqua.yaml'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +39,19 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - uses: aquaproj/aqua-installer@v4.0.4
+        with:
+          aqua_version: v2.60.1
+          policy_allow: "true"
+      - name: Cache Go + aqua tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.local/share/aquaproj-aqua
+          key: pages-${{ runner.os }}-${{ hashFiles('go.sum', 'aqua.yaml') }}
+          restore-keys: pages-${{ runner.os }}-
       - uses: actions/setup-node@v4
         with:
           node-version: 24

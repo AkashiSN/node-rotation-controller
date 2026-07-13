@@ -59,6 +59,7 @@ export default withMermaid(defineConfig({
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'Specification', link: '/specification/' },
           { text: 'Runbook', link: '/runbook' },
+          { text: 'Simulator', link: '/simulator' },
           { text: 'Validation', link: '/validation/forceful-fallback' },
           { text: 'Development', link: '/development/ci-cd' },
         ],
@@ -66,6 +67,7 @@ export default withMermaid(defineConfig({
           { text: 'Overview', collapsed: false, items: [
             { text: 'Getting Started', link: '/getting-started' },
             { text: 'Runbook', link: '/runbook' },
+            { text: 'Simulator', link: '/simulator' },
           ]},
           { text: 'Specification', collapsed: false, items: [
             { text: 'Contents', link: '/specification/' },
@@ -100,6 +102,7 @@ export default withMermaid(defineConfig({
           { text: 'はじめに', link: '/ja/getting-started' },
           { text: '仕様書', link: '/ja/specification/' },
           { text: 'ランブック', link: '/ja/runbook' },
+          { text: 'シミュレーター', link: '/ja/simulator' },
           { text: '検証', link: '/ja/validation/forceful-fallback' },
           { text: '開発者向け', link: '/ja/development/ci-cd' },
         ],
@@ -107,6 +110,7 @@ export default withMermaid(defineConfig({
           { text: '概要', collapsed: false, items: [
             { text: 'はじめに', link: '/ja/getting-started' },
             { text: 'ランブック', link: '/ja/runbook' },
+            { text: 'シミュレーター', link: '/ja/simulator' },
           ]},
           { text: '仕様書', collapsed: false, items: [
             { text: '目次', link: '/ja/specification/' },

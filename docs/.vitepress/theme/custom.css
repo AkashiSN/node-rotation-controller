@@ -34,3 +34,137 @@
   --fig-shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px rgba(0,0,0,.35);
   --fig-pin-num: #ffffff;
 }
+
+/* --- Policy simulator (issue #240) --- */
+/* The class appears twice: docs/simulator.md wraps the WHOLE page (intro included)
+   in a .policy-simulator div that carries the gutters — layout: page is full-bleed —
+   and PolicySimulator.vue's root repeats it so the component is styled even without
+   the wrapper. The nested reset keeps the padding from applying twice. */
+.policy-simulator { margin-top: 1.5rem; padding: 0 24px 64px; }
+.policy-simulator .policy-simulator { margin-top: 0; padding: 0; }
+.policy-simulator .sim-block { margin: 1.25rem 0; }
+.policy-simulator h3 { margin: 0 0 0.25rem; font-size: 0.95rem; font-weight: 600; line-height: 1.5; }
+.policy-simulator .sim-hint { color: var(--vp-c-text-2); font-size: 0.8em; line-height: 1.45; margin: 0 0 0.6rem; }
+
+/* Every value surface is mono: durations, instants, and identifiers read as code. */
+.policy-simulator input[type="text"], .policy-simulator input:not([type]), .policy-simulator input[type="number"] {
+  border: 1px solid var(--vp-c-divider); border-radius: 4px; padding: 3px 8px; background: var(--vp-c-bg);
+  font-family: var(--vp-font-family-mono); font-size: 0.92em; width: 100%; min-width: 0;
+}
+.policy-simulator input:focus-visible { border-color: var(--vp-c-brand-1); outline: none; }
+.policy-simulator button {
+  border: 1px solid var(--vp-c-divider); border-radius: 4px; padding: 3px 12px;
+  background: var(--vp-c-bg-soft); font-size: 0.85em; color: var(--vp-c-text-1);
+}
+.policy-simulator button:hover { border-color: var(--vp-c-brand-1); color: var(--vp-c-brand-1); }
+
+/* Field grid: uniform columns instead of a ragged flex-wrap, so rows keep a rhythm. */
+.policy-simulator .sim-form {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.5rem 0.75rem; border: 0; padding: 0; margin: 0 0 0.6rem; min-inline-size: 0;
+}
+.policy-simulator .sim-form label { display: flex; flex-direction: column; gap: 2px; font-size: 0.8em; color: var(--vp-c-text-2); min-width: 0; }
+/* When a neighbour's label text wraps to two lines, keep the input row aligned —
+   but only when the input is the label's last child: pushing an input that has a
+   hint <small> below it would instead un-align it from its hint-less neighbour. */
+.policy-simulator .sim-form label:not(.sim-check) > input:last-child { margin-top: auto; }
+.policy-simulator .sim-form small { color: var(--vp-c-text-3); }
+/* The checkbox is a row, bottom-aligned with the inputs beside it. */
+.policy-simulator .sim-form .sim-check { flex-direction: row; align-items: center; gap: 0.4rem; align-self: end; padding-bottom: 5px; }
+.policy-simulator .sim-form .sim-check input { width: auto; }
+/* The weekday enum: a row of checkboxes, not a comma-separated text field. It is a
+   <div>, not a <label>, so it needs the label's own column layout restated. */
+.policy-simulator .sim-days { display: flex; flex-direction: column; font-size: 0.8em; color: var(--vp-c-text-2); min-width: 0; }
+.policy-simulator .sim-days-grid { display: flex; flex-wrap: wrap; gap: 0.15rem 0.7rem; margin-top: 0.25rem; }
+.policy-simulator .sim-days-grid label {
+  flex-direction: row; align-items: center; gap: 0.25rem; font-size: 1em; color: var(--vp-c-text-1);
+}
+.policy-simulator .sim-days-grid input { width: auto; margin: 0; }
+/* Long instants (RFC 3339) get a full row so they are never clipped mid-value. */
+.policy-simulator .sim-form .sim-field-wide { grid-column: 1 / -1; }
+.policy-simulator .sim-form button { align-self: end; justify-self: start; }
+
+/* Controls area: Policy (form + YAML) takes a full-width row above the grid;
+   Fleet / Env / Horizon share the row below it. Fleet gets the widest track —
+   its table holds full RFC 3339 instants, the widest values on the page. */
+.policy-simulator .sim-inputs {
+  display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 2rem; align-items: start;
+}
+@media (max-width: 1200px) { .policy-simulator .sim-inputs { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); } }
+@media (max-width: 800px) { .policy-simulator .sim-inputs { grid-template-columns: minmax(0, 1fr); } }
+/* The divider separates the product (timeline) from the controls under it. */
+.policy-simulator .sim-policy { border-top: 1px solid var(--vp-c-divider); padding-top: 1.25rem; }
+
+/* Policy: the everyday form beside the authoritative YAML, not stacked above it. */
+.policy-simulator .sim-policy-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 0.25rem 1.5rem; }
+@media (max-width: 840px) { .policy-simulator .sim-policy-grid { grid-template-columns: 1fr; } }
+/* The YAML owns the document: field-sizing grows the pane to show it in full
+   (capped, then it scrolls), and the grid's default stretch keeps it never shorter
+   than the form beside it, so the row reads as one balanced unit. Browsers without
+   field-sizing fall back to the min-height floor + stretch. */
+.policy-simulator .sim-yaml {
+  width: 100%; min-height: 320px; max-height: 40rem; field-sizing: content;
+  font-family: var(--vp-font-family-mono); font-size: 0.78em; line-height: 1.55;
+  border: 1px solid var(--vp-c-divider); border-radius: 6px; padding: 8px 10px; background: var(--vp-c-bg-alt);
+  color: var(--vp-c-text-1); white-space: pre; overflow: auto; resize: vertical; tab-size: 2;
+}
+/* If the column ever gets narrower than the table's minimum (createdAt must show a
+   full instant), the TABLE scrolls inside this wrapper — never the page. */
+.policy-simulator .sim-table-wrap { overflow-x: auto; }
+.policy-simulator .sim-table { width: 100%; font-size: 0.78em; border-collapse: collapse; }
+.policy-simulator .sim-table th { text-align: left; font-weight: 500; color: var(--vp-c-text-2); padding: 2px 6px 2px 0; }
+.policy-simulator .sim-table td { padding: 2px 6px 2px 0; }
+/* createdAt is a full RFC 3339 instant (24 mono chars) — reserve the width to show
+   one uncut, keep the node-name column at its typical "node-N" content, and let the
+   short duration columns (expireAfter / tGP) stay narrow. */
+.policy-simulator .sim-table th:nth-child(2) { width: 45%; }
+.policy-simulator .sim-table input { width: 100%; min-width: 2.75rem; }
+.policy-simulator .sim-table td:first-child input { min-width: 4.5rem; }
+.policy-simulator .sim-table td:nth-child(2) input { min-width: 28ch; }
+
+/* Forecast strip: the numeric answer, as stat tiles rather than a thin row of numbers. */
+.policy-simulator .sim-strip { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.5rem; }
+.policy-simulator .sim-strip > div {
+  border: 1px solid var(--vp-c-divider); border-radius: 8px; background: var(--vp-c-bg-soft);
+  padding: 0.35rem 0.9rem 0.45rem; min-width: 6.5rem;
+}
+.policy-simulator .sim-strip dt { color: var(--vp-c-text-2); font-size: 0.7rem; font-family: var(--vp-font-family-mono); white-space: nowrap; }
+.policy-simulator .sim-strip dd { margin: 0; font-weight: 600; font-size: 1.1rem; color: var(--vp-c-text-1); }
+
+/* Chart header: title left, legend right, so the key is beside the picture it explains. */
+.policy-simulator .sim-chart-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; }
+.policy-simulator .sim-findings { list-style: none; padding: 0; margin: 0.25rem 0; font-size: 0.85em; }
+.policy-simulator .sim-warn { color: var(--vp-c-warning-1); }
+.policy-simulator .sim-fatal { color: var(--vp-c-danger-1); }
+.policy-simulator .sim-banner {
+  border: 1px solid var(--vp-c-danger-2); border-radius: 6px; padding: 0.5rem 0.75rem; background: var(--vp-c-danger-soft);
+}
+/* The chart is the product: it never shrinks below the width where its row labels
+   are legible. Below that it scrolls horizontally inside its OWN container — the
+   page body never gains a horizontal scrollbar because of it. */
+.policy-simulator .sim-chart-scroll { overflow-x: auto; }
+.policy-simulator .sim-svg { display: block; width: 100%; min-width: 860px; height: auto; }
+.policy-simulator .sim-window { fill: var(--vp-c-brand-soft); }
+.policy-simulator .sim-life { stroke: var(--vp-c-text-3); stroke-width: 3; }
+/* The chevron for a lifetime that outlives the horizon — drawn into the right gutter. */
+.policy-simulator .sim-ongoing { fill: var(--vp-c-text-3); }
+.policy-simulator .sim-deadline { stroke: var(--vp-c-text-2); stroke-width: 1; stroke-dasharray: 2 2; }
+.policy-simulator .sim-rotation { fill: var(--vp-c-brand-1); }
+.policy-simulator .sim-surgeless { fill: var(--vp-c-warning-1); }
+.policy-simulator .sim-ready { fill: var(--vp-c-text-3); }
+.policy-simulator .sim-done { fill: var(--vp-c-brand-1); }
+.policy-simulator .sim-ongoing { fill: var(--vp-c-text-3); }
+.policy-simulator .sim-breach line { stroke: var(--vp-c-danger-1); stroke-width: 2; }
+.policy-simulator .sim-blocked { fill: var(--vp-c-text-3); opacity: 0.25; }
+/* 12px in the 1000-unit viewBox stays >= ~10px effective even at the chart's
+   min-width (860px), so row labels are readable at every viewport. */
+.policy-simulator .sim-rowlabel, .policy-simulator .sim-axis {
+  fill: var(--vp-c-text-2); font-size: 12px; font-family: var(--vp-font-family-mono);
+}
+/* The legend is a key of mini-glyphs, each drawn with the same mark class as the chart
+   element it explains, so colour AND shape stay in sync from a single source. It sits in
+   the chart head, so it carries no top margin. */
+.policy-simulator .sim-legend { font-size: 0.75em; color: var(--vp-c-text-2); display: flex; gap: 0.25rem 0.9rem; flex-wrap: wrap; align-items: center; margin: 0; }
+.policy-simulator .sim-key { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.policy-simulator .sim-glyph { width: 20px; height: 14px; flex: none; overflow: visible; }

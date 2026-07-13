@@ -13,18 +13,26 @@ assert() {
   else echo "ok: $name"; fi
 }
 
-ALL_FALSE=$'go=false\nchart=false\ndocker=false\ninfra=false'
-assert "docs-only"        "$ALL_FALSE"                                    "docs/specification/03-design.md" "README.md" "docs/ja/runbook.md"
-assert "chart-only"       $'go=false\nchart=true\ndocker=false\ninfra=false'   "charts/node-rotation-controller/values.yaml"
-assert "go-only"          $'go=true\nchart=false\ndocker=false\ninfra=false'   "internal/reconciler/foo.go"
-assert "api-generates"    $'go=true\nchart=true\ndocker=false\ninfra=false'    "api/v1/rotationpolicy_types.go" "charts/node-rotation-controller/crds/noderotation.io_rotationpolicies.yaml"
-assert "dockerfile"       $'go=false\nchart=false\ndocker=true\ninfra=false'   "Dockerfile"
-assert "infra-makefile"   $'go=false\nchart=false\ndocker=false\ninfra=true'   "Makefile"
-assert "infra-detector"   $'go=false\nchart=false\ndocker=false\ninfra=true'   ".github/scripts/detect-ci-changes.sh"
-assert "config-is-go"     $'go=true\nchart=false\ndocker=false\ninfra=false'   "config/crd/bases/noderotation.io_rotationpolicies.yaml"
-assert "gomod"            $'go=true\nchart=false\ndocker=false\ninfra=false'   "go.mod"
-assert "golangci-config"  $'go=true\nchart=false\ndocker=false\ninfra=false'   ".golangci.yml"
-assert "dockerignore"     $'go=false\nchart=false\ndocker=true\ninfra=false'   ".dockerignore"
-assert "empty-input"      "$ALL_FALSE"                                    ""
+ALL_FALSE=$'go=false\nchart=false\ndocker=false\ninfra=false\ndocs=false'
+assert "chart-only"       $'go=false\nchart=true\ndocker=false\ninfra=false\ndocs=false'   "charts/node-rotation-controller/values.yaml"
+assert "go-only"          $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "internal/reconciler/foo.go"
+assert "api-generates"    $'go=true\nchart=true\ndocker=false\ninfra=false\ndocs=true'    "api/v1/rotationpolicy_types.go" "charts/node-rotation-controller/crds/noderotation.io_rotationpolicies.yaml"
+assert "dockerfile"       $'go=false\nchart=false\ndocker=true\ninfra=false\ndocs=false'   "Dockerfile"
+assert "infra-makefile"   $'go=false\nchart=false\ndocker=false\ninfra=true\ndocs=true'   "Makefile"
+assert "infra-detector"   $'go=false\nchart=false\ndocker=false\ninfra=true\ndocs=false'   ".github/scripts/detect-ci-changes.sh"
+assert "config-is-go"     $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=false'   "config/crd/bases/noderotation.io_rotationpolicies.yaml"
+assert "gomod"            $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "go.mod"
+assert "golangci-config"  $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=false'   ".golangci.yml"
+assert "dockerignore"     $'go=false\nchart=false\ndocker=true\ninfra=false\ndocs=false'   ".dockerignore"
+assert "docs-md"          $'go=false\nchart=false\ndocker=false\ninfra=false\ndocs=true'  "docs/specification/03-design.md"
+assert "docs-package"     $'go=false\nchart=false\ndocker=false\ninfra=false\ndocs=true'  "package.json"
+assert "readme-is-docs"   $'go=false\nchart=false\ndocker=false\ninfra=false\ndocs=true'  "README.md"
+# The simulator page RUNS these packages: a change to them changes the wasm module the
+# page serves, so the docs build (and the Pages redeploy) must see it.
+assert "sim-go-is-docs"   $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "internal/sim/loop.go"
+assert "simapi-is-docs"   $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "internal/simapi/simapi.go"
+assert "cmdwasm-is-docs"  $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "cmd/wasm/main.go"
+assert "docs-only"        $'go=false\nchart=false\ndocker=false\ninfra=false\ndocs=true'  "docs/specification/03-design.md" "README.md" "docs/ja/runbook.md"
+assert "empty-input"      "$ALL_FALSE"                                                    ""
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }

@@ -46,3 +46,9 @@ docs/.vitepress/cache/
 # Generated at build time from the root READMEs (see copy-readme.mjs)
 docs/getting-started.md
 docs/ja/getting-started.md
+
+# Build output of `make docs-wasm` (the browser policy simulator, issue #240):
+# the wasm module and Go's version-locked JS loader. Generated at docs-build
+# time, never committed.
+docs/public/simulator.wasm
+docs/public/wasm_exec.js

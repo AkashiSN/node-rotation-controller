@@ -31,6 +31,7 @@ jobs:
       chart: ${{ steps.detect.outputs.chart }}
       docker: ${{ steps.detect.outputs.docker }}
       infra: ${{ steps.detect.outputs.infra }}
+      docs: ${{ steps.detect.outputs.docs }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,7 +47,7 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "event=${{ github.event_name }} → running all jobs"
-            printf 'go=true\nchart=true\ndocker=true\ninfra=true\n' >> "$GITHUB_OUTPUT"
+            printf 'go=true\nchart=true\ndocker=true\ninfra=true\ndocs=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git diff --name-only "$BASE_SHA" HEAD \
@@ -160,6 +161,45 @@ jobs:
         with:
           context: .
           push: false
+
+  # The docs site embeds the browser policy simulator, whose wasm module is built from
+  # Go (cmd/wasm) by `predocs:build`. So this job needs the Go toolchain as well as
+  # Node — a Node-only runner would hard-fail in the prebuild, by design. Until this
+  # job existed the site was first built on push to main, which is too late for a page
+  # that is a Vue app. The job itself always runs (only its steps are gated) so it can
+  # be marked a required check without hanging `pending` on PRs that don't touch docs.
+  docs:
+    runs-on: ubuntu-latest
+    needs: changes
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aquaproj/aqua-installer@v4.0.4
+        if: needs.changes.outputs.docs == 'true'
+        with:
+          aqua_version: v2.60.1
+          policy_allow: "true"
+      - name: Cache Go + aqua tools
+        if: needs.changes.outputs.docs == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.local/share/aquaproj-aqua
+          key: ci-${{ runner.os }}-${{ hashFiles('go.sum', 'aqua.yaml') }}
+          restore-keys: ci-${{ runner.os }}-
+      - uses: actions/setup-node@v4
+        if: needs.changes.outputs.docs == 'true'
+        with:
+          node-version: 24
+      - if: needs.changes.outputs.docs == 'true'
+        run: npm ci
+      # test:docs loads the real wasm module and calls it with the page's own defaults,
+      # so it must run after the module exists — docs:build's prebuild produces it.
+      - if: needs.changes.outputs.docs == 'true'
+        run: npm run docs:build
+      - if: needs.changes.outputs.docs == 'true'
+        run: npm run test:docs
 
   chart:
     runs-on: ubuntu-latest
