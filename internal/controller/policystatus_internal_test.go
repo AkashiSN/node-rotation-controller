@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -223,5 +224,152 @@ func TestStatusReconciler_NonConflictErrorPropagates(t *testing.T) {
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}}); !errors.Is(err, boom) {
 		t.Fatalf("non-conflict error must propagate, got %v", err)
+	}
+}
+
+// --- #244: the two informer caches can be at different revisions ------------
+
+// TestStatusReconciler_StalePolicyGetConflictRetriesPromptly pins the traced #244
+// failure. The policy cache and the NodePool cache are distinct informers at
+// distinct revisions: the reconcile fired by the NodePool event sees the pool but
+// can still Get the policy from a cache that has not yet observed the status this
+// controller wrote a moment ago. The write then carries a stale resourceVersion and
+// is rejected with a conflict — and because nothing else will re-trigger this
+// reconciler (a status write bumps no generation, so GenerationChangedPredicate
+// filters it, and no further NodePool event is coming), the requeue IS the only
+// path back to a correct status. It must therefore be prompt, not a shortRequeue
+// (30s) away, or the cluster advertises "governs 0 NodePool(s)" for half a minute.
+func TestStatusReconciler_StalePolicyGetConflictRetriesPromptly(t *testing.T) {
+	ctx := context.Background()
+	pol := testRotationPolicy("api", map[string]string{"workload": "api"})
+	pool := poolGov("p1", map[string]string{"workload": "api"}, true)
+
+	stale := &noderotationv1alpha1.RotationPolicy{}
+	serveStale := false // enabled below, once the stale snapshot has been taken
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme.New()).
+		WithObjects(pol, &pool).
+		WithStatusSubresource(&noderotationv1alpha1.RotationPolicy{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if p, ok := obj.(*noderotationv1alpha1.RotationPolicy); ok && serveStale {
+					stale.DeepCopyInto(p) // a policy cache lagging the last status write
+					return nil
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	// Snapshot the policy as the lagging cache still holds it (old resourceVersion,
+	// empty status), then advance the API server past it with a status write.
+	if err := cl.Get(ctx, types.NamespacedName{Name: "api"}, stale); err != nil {
+		t.Fatal(err)
+	}
+	fresh := stale.DeepCopy()
+	fresh.Status.ObservedGeneration = 1
+	if err := cl.Status().Update(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	serveStale = true
+
+	r := &RotationPolicyStatusReconciler{Client: cl}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	if err != nil {
+		t.Fatalf("stale-cache conflict must not error: %v", err)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > 5*time.Second {
+		t.Errorf("RequeueAfter = %v, want a prompt retry in (0, 5s]: the requeue is the only "+
+			"path back to a correct status, so a shortRequeue-scale wait leaves it wrong that long", res.RequeueAfter)
+	}
+
+	// The retry runs against a caught-up cache and converges.
+	serveStale = false
+	reconcilePolicy(t, r, "api")
+	var got noderotationv1alpha1.RotationPolicy
+	if err := cl.Get(ctx, types.NamespacedName{Name: "api"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.MatchedNodePools != 1 || got.Status.RotatingNodePools != 1 {
+		t.Errorf("after retry: matched %d rotating %d, want 1/1", got.Status.MatchedNodePools, got.Status.RotatingNodePools)
+	}
+}
+
+// TestStatusReconciler_StalePoolListWriteIsRechecked covers the other direction of
+// the same split-cache hazard (#244's original hypothesis): a reconcile that Gets a
+// current policy but Lists NodePools from a lagging pool cache computes a stale
+// count and writes it WITHOUT a conflict — its resourceVersion is current. Nothing
+// re-triggers the reconciler afterwards, so a successful write must also schedule
+// one recheck against a caught-up cache; the DeepEqual guard makes that recheck a
+// no-op (and terminates the chain) whenever the recompute is stable.
+func TestStatusReconciler_StalePoolListWriteIsRechecked(t *testing.T) {
+	ctx := context.Background()
+	pol := testRotationPolicy("api", map[string]string{"workload": "api"})
+	pool := poolGov("p1", map[string]string{"workload": "api"}, true)
+
+	poolsStale := true
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme.New()).
+		WithObjects(pol, &pool).
+		WithStatusSubresource(&noderotationv1alpha1.RotationPolicy{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*karpv1.NodePoolList); ok && poolsStale {
+					return nil // pool cache has not observed p1 yet: an empty List
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+
+	r := &RotationPolicyStatusReconciler{Client: cl}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var wrote noderotationv1alpha1.RotationPolicy
+	if err := cl.Get(ctx, types.NamespacedName{Name: "api"}, &wrote); err != nil {
+		t.Fatal(err)
+	}
+	if wrote.Status.MatchedNodePools != 0 {
+		t.Fatalf("precondition: the stale List should have produced matched=0, got %d", wrote.Status.MatchedNodePools)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Fatalf("a successful status write must requeue a recheck, got %+v", res)
+	}
+
+	// The requeued reconcile sees the caught-up pool cache and corrects the status.
+	poolsStale = false
+	res2, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	if err != nil {
+		t.Fatalf("Reconcile (recheck): %v", err)
+	}
+	var got noderotationv1alpha1.RotationPolicy
+	if err := cl.Get(ctx, types.NamespacedName{Name: "api"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.MatchedNodePools != 1 || got.Status.RotatingNodePools != 1 {
+		t.Errorf("stale status not corrected: matched %d rotating %d, want 1/1", got.Status.MatchedNodePools, got.Status.RotatingNodePools)
+	}
+	if res2.RequeueAfter <= 0 {
+		t.Fatalf("the corrective write must itself requeue one recheck, got %+v", res2)
+	}
+
+	// Convergence: the third reconcile recomputes the same status, so the DeepEqual
+	// guard suppresses the write and returns an empty Result — the chain ends and
+	// the requeue cannot hot-loop.
+	rv := got.ResourceVersion
+	res3, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	if err != nil {
+		t.Fatalf("Reconcile (stable): %v", err)
+	}
+	if res3.RequeueAfter != 0 {
+		t.Errorf("a no-op recompute must not requeue (hot-loop guard), got %+v", res3)
+	}
+	var stable noderotationv1alpha1.RotationPolicy
+	if err := cl.Get(ctx, types.NamespacedName{Name: "api"}, &stable); err != nil {
+		t.Fatal(err)
+	}
+	if stable.ResourceVersion != rv {
+		t.Errorf("status churned on the stable pass: rv %s -> %s", rv, stable.ResourceVersion)
 	}
 }
