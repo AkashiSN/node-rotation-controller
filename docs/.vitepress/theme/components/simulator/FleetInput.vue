@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { generateNodes, type Fleet } from './model.ts'
+import { DEFAULT_FIRST_CREATED_AT, generateNodes, type Fleet } from './model.ts'
 import { useLabels } from './i18n.ts'
 
 const props = defineProps<{ fleet: Fleet }>()
@@ -8,7 +8,7 @@ const emit = defineEmits<{ 'update:fleet': [Fleet] }>()
 const t = useLabels()
 
 const count = ref(props.fleet.nodes.length)
-const first = ref(props.fleet.nodes[0]?.createdAt ?? '2026-01-01T00:00:00Z')
+const first = ref(props.fleet.nodes[0]?.createdAt ?? DEFAULT_FIRST_CREATED_AT)
 // `spread` has no representation in a `Fleet` (it only drives the interval `generateNodes`
 // spaces new nodes by) — it stays a purely local generator input and is never resynced.
 const spread = ref('168h')
@@ -24,17 +24,19 @@ watch(
   () => props.fleet,
   (f) => {
     count.value = f.nodes.length
-    first.value = f.nodes[0]?.createdAt ?? '2026-01-01T00:00:00Z'
+    first.value = f.nodes[0]?.createdAt ?? DEFAULT_FIRST_CREATED_AT
   },
 )
 
 function regenerate() {
-  // `min="1"` on the <input type="number"> below is advisory only — it does not
-  // stop a user from typing "0" (or clearing the field, which v-model.number
-  // coerces to NaN-ish 0). generateNodes(0, ...) returns [], and an empty fleet
-  // is a state defaultHorizon() already had to be hardened against; clamp here
-  // so the page can never produce one in the first place.
-  emit('update:fleet', { ...props.fleet, nodes: generateNodes(Math.max(1, count.value), first.value, spread.value) })
+  // `min="1" max="50"` on the <input type="number"> below is advisory only — it does
+  // not stop a user from typing "0" (or clearing the field, which v-model.number
+  // coerces to NaN-ish 0), nor "5000", which would render 5000 SVG rows and freeze
+  // the tab. generateNodes(0, ...) returns [], and an empty fleet is a state
+  // defaultHorizon() already had to be hardened against; clamp BOTH ends here so the
+  // page can never produce one in the first place.
+  const n = Math.min(50, Math.max(1, count.value))
+  emit('update:fleet', { ...props.fleet, nodes: generateNodes(n, first.value, spread.value) })
 }
 function patch(part: Partial<Fleet>) {
   emit('update:fleet', { ...props.fleet, ...part })

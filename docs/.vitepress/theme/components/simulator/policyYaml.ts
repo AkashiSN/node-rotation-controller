@@ -49,6 +49,20 @@ const PATHS: Record<Exclude<keyof PolicyForm, 'extraWindows'>, (string | number)
   forcefulFallback: ['spec', 'surge', 'forcefulFallback', 'enabled'],
 }
 
+/** The OPTIONAL fields: clearing one means "use the default", and the way a CRD says
+ *  that is an ABSENT key — not an empty string. Writing `cooldownAfter: ""` produces a
+ *  manifest Go rejects outright (`time: invalid duration ""`), which blanks the result
+ *  and the timeline over what is an ordinary edit. So a cleared optional field is
+ *  DELETED from the document.
+ *
+ *  The window's timezone/days/start/end are REQUIRED and deliberately absent from this
+ *  set: clearing one is a real error, and the user must read it in the controller's own
+ *  words rather than have the page quietly drop the key. (minRotationChances is guarded
+ *  in the form itself, which leaves the YAML untouched while the field is empty.) */
+const OPTIONAL: ReadonlySet<keyof PolicyForm> = new Set([
+  'ageThreshold', 'provisioningEstimate', 'drainEstimate', 'cooldownAfter', 'readyTimeout',
+])
+
 const EMPTY: PolicyForm = {
   timezone: '', days: [], start: '', end: '',
   minRotationChances: null, ageThreshold: '',
@@ -110,7 +124,11 @@ export function applyPolicyEdit(yamlText: string, field: keyof PolicyForm, value
   if (field === 'extraWindows') return yamlText   // derived, not editable
   const doc = parseDocument(yamlText)
   if (doc.errors.length > 0) return yamlText      // the form is disabled anyway
-  doc.setIn(PATHS[field], value)
+  if (value === '' && OPTIONAL.has(field)) {
+    doc.deleteIn(PATHS[field])                    // cleared optional field => "use the default"
+  } else {
+    doc.setIn(PATHS[field], value)
+  }
   // yaml's default stringify pads flow collections ("[ Sat ]"), which would
   // reformat every untouched flow-style `days: [Sat]` on ANY unrelated edit.
   // Disable the padding so an edit changes only the field it touches.

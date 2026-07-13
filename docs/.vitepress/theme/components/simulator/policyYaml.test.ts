@@ -105,3 +105,33 @@ spec:
   assert.match(out, /days: \[Sun\]/, 'the second window must survive a form edit')
   assert.equal(projectPolicy(out).form.timezone, 'Asia/Tokyo')
 })
+
+test('clearing an OPTIONAL field DELETES the key instead of writing an empty string', () => {
+  // Clearing cooldownAfter is an ordinary action meaning "use the default". Writing
+  // `cooldownAfter: ""` instead hands Go a manifest it rejects (`time: invalid duration
+  // ""`), so simulate() returns no result and BOTH the forecast strip and the timeline
+  // vanish. An absent optional key is exactly what "use the default" means.
+  const out = applyPolicyEdit(DEFAULT_POLICY_YAML, 'cooldownAfter', '')
+  assert.doesNotMatch(out, /cooldownAfter/, 'the key must be gone, not set to ""')
+  const { form, error } = projectPolicy(out)
+  assert.equal(error, undefined, 'the manifest still round-trips through projectPolicy')
+  assert.equal(form.cooldownAfter, '')
+  assert.equal(form.readyTimeout, '15m', 'its siblings survive')
+  assert.equal(form.minRotationChances, 2)
+})
+
+test('every optional field the form edits is deletable', () => {
+  for (const field of ['ageThreshold', 'provisioningEstimate', 'drainEstimate', 'cooldownAfter', 'readyTimeout'] as const) {
+    const out = applyPolicyEdit(DEFAULT_POLICY_YAML, field, '')
+    assert.doesNotMatch(out, new RegExp(`${field}:`), `${field} must be deleted when cleared`)
+    assert.equal(projectPolicy(out).error, undefined, `${field}: the result must still parse`)
+  }
+})
+
+test('clearing a REQUIRED window field is left for Go to reject, not silently dropped', () => {
+  // timezone/days/start/end are required: a cleared one is a real error, and the user
+  // must read it in the controller's own words rather than have the page drop the key
+  // and change the meaning of the manifest under them.
+  const out = applyPolicyEdit(DEFAULT_POLICY_YAML, 'timezone', '')
+  assert.match(out, /timezone: ""/)
+})
