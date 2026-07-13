@@ -109,7 +109,10 @@ export function parseGoDuration(s: string): number | null {
 /** N nodes named node-1..node-N, their createdAt spread evenly over `spread`
  *  (a Go duration; "0s" puts them all at the same instant). */
 export function generateNodes(count: number, firstCreatedAt: string, spread: string): FleetNode[] {
-  const first = new Date(firstCreatedAt).getTime()
+  // firstCreatedAt flows straight from the node-generator UI field; a malformed
+  // value must fall back rather than mint "Invalid Date" strings into the fleet.
+  const parsedFirst = new Date(firstCreatedAt).getTime()
+  const first = Number.isNaN(parsedFirst) ? new Date(DEFAULT_FIRST_CREATED_AT).getTime() : parsedFirst
   const total = parseGoDuration(spread) ?? 0
   const step = count > 1 ? total / (count - 1) : 0
   return Array.from({ length: count }, (_, i) => ({
@@ -133,13 +136,25 @@ export function defaultHorizon(fleet: Fleet): Horizon {
   // +/-Infinity, and new Date(Infinity).toISOString() throws RangeError — inside
   // a Vue watcher that would blank the whole page with no message. Fall back to
   // a fixed, reproducible anchor so this function stays total.
-  if (fleet.nodes.length === 0) {
+  //
+  // The same applies to a MALFORMED createdAt: FleetInput.vue exposes it as a
+  // raw editable text input, so a visitor can type "bad" into it, and
+  // PolicySimulator.vue recomputes the horizon on every keystroke while
+  // unpinned. The horizon is presentation only — validity of the fleet is the
+  // wasm module's to judge, and it must see the malformed value unchanged so
+  // its own error reaches the user. So: bound the horizon on the nodes that DO
+  // parse, and only fall back to the fixed anchor when NONE of them do (which
+  // subsumes the empty-fleet case below).
+  const parseable = fleet.nodes
+    .map(n => ({ n, createdAt: new Date(n.createdAt).getTime() }))
+    .filter(({ createdAt }) => !Number.isNaN(createdAt))
+  if (parseable.length === 0) {
     const start = new Date(DEFAULT_FIRST_CREATED_AT).getTime()
     return { start: new Date(start).toISOString(), end: new Date(start + 2 * template).toISOString() }
   }
-  const created = fleet.nodes.map(n => new Date(n.createdAt).getTime())
-  const ends = fleet.nodes.map((n, i) =>
-    created[i] + 2 * (parseGoDuration(n.expireAfter ?? '') ?? template))
+  const created = parseable.map(({ createdAt }) => createdAt)
+  const ends = parseable.map(({ n, createdAt }) =>
+    createdAt + 2 * (parseGoDuration(n.expireAfter ?? '') ?? template))
   return {
     start: new Date(Math.min(...created)).toISOString(),
     end: new Date(Math.max(...ends)).toISOString(),

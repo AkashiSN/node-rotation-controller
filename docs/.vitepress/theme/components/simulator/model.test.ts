@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   parseGoDuration, generateNodes, defaultHorizon, buildRequest,
-  DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV,
+  DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV, DEFAULT_FIRST_CREATED_AT,
 } from './model.ts'
 
 test('parseGoDuration handles the units Go emits', () => {
@@ -56,6 +56,44 @@ test('defaultHorizon is total: an empty fleet must not throw', () => {
   assert.ok(!Number.isNaN(new Date(h.start).getTime()))
   assert.ok(!Number.isNaN(new Date(h.end).getTime()))
   assert.ok(new Date(h.end) > new Date(h.start))
+})
+
+test('defaultHorizon is total: a malformed createdAt must not throw', () => {
+  // FleetInput.vue exposes createdAt as a raw editable text input, and
+  // PolicySimulator.vue recomputes the horizon in a watch while unpinned. A
+  // node with an unparseable createdAt maps to NaN through new Date(...).getTime(),
+  // and new Date(NaN).toISOString() throws RangeError — inside that watcher that
+  // would blank the whole page. The malformed value itself must NOT be touched:
+  // it stays in the fleet and reaches simulate(), so the user reads the wasm
+  // module's own error about it rather than a silently "fixed" value.
+  const h = defaultHorizon({ expireAfter: '480h', nodes: [{ name: 'node-1', createdAt: 'bad' }] })
+  assert.ok(!Number.isNaN(new Date(h.start).getTime()))
+  assert.ok(!Number.isNaN(new Date(h.end).getTime()))
+  assert.ok(new Date(h.end) > new Date(h.start))
+})
+
+test('defaultHorizon with a mixed fleet bounds on the valid node, not the anchor', () => {
+  // A malformed node must be ignored when computing bounds, not fall back to
+  // silently dragging the whole horizon to the fixed anchor: the valid node's
+  // own createdAt/expireAfter must still determine start and end.
+  const h = defaultHorizon({
+    expireAfter: '720h',
+    nodes: [
+      { name: 'node-1', createdAt: '2026-01-01T00:00:00Z' },
+      { name: 'node-2', createdAt: 'bad' },
+    ],
+  })
+  assert.equal(h.start, '2026-01-01T00:00:00.000Z')
+  assert.equal(h.end, '2026-03-02T00:00:00.000Z') // 2026-01-01 + 2*720h (60 days)
+})
+
+test('generateNodes with a malformed firstCreatedAt falls back to the anchor', () => {
+  // Reachable from the same UI path; must not emit "Invalid Date" strings into
+  // the fleet the page hands to simulate().
+  const nodes = generateNodes(2, 'not-a-date', '168h')
+  assert.ok(!Number.isNaN(new Date(nodes[0].createdAt).getTime()))
+  assert.ok(!Number.isNaN(new Date(nodes[1].createdAt).getTime()))
+  assert.equal(nodes[0].createdAt, new Date(DEFAULT_FIRST_CREATED_AT).toISOString())
 })
 
 test('the shipped defaults are internally consistent', () => {
