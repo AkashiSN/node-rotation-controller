@@ -26,6 +26,13 @@ package main
 import (
 	"syscall/js"
 
+	// tzdata embeds the IANA timezone database so time.LoadLocation resolves
+	// names like "Asia/Tokyo" in the browser: the js/wasm target has no system
+	// zoneinfo, so without this LoadLocation fails with "not implemented on js"
+	// and policy validation rejects every maintenanceWindows[].timezone (spec
+	// §3.1, internal/window). Mirrors cmd/main.go on the distroless image.
+	_ "time/tzdata"
+
 	"github.com/AkashiSN/node-rotation-controller/internal/simapi"
 )
 
