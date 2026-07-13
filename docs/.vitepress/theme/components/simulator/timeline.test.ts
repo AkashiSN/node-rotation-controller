@@ -87,6 +87,34 @@ test("a replacement's deadline uses the TEMPLATE expireAfter; a declared overrid
   assert.equal(bars.find(b => b.name === 'node-1-2')!.deadlineMs, ms('2026-01-13T02:00:00Z'), '240h template')
 })
 
+test('a node still alive at the horizon end is flagged ongoing (continues, not cut off)', () => {
+  // No rotation-done: the lifetime bar runs to the horizon end. It must read as
+  // continuing past the right edge, not as a bar that stops at the boundary.
+  const bar = barsOf([], HORIZON, fleet())[0]
+  assert.equal(bar.endMs, ms(HORIZON.end))
+  assert.equal(bar.ongoing, true)
+})
+
+test('a rotation-done AFTER the horizon end still counts as ongoing', () => {
+  // The done lands past the window, so endMs is clamped back to the horizon end: the
+  // node is still alive on screen and the bar must be marked as continuing.
+  const events: SimEvent[] = [
+    { kind: 'rotation-done', at: '2026-02-10T00:00:00Z', node: 'node-1', replacement: 'node-1-2' },
+  ]
+  const bar = barsOf(events, HORIZON, fleet()).find(b => b.name === 'node-1')!
+  assert.equal(bar.endMs, ms(HORIZON.end))
+  assert.equal(bar.ongoing, true)
+})
+
+test('a rotation that completes inside the horizon is not ongoing', () => {
+  const events: SimEvent[] = [
+    { kind: 'rotation-start', at: '2026-01-05T02:00:00Z', node: 'node-1' },
+    { kind: 'rotation-done', at: '2026-01-05T02:20:00Z', node: 'node-1', replacement: 'node-1-2' },
+  ]
+  const bar = barsOf(events, HORIZON, fleet()).find(b => b.name === 'node-1')!
+  assert.equal(bar.ongoing, false)
+})
+
 test('a deadline beyond the horizon is reported as absent, not drawn off-scale', () => {
   const f = fleet({ expireAfter: '2400h' })
   assert.equal(barsOf([], HORIZON, f)[0].deadlineMs, null)

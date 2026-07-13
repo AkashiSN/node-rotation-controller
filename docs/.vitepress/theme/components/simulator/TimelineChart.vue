@@ -7,7 +7,10 @@ import { useLabels } from './i18n.ts'
 const props = defineProps<{ events: SimEvent[]; horizon: Horizon; fleet: Fleet }>()
 const t = useLabels()
 
-const W = 1000, ROW = 26, PAD_L = 130, PAD_R = 20, PAD_T = 28, BAND = 14
+// PAD_R leaves a clear right-hand gutter so bars that reach the horizon end do not sit
+// flush against the SVG edge (which read as "cut off"); the ongoing chevron is drawn
+// INTO this gutter to show the lifetime continues past the visible window.
+const W = 1000, ROW = 26, PAD_L = 130, PAD_R = 40, PAD_T = 28, BAND = 14
 
 const t0 = computed(() => new Date(props.horizon.start).getTime())
 const t1 = computed(() => new Date(props.horizon.end).getTime())
@@ -32,6 +35,7 @@ const windows = computed(() => tl.value.windows.map(w => ({ x1: x(w.startMs), x2
 const blocked = computed(() => tl.value.blocked.map(b => ({ x1: x(b.startMs), x2: x(b.endMs), label: b.label })))
 const bars = computed(() => tl.value.bars.map((b, i) => ({
   name: b.name,
+  ongoing: b.ongoing,
   y: PAD_T + i * ROW,
   x1: b.bornMs === null ? null : x(b.bornMs),
   x2: b.endMs === null ? null : x(b.endMs),
@@ -50,14 +54,21 @@ const marks = computed(() => tl.value.marks.map(m => ({
   <section class="sim-block">
     <div class="sim-chart-head">
       <h3>{{ t.timeline }}</h3>
-      <p v-if="horizonValid" class="sim-legend">
-        <span class="k-rotation" /> {{ t.legend.rotation }}
-        <span class="k-surgeless" /> {{ t.legend.surgeless }}
-        <span class="k-ready" /> {{ t.legend.ready }}
-        <span class="k-breach" /> {{ t.legend.breach }}
-        <span class="k-window" /> {{ t.legend.window }}
-        <span class="k-blocked" /> {{ t.legend.blocked }}
-      </p>
+      <!-- The legend is a KEY: every glyph here is drawn with the same class as the mark
+           it explains, so its shape and colour always match the chart below (a plain
+           colour swatch cannot tell a teal triangle from a teal dot). Every glyph the
+           chart can draw appears here, and nothing here is absent from the chart. -->
+      <div v-if="horizonValid" class="sim-legend">
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><line class="sim-life" x1="1" y1="7" x2="19" y2="7" /></svg>{{ t.legend.life }}</span>
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><polygon class="sim-rotation" points="10,3 5,11 15,11" /></svg>{{ t.legend.rotation }}</span>
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><polygon class="sim-surgeless" points="10,3 5,11 15,11" /></svg>{{ t.legend.surgeless }}</span>
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><circle class="sim-ready" cx="10" cy="7" r="3" /></svg>{{ t.legend.ready }}</span>
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><circle class="sim-done" cx="10" cy="7" r="3" /></svg>{{ t.legend.done }}</span>
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><line class="sim-deadline" x1="10" y1="1" x2="10" y2="13" /></svg>{{ t.legend.deadline }}</span>
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><g class="sim-breach"><line x1="6" y1="3" x2="14" y2="11" /><line x1="6" y1="11" x2="14" y2="3" /></g></svg>{{ t.legend.breach }}</span>
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><rect class="sim-window" x="2" y="2" width="16" height="10" /></svg>{{ t.legend.window }}</span>
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><rect class="sim-blocked" x="2" y="2" width="16" height="10" /></svg>{{ t.legend.blocked }}</span>
+      </div>
     </div>
     <p v-if="!horizonValid" class="sim-empty">{{ t.horizonInvalid }}</p>
     <!-- The chart never shrinks below the width where its row labels are legible:
@@ -74,6 +85,11 @@ const marks = computed(() => tl.value.marks.map(m => ({
         <text :x="PAD_L - 8" :y="b.y" text-anchor="end" class="sim-rowlabel">{{ b.name }}</text>
         <line v-if="b.x1 !== null && b.x2 !== null" :x1="b.x1" :y1="b.y - 4" :x2="b.x2" :y2="b.y - 4"
               class="sim-life" />
+        <!-- lifetime continues past the visible horizon: a chevron in the right gutter,
+             so an ongoing bar does not read as cut off at the edge. -->
+        <polygon v-if="b.ongoing && b.x2 !== null"
+                 :points="`${b.x2},${b.y - 8} ${b.x2 + 8},${b.y - 4} ${b.x2},${b.y}`"
+                 class="sim-ongoing" />
         <line v-if="b.deadline !== null" :x1="b.deadline" :y1="b.y - 12" :x2="b.deadline" :y2="b.y + 3"
               class="sim-deadline" />
       </g>

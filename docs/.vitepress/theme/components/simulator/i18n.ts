@@ -47,7 +47,10 @@ export interface Labels {
   loading: string
   loadFailed: string
   retry: string
-  legend: { rotation: string; surgeless: string; ready: string; breach: string; window: string; blocked: string }
+  legend: {
+    life: string; rotation: string; surgeless: string; ready: string; done: string
+    deadline: string; breach: string; window: string; blocked: string
+  }
 }
 
 const en: Labels = {
@@ -91,7 +94,9 @@ const en: Labels = {
   loadFailed: 'The simulator failed to load.',
   retry: 'Retry',
   legend: {
-    rotation: 'rotation', surgeless: 'surge-less (forceful fallback)', ready: 'replacement ready',
+    life: 'node lifetime', rotation: 'rotation start',
+    surgeless: 'surge-less (forceful fallback)', ready: 'replacement ready',
+    done: 'rotation done', deadline: 'expireAfter deadline',
     breach: 'expireAfter breach', window: 'maintenance window', blocked: 'blocked',
   },
 }
@@ -137,7 +142,9 @@ const ja: Labels = {
   loadFailed: 'シミュレーターの読み込みに失敗しました。',
   retry: '再試行',
   legend: {
-    rotation: 'ローテーション', surgeless: 'surge なし（forceful fallback）', ready: '代替ノード Ready',
+    life: 'ノードの寿命', rotation: 'ローテーション開始',
+    surgeless: 'surge なし（forceful fallback）', ready: '代替ノード Ready',
+    done: 'ローテーション完了', deadline: 'expireAfter 期限',
     breach: 'expireAfter 超過', window: 'メンテナンス窓', blocked: 'ブロック',
   },
 }

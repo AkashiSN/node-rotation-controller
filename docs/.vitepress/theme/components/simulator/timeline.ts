@@ -15,6 +15,11 @@ export interface Bar {
   endMs: number | null
   /** createdAt + effective expireAfter; null when malformed or outside the horizon. */
   deadlineMs: number | null
+  /** The node is still alive at the horizon end — either it never rotated, or its
+   *  rotation-done falls at/after the horizon end and endMs was clamped in. The chart
+   *  marks these bars as CONTINUING (a right chevron) so a lifetime that outlives the
+   *  visible window does not read as "cut off" at the right edge. */
+  ongoing: boolean
 }
 
 export interface Band {
@@ -116,7 +121,12 @@ export function barsOf(events: SimEvent[], horizon: Horizon, fleet: Fleet): Bar[
       ? new Date(declared.createdAt).getTime()
       : bornEvent ? bornOfReplacement(bornEvent, events) : t0
     const done = events.find(e => e.kind === 'rotation-done' && e.node === name)
-    const endMs = done ? at(done) : t1
+    const doneMs = done ? at(done) : NaN
+    const endMs = Number.isFinite(doneMs) ? doneMs : t1
+    // Alive at the horizon end: no rotation-done at all, or a done that lands beyond the
+    // window (so endMs was clamped back in). Such a bar continues past the right edge and
+    // must not look truncated there.
+    const ongoing = !Number.isFinite(doneMs) || doneMs >= t1
     // A replacement is provisioned from the NodePool TEMPLATE, so it inherits the
     // template's expireAfter — only a declared node can carry a per-node override
     // (internal/sim/loop.go pins the same rule).
@@ -131,6 +141,7 @@ export function barsOf(events: SimEvent[], horizon: Horizon, fleet: Fleet): Bar[
       endMs: Number.isFinite(endMs) ? clampToHorizon(endMs, t0, t1) : null,
       deadlineMs: Number.isFinite(deadlineMs) && deadlineMs >= t0 && deadlineMs <= t1
         ? deadlineMs : null,
+      ongoing,
     }
   })
 }

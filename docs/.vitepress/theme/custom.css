@@ -147,11 +147,14 @@
 .policy-simulator .sim-svg { display: block; width: 100%; min-width: 860px; height: auto; }
 .policy-simulator .sim-window { fill: var(--vp-c-brand-soft); }
 .policy-simulator .sim-life { stroke: var(--vp-c-text-3); stroke-width: 3; }
+/* The chevron for a lifetime that outlives the horizon — drawn into the right gutter. */
+.policy-simulator .sim-ongoing { fill: var(--vp-c-text-3); }
 .policy-simulator .sim-deadline { stroke: var(--vp-c-text-2); stroke-width: 1; stroke-dasharray: 2 2; }
 .policy-simulator .sim-rotation { fill: var(--vp-c-brand-1); }
 .policy-simulator .sim-surgeless { fill: var(--vp-c-warning-1); }
 .policy-simulator .sim-ready { fill: var(--vp-c-text-3); }
 .policy-simulator .sim-done { fill: var(--vp-c-brand-1); }
+.policy-simulator .sim-ongoing { fill: var(--vp-c-text-3); }
 .policy-simulator .sim-breach line { stroke: var(--vp-c-danger-1); stroke-width: 2; }
 .policy-simulator .sim-blocked { fill: var(--vp-c-text-3); opacity: 0.25; }
 /* 12px in the 1000-unit viewBox stays >= ~10px effective even at the chart's
@@ -159,11 +162,9 @@
 .policy-simulator .sim-rowlabel, .policy-simulator .sim-axis {
   fill: var(--vp-c-text-2); font-size: 12px; font-family: var(--vp-font-family-mono);
 }
+/* The legend is a key of mini-glyphs, each drawn with the same mark class as the chart
+   element it explains, so colour AND shape stay in sync from a single source. It sits in
+   the chart head, so it carries no top margin. */
 .policy-simulator .sim-legend { font-size: 0.75em; color: var(--vp-c-text-2); display: flex; gap: 0.25rem 0.9rem; flex-wrap: wrap; align-items: center; margin: 0; }
-.policy-simulator .sim-legend span { width: 10px; height: 10px; display: inline-block; border-radius: 2px; }
-.policy-simulator .k-rotation { background: var(--vp-c-brand-1); }
-.policy-simulator .k-surgeless { background: var(--vp-c-warning-1); }
-.policy-simulator .k-ready { background: var(--vp-c-text-3); }
-.policy-simulator .k-breach { background: var(--vp-c-danger-1); }
-.policy-simulator .k-window { background: var(--vp-c-brand-soft); }
-.policy-simulator .k-blocked { background: var(--vp-c-text-3); opacity: 0.25; }
+.policy-simulator .sim-key { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.policy-simulator .sim-glyph { width: 20px; height: 14px; flex: none; overflow: visible; }
