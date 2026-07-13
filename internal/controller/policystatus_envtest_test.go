@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	karpapis "sigs.k8s.io/karpenter/pkg/apis"
@@ -43,6 +44,11 @@ func TestStatusReconcilerEnvtest(t *testing.T) {
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0",
 		LeaderElection:         false,
+		// Controller names must be globally unique within a process, so a second
+		// in-process iteration would fail at setup — which would make this test
+		// impossible to run under -count=N. N repeats are how the #244 flake is
+		// gated, so opt out of the name check; nothing here reads the metrics.
+		Controller: ctrlconfig.Controller{SkipNameValidation: new(true)},
 	})
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
