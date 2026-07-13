@@ -69,7 +69,7 @@ test('one row per SLOT: a slot that rotated twice is still ONE row', () => {
   assert.equal(tl.anomalies.length, 0)
 })
 
-test('the provisioning of gen n+1 OVERLAPS the drain of gen n — that overlap is make-before-break', () => {
+test('gen n+1 PROVISIONS while gen n is still RUNNING — that coexistence is make-before-break', () => {
   const resp: SimResponse = {
     simulatedThrough: HORIZON.end,
     generations: [

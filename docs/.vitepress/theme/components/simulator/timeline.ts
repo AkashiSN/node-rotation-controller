@@ -21,9 +21,11 @@ import {
   type SimEvent, type SimGeneration, type SimResponse, type SimRotation,
 } from './model.ts'
 
-/** A generation's life is three segments. The PROVISIONING of generation n+1 overlaps
- *  the DRAIN of generation n — that overlap IS make-before-break, and it is the single
- *  most important thing this chart has to show. */
+/** A generation's life is three segments. Generation n+1 PROVISIONS while generation n is
+ *  still RUNNING — its predecessor's NodeClaim is deleted only at node-ready — and that
+ *  coexistence IS make-before-break: the single most important thing this chart has to show.
+ *  (Not "provisioning against the drain": the drain begins exactly where the provisioning
+ *  ends, so those two are adjacent and never overlap. See segmentsOf.) */
 export type SegmentKind = 'provisioning' | 'running' | 'drain'
 
 /** Why a segment has no established end.

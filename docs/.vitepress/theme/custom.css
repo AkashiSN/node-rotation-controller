@@ -157,9 +157,10 @@
 .policy-simulator .sim-breach line { stroke: var(--vp-c-danger-1); stroke-width: 2; }
 .policy-simulator .sim-blocked { fill: var(--vp-c-text-3); opacity: 0.25; }
 
-/* The three segments of a generation. The provisioning of gen n+1 OVERLAPS the drain of
-   gen n — that overlap is make-before-break, and the two must stay distinguishable where
-   they cross, so the drain is hollow and the provisioning solid. */
+/* The three segments of a generation. The provisioning of gen n+1 runs while gen n is still
+   RUNNING (its NodeClaim is deleted only at node-ready) — that coexistence is
+   make-before-break, and the two bars must stay distinguishable where they overlap. The
+   drain that follows is a third colour again: it is what the surge bought time for. */
 .policy-simulator .sim-seg { rx: 2; }
 .policy-simulator .sim-seg-provisioning { fill: var(--vp-c-brand-1); opacity: 0.85; }
 .policy-simulator .sim-seg-running { fill: var(--vp-c-text-3); opacity: 0.55; }
