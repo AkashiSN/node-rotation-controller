@@ -9,6 +9,7 @@ import { projectPolicy } from './simulator/policyYaml.ts'
 import { isValidTimezone } from './simulator/timeutil.ts'
 import { useWasm } from './simulator/useWasm.ts'
 import { useLabels } from './simulator/i18n.ts'
+import { SHARE_PARAM, decodeState, encodeState, shareSupported, type ShareState } from './simulator/share.ts'
 import PolicyInput from './simulator/PolicyInput.vue'
 import FleetInput from './simulator/FleetInput.vue'
 import EnvInput from './simulator/EnvInput.vue'
@@ -62,7 +63,60 @@ function schedule() {
   timer = setTimeout(run, 200)
 }
 
-onMounted(async () => { await load(); run() })
+// A link the page could not read is reported, not thrown: someone whose chat client ate the
+// tail of a URL must still land on a usable simulator.
+const shareError = ref('')
+const shareNote = ref('')
+const canShare = shareSupported()
+let noteTimer: ReturnType<typeof setTimeout> | undefined
+
+function currentState(): ShareState {
+  return {
+    policy: policyYAML.value,
+    fleet: fleet.value,
+    env: env.value,
+    horizon: horizon.value,
+  }
+}
+
+async function copyShareLink() {
+  const url = new URL(window.location.href)
+  url.searchParams.set(SHARE_PARAM, await encodeState(currentState()))
+  // replaceState, not pushState: Back must still mean "the page I came from", not "my
+  // previous edit".
+  window.history.replaceState({}, '', url)
+  try {
+    await navigator.clipboard.writeText(url.toString())
+    note(t.value.share.copied)
+  } catch {
+    note(t.value.share.copyFailed)
+  }
+}
+
+function note(message: string) {
+  shareNote.value = message
+  clearTimeout(noteTimer)
+  noteTimer = setTimeout(() => (shareNote.value = ''), 4000)
+}
+
+onMounted(async () => {
+  const value = new URLSearchParams(window.location.search).get(SHARE_PARAM)
+  if (value) {
+    const got = await decodeState(value)
+    if ('error' in got) {
+      shareError.value = t.value.share.badLink
+    } else {
+      policyYAML.value = got.state.policy
+      fleet.value = got.state.fleet
+      env.value = got.state.env
+      // PINNED: the sharer chose this span, so the fleet watcher must not move it.
+      horizonPinned.value = true
+      horizon.value = got.state.horizon
+    }
+  }
+  await load()
+  run()
+})
 watch([policyYAML, fleet, env, horizon], schedule, { deep: true })
 
 const result = computed(() => response.value.result)
@@ -123,6 +177,17 @@ const horizonStartMs = computed(() => new Date(horizon.value.start).getTime())
             <strong>{{ d.severity }}</strong> <code>{{ d.code }}</code> {{ d.message }}
           </li>
         </ul>
+      </div>
+
+      <p v-if="shareError" class="sim-warn sim-banner">{{ shareError }}</p>
+
+      <div v-if="result" class="sim-controls">
+        <button type="button" class="sim-btn" :disabled="!canShare"
+                :title="canShare ? undefined : t.share.unsupported" @click="copyShareLink">
+          {{ t.share.copy }}
+        </button>
+        <span v-if="shareNote" class="sim-share-note" role="status">{{ shareNote }}</span>
+        <span v-else-if="!canShare" class="sim-share-note">{{ t.share.unsupported }}</span>
       </div>
 
       <TimelineChart v-if="result" :response="response" :horizon="horizon" :fleet="fleet"

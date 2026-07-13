@@ -222,6 +222,8 @@
 }
 .policy-simulator .sim-btn:disabled { opacity: 0.45; cursor: default; }
 .policy-simulator .sim-btn-on { border-color: var(--vp-c-brand-1); color: var(--vp-c-brand-1); font-weight: 600; }
+/* The share confirmation: a transient status beside the button, not a dialog. */
+.policy-simulator .sim-share-note { font-size: 0.75em; color: var(--vp-c-text-2); }
 .policy-simulator .sim-view-label { font-size: 0.75em; color: var(--vp-c-text-2); margin: 0 0 0.4rem; }
 .policy-simulator .sim-tz { color: var(--vp-c-text-3); }
 .policy-simulator .sim-advanced { font-size: 0.8em; color: var(--vp-c-text-2); margin-top: 0.4rem; }
