@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { parseGoDuration, type Fleet, type Horizon, type SimEvent } from './model.ts'
+import type { Fleet, Horizon, SimEvent } from './model.ts'
+import { buildTimeline } from './timeline.ts'
 import { useLabels } from './i18n.ts'
 
 const props = defineProps<{ events: SimEvent[]; horizon: Horizon; fleet: Fleet }>()
@@ -11,116 +12,38 @@ const W = 1000, ROW = 26, PAD_L = 130, PAD_R = 20, PAD_T = 28, BAND = 14
 const t0 = computed(() => new Date(props.horizon.start).getTime())
 const t1 = computed(() => new Date(props.horizon.end).getTime())
 // A degenerate horizon (end <= start, or either bound not a parseable instant — e.g.
-// a user-typed negative expireAfter feeding defaultHorizon) breaks the x()/clip()
-// scale: clip() assumes t0 <= t1, and x() would place points far outside the 0..1000
-// viewBox. Gate the whole chart on this instead of trying to draw a mis-scaled one.
+// a user-typed negative expireAfter feeding defaultHorizon) breaks the x() scale: it
+// would place points far outside the 0..1000 viewBox. Gate the whole chart on this
+// instead of trying to draw a mis-scaled one.
 const horizonValid = computed(() =>
   Number.isFinite(t0.value) && Number.isFinite(t1.value) && t1.value > t0.value)
 const x = (ms: number) => PAD_L + ((ms - t0.value) / Math.max(1, t1.value - t0.value)) * (W - PAD_L - PAD_R)
-// Clip to the visible horizon: an interval can start before start or run past end,
-// and an unclipped band would render outside the plot area.
-const clip = (ms: number) => Math.min(Math.max(ms, t0.value), t1.value)
-const at = (e: SimEvent) => new Date(e.at).getTime()
-// No `until` on an edge-triggered interval event means it was still open at the end
-// of the simulated horizon — mirror windows()'s unclosed-window fallback instead of
-// falling back to `e.at`, which produced a zero-width band silently dropped below.
-const until = (e: SimEvent) => (e.until ? new Date(e.until).getTime() : t1.value)
 
-/** One row per node, including the replacements sim materialises: a replacement is a
- *  new node name, and it becomes the next generation's candidate. */
-const rows = computed(() => {
-  const names = props.fleet.nodes.map(n => n.name)
-  for (const e of props.events) {
-    if (e.replacement && !names.includes(e.replacement)) names.push(e.replacement)
-  }
-  return names
-})
+// Every DERIVATION (rows, births, deadlines, window/blocked pairing, marks) lives in
+// the pure timeline.ts, where node --test pins it — notably the rule that a surged
+// replacement is born at its rotation-START, not at the rotation-done that names it.
+// This component only scales the resulting instants to the viewBox and draws them.
+const tl = computed(() => buildTimeline(props.events, props.horizon, props.fleet))
 
+const rows = computed(() => tl.value.rows)
 const height = computed(() => PAD_T + rows.value.length * ROW + 56)
 
-/** Maintenance-window bands, paired from the window-open / window-close events. */
-const windows = computed(() => {
-  const out: { x1: number; x2: number }[] = []
-  // The wire contract does not promise chronological order. Pairing by array
-  // position (not time) would drop a close that precedes its open in the array,
-  // leaving the open dangling to hit the unclosed-window fallback below and draw
-  // a band across the WHOLE horizon. Sort a local copy — never mutate the prop.
-  const sorted = [...props.events].sort((a, b) => at(a) - at(b))
-  let open: number | null = null
-  for (const e of sorted) {
-    if (e.kind === 'window-open') open = at(e)
-    if (e.kind === 'window-close' && open !== null) {
-      out.push({ x1: x(clip(open)), x2: x(clip(at(e))) })
-      open = null
-    }
-  }
-  if (open !== null) out.push({ x1: x(clip(open)), x2: x(t1.value) })
-  return out
-})
-
-/** blocked-by-gate / no-eligible-claim are EDGE-TRIGGERED and carry an interval
- *  (at..until) — one event for a week-long stretch. They are bands under the axis,
- *  never point marks: drawing them as points would throw away the coalescing that
- *  keeps the payload small and the picture readable. */
-const blocked = computed(() =>
-  props.events
-    .filter(e => e.kind === 'blocked-by-gate' || e.kind === 'no-eligible-claim')
-    .map(e => ({
-      x1: x(clip(at(e))),
-      x2: x(clip(until(e))),
-      label: e.gate ?? 'no-eligible-claim',
-    }))
-    .filter(b => b.x2 > b.x1))
-
-/** Per-row lifetime bar: from the node's createdAt (or the horizon start, for a
- *  replacement created inside it) to its rotation-done (or the horizon end).
- *
- *  For a replacement row (no declared FleetNode), its birth is the `at` of the
- *  event that named it in `replacement` — that lookup is guaranteed to succeed
- *  because `rows` only ever adds a name it saw on such an event. Still resolved
- *  as a total function (fallback to the horizon start) rather than asserted: a
- *  thrown TypeError here would blank the whole page over a single bad row. */
-const bars = computed(() => rows.value.map((name, i) => {
-  const declared = props.fleet.nodes.find(n => n.name === name)
-  const bornEvent = declared ? undefined : props.events.find(e => e.replacement === name)
-  const bornMs = declared ? new Date(declared.createdAt).getTime() : bornEvent ? at(bornEvent) : t0.value
-  const done = props.events.find(e => e.kind === 'rotation-done' && e.node === name)
-  const doneMs = done ? at(done) : t1.value
-  const eff = declared?.expireAfter ?? props.fleet.expireAfter
-  const deadlineMs = bornMs + (parseGoDuration(eff) ?? 0)
-  // A malformed createdAt (or event `at`) parses to NaN, and clip(NaN) stays NaN:
-  // an SVG x1="NaN" paints nothing with no explanation. Treat it as absent (null)
-  // so the template can skip that mark instead of emitting a garbage attribute.
-  return {
-    name,
-    y: PAD_T + i * ROW,
-    x1: Number.isFinite(bornMs) ? x(clip(bornMs)) : null,
-    x2: Number.isFinite(doneMs) ? x(clip(doneMs)) : null,
-    deadline: Number.isFinite(deadlineMs) && deadlineMs <= t1.value && deadlineMs >= t0.value
-      ? x(deadlineMs) : null,
-  }
-}))
-
-/** The point marks: rotation-start (surge-less drawn distinctly), node-ready,
- *  rotation-done and — in red — every expire-after-breach. */
-const marks = computed(() => props.events
-  .filter(e => ['rotation-start', 'node-ready', 'rotation-done', 'expire-after-breach'].includes(e.kind))
-  .map(e => {
-    const row = rows.value.indexOf(e.node ?? '')
-    if (row < 0) return null
-    const atMs = at(e)
-    // A malformed `at` parses to NaN; skip the mark rather than emit cx="NaN" (see
-    // the same treatment in `bars` above).
-    if (!Number.isFinite(atMs)) return null
-    return {
-      kind: e.kind,
-      surgeless: e.surgeless === true,
-      cx: x(clip(atMs)),
-      cy: PAD_T + row * ROW - 4,
-      title: `${e.kind}${e.surgeless ? ' (surge-less)' : ''} — ${e.node} @ ${e.at}`,
-    }
-  })
-  .filter((m): m is NonNullable<typeof m> => m !== null))
+const windows = computed(() => tl.value.windows.map(w => ({ x1: x(w.startMs), x2: x(w.endMs) })))
+const blocked = computed(() => tl.value.blocked.map(b => ({ x1: x(b.startMs), x2: x(b.endMs), label: b.label })))
+const bars = computed(() => tl.value.bars.map((b, i) => ({
+  name: b.name,
+  y: PAD_T + i * ROW,
+  x1: b.bornMs === null ? null : x(b.bornMs),
+  x2: b.endMs === null ? null : x(b.endMs),
+  deadline: b.deadlineMs === null ? null : x(b.deadlineMs),
+})))
+const marks = computed(() => tl.value.marks.map(m => ({
+  kind: m.kind,
+  surgeless: m.surgeless,
+  title: m.title,
+  cx: x(m.atMs),
+  cy: PAD_T + m.row * ROW - 4,
+})))
 </script>
 
 <template>
