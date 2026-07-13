@@ -82,27 +82,28 @@ const fatals = computed(() => diagnostics.value.filter(d => d.severity === 'fata
 
       <TimelineChart v-if="result" :events="events" :horizon="horizon" :fleet="fleet" />
 
+      <!-- PolicyInput stays OUTSIDE the .sim-inputs grid: a full-row spanning item
+           would keep auto-fit's empty tracks alive and squeeze the three columns. -->
+      <PolicyInput v-model:yaml="policyYAML" />
+
       <div class="sim-inputs">
-        <PolicyInput v-model:yaml="policyYAML" />
         <FleetInput v-model:fleet="fleet" />
-        <div>
-          <EnvInput v-model:env="env"
-                    :provisioning-estimate="result?.provisioningEstimate ?? ''"
-                    :drain-estimate="result?.drainEstimate ?? ''" />
-          <section class="sim-block">
-            <h3>{{ t.horizon }}</h3>
-            <fieldset class="sim-form">
-              <label>{{ t.start }}
-                <input :value="horizon.start"
-                       @change="horizonPinned = true; horizon = { ...horizon, start: ($event.target as HTMLInputElement).value }" />
-              </label>
-              <label>{{ t.end }}
-                <input :value="horizon.end"
-                       @change="horizonPinned = true; horizon = { ...horizon, end: ($event.target as HTMLInputElement).value }" />
-              </label>
-            </fieldset>
-          </section>
-        </div>
+        <EnvInput v-model:env="env"
+                  :provisioning-estimate="result?.provisioningEstimate ?? ''"
+                  :drain-estimate="result?.drainEstimate ?? ''" />
+        <section class="sim-block">
+          <h3>{{ t.horizon }}</h3>
+          <fieldset class="sim-form">
+            <label class="sim-field-wide">{{ t.start }}
+              <input :value="horizon.start"
+                     @change="horizonPinned = true; horizon = { ...horizon, start: ($event.target as HTMLInputElement).value }" />
+            </label>
+            <label class="sim-field-wide">{{ t.end }}
+              <input :value="horizon.end"
+                     @change="horizonPinned = true; horizon = { ...horizon, end: ($event.target as HTMLInputElement).value }" />
+            </label>
+          </fieldset>
+        </section>
       </div>
 
       <DiagnosticsPanel :diagnostics="diagnostics" :partial="response.partial === true" />

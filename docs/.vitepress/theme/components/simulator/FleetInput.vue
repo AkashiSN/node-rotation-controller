@@ -63,8 +63,8 @@ function patchNode(i: number, part: Partial<Fleet['nodes'][number]>) {
 
     <fieldset class="sim-form">
       <label>{{ t.nodeCount }}<input type="number" min="1" max="50" v-model.number="count" /></label>
-      <label>{{ t.firstCreatedAt }}<input v-model="first" /></label>
       <label>{{ t.spread }}<input v-model="spread" /></label>
+      <label class="sim-field-wide">{{ t.firstCreatedAt }}<input v-model="first" /></label>
       <button type="button" @click="regenerate">{{ t.generate }}</button>
     </fieldset>
 

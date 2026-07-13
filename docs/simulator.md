@@ -3,6 +3,10 @@ layout: page
 title: Policy simulator
 ---
 
+<!-- layout: page renders full-bleed with no gutters; this wrapper is the page's
+     .policy-simulator CSS scope and carries the page padding (see custom.css). -->
+<div class="policy-simulator">
+
 # Policy simulator
 
 Enter a `RotationPolicy` and a fleet, and see **which day each node gets rotated** —
@@ -19,3 +23,5 @@ fallback. It does not model failures — a surge that times out, `retryBackoff`,
 :::
 
 <PolicySimulator />
+
+</div>

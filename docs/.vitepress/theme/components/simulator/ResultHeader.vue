@@ -7,7 +7,7 @@ const t = useLabels()
 </script>
 
 <template>
-  <section class="sim-header">
+  <section class="sim-block sim-header">
     <h3>{{ t.forecast }}</h3>
     <p class="sim-hint">{{ t.forecastHint }}</p>
 
@@ -20,8 +20,8 @@ const t = useLabels()
     </dl>
 
     <!-- The controller's own English messages, verbatim in both locales. -->
-    <ul class="sim-findings">
-      <li v-for="(f, i) in result.findings ?? []" :key="i" :class="`sim-${f.severity}`">
+    <ul v-if="result.findings?.length" class="sim-findings">
+      <li v-for="(f, i) in result.findings" :key="i" :class="`sim-${f.severity}`">
         <strong>{{ f.severity }}</strong> <code>{{ f.code }}</code> {{ f.message }}
       </li>
     </ul>

@@ -48,7 +48,17 @@ const marks = computed(() => tl.value.marks.map(m => ({
 
 <template>
   <section class="sim-block">
-    <h3>{{ t.timeline }}</h3>
+    <div class="sim-chart-head">
+      <h3>{{ t.timeline }}</h3>
+      <p v-if="horizonValid" class="sim-legend">
+        <span class="k-rotation" /> {{ t.legend.rotation }}
+        <span class="k-surgeless" /> {{ t.legend.surgeless }}
+        <span class="k-ready" /> {{ t.legend.ready }}
+        <span class="k-breach" /> {{ t.legend.breach }}
+        <span class="k-window" /> {{ t.legend.window }}
+        <span class="k-blocked" /> {{ t.legend.blocked }}
+      </p>
+    </div>
     <p v-if="!horizonValid" class="sim-empty">{{ t.horizonInvalid }}</p>
     <svg v-else class="sim-svg" :viewBox="`0 0 ${W} ${height}`" role="img" :aria-label="t.timeline">
       <!-- maintenance windows -->
@@ -88,14 +98,5 @@ const marks = computed(() => tl.value.marks.map(m => ({
       <text :x="PAD_L" :y="height - 8" class="sim-axis">{{ horizon.start }}</text>
       <text :x="W - PAD_R" :y="height - 8" text-anchor="end" class="sim-axis">{{ horizon.end }}</text>
     </svg>
-
-    <p v-if="horizonValid" class="sim-legend">
-      <span class="k-rotation" /> {{ t.legend.rotation }}
-      <span class="k-surgeless" /> {{ t.legend.surgeless }}
-      <span class="k-ready" /> {{ t.legend.ready }}
-      <span class="k-breach" /> {{ t.legend.breach }}
-      <span class="k-window" /> {{ t.legend.window }}
-      <span class="k-blocked" /> {{ t.legend.blocked }}
-    </p>
   </section>
 </template>

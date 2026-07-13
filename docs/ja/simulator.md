@@ -3,6 +3,10 @@ layout: page
 title: ポリシーシミュレーター
 ---
 
+<!-- layout: page renders full-bleed with no gutters; this wrapper is the page's
+     .policy-simulator CSS scope and carries the page padding (see custom.css). -->
+<div class="policy-simulator">
+
 # ポリシーシミュレーター
 
 `RotationPolicy` とノード群を入力すると、**どのノードがいつローテーションされるか**、
@@ -19,3 +23,5 @@ title: ポリシーシミュレーター
 :::
 
 <PolicySimulator />
+
+</div>
