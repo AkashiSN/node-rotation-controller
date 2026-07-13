@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { projectPolicy, applyPolicyEdit, type PolicyForm } from './policyYaml.ts'
 import { useLabels } from './i18n.ts'
 
@@ -8,14 +8,33 @@ const emit = defineEmits<{ 'update:yaml': [string] }>()
 const t = useLabels()
 
 const projection = computed(() => projectPolicy(props.yaml))
-const form = computed(() => projection.value.form)
 // A YAML the browser parser rejects DISABLES the form (the last good projection stays
 // on screen, greyed) — but the raw YAML is still what the page sends to simulate(),
 // so the error the user reads is the controller's own.
+//
+// `projectPolicy` itself returns a BLANK form on a parse error (see policyYaml.ts),
+// so showing `projection.value.form` directly would snap every field to empty the
+// instant the user types an invalid character mid-edit. Freeze on the last
+// SUCCESSFUL projection instead — `broken` still disables the fieldset, so the
+// frozen values read as "greyed out", not as live.
+const lastGoodForm = ref<PolicyForm>(projection.value.form)
+watch(projection, (p) => {
+  if (!p.error) lastGoodForm.value = p.form
+})
+const form = computed(() => lastGoodForm.value)
 const broken = computed(() => projection.value.error !== undefined)
 
 function edit(field: keyof PolicyForm, value: unknown) {
   emit('update:yaml', applyPolicyEdit(props.yaml, field, value))
+}
+
+function onMinRotationChancesChange(raw: string) {
+  // `Number('')` is `0`, not NaN — clearing the field would otherwise write
+  // `minRotationChances: 0` into the YAML, a value the CRD's `minimum: 1`
+  // rejects. Leave the YAML untouched while the field is empty; the strict
+  // decode error (if any) still comes from the wasm module, not this form.
+  if (raw === '') return
+  edit('minRotationChances', Number(raw))
 }
 </script>
 
@@ -40,7 +59,7 @@ function edit(field: keyof PolicyForm, value: unknown) {
       </label>
       <label>{{ t.minRotationChances }}
         <input type="number" min="1" :value="form.minRotationChances ?? 2"
-               @change="edit('minRotationChances', Number(($event.target as HTMLInputElement).value))" />
+               @change="onMinRotationChancesChange(($event.target as HTMLInputElement).value)" />
       </label>
       <label>{{ t.ageThreshold }}
         <input :value="form.ageThreshold" @change="edit('ageThreshold', ($event.target as HTMLInputElement).value)" />

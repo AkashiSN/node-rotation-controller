@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { generateNodes, type Fleet } from './model.ts'
 import { useLabels } from './i18n.ts'
 
@@ -9,7 +9,24 @@ const t = useLabels()
 
 const count = ref(props.fleet.nodes.length)
 const first = ref(props.fleet.nodes[0]?.createdAt ?? '2026-01-01T00:00:00Z')
+// `spread` has no representation in a `Fleet` (it only drives the interval `generateNodes`
+// spaces new nodes by) — it stays a purely local generator input and is never resynced.
 const spread = ref('168h')
+
+// The orchestrator owns `fleet` and can replace it wholesale (e.g. loading a preset),
+// not just via this component's own patch()/regenerate() emits. Without this watcher
+// `count`/`first` would go stale, and the next Generate click would stomp the
+// orchestrator's fleet using the old seed values. Assigning the refs here never emits
+// by itself — only the explicit regenerate() click does — so resyncing to a value that
+// already matches (including the case where our own emit round-trips back through
+// `props.fleet`) is a no-op, not a feedback loop.
+watch(
+  () => props.fleet,
+  (f) => {
+    count.value = f.nodes.length
+    first.value = f.nodes[0]?.createdAt ?? '2026-01-01T00:00:00Z'
+  },
+)
 
 function regenerate() {
   // `min="1"` on the <input type="number"> below is advisory only — it does not
