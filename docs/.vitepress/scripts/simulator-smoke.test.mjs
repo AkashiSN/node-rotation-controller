@@ -37,6 +37,18 @@ test('the page defaults produce a timeline, not an error', async () => {
   assert.ok(out.events.some(e => e.kind === 'rotation-done'),
     'the default fleet must complete at least one rotation inside the default horizon')
   assert.equal(out.partial, false, 'the default horizon must fit the step budget')
+  // The front door must be clean, not merely runnable: a default that WARNS
+  // (e.g. HardCapExceeded from an expireAfter the cluster would reject) is
+  // still a defect even though it is not a hard `error`. No findings, and no
+  // `fatal`-severity diagnostic, may survive on the shipped defaults.
+  assert.ok(
+    !out.result.findings || out.result.findings.length === 0,
+    `the shipped defaults must produce no findings: ${JSON.stringify(out.result.findings)}`,
+  )
+  assert.ok(
+    !out.diagnostics || out.diagnostics.every(d => d.severity !== 'fatal'),
+    `the shipped defaults must produce no fatal diagnostics: ${JSON.stringify(out.diagnostics)}`,
+  )
 })
 
 test('simulate never throws — a bad manifest comes back as an error string', async () => {

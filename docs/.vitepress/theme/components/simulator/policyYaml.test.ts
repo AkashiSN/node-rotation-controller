@@ -7,7 +7,7 @@ test('projectPolicy reads the form fields off a manifest', () => {
   const { form, error } = projectPolicy(DEFAULT_POLICY_YAML)
   assert.equal(error, undefined)
   assert.equal(form.timezone, 'UTC')
-  assert.deepEqual(form.days, ['Sat'])
+  assert.deepEqual(form.days, ['Wed', 'Sat'])
   assert.equal(form.start, '02:00')
   assert.equal(form.end, '06:00')
   assert.equal(form.minRotationChances, 2)
@@ -51,11 +51,11 @@ test('projectPolicy always projects days as a string[], even for a bare scalar o
   // `days: Sat` is valid YAML (a bare scalar) and an easy typo for `days: [Sat]`.
   // The form's contract is `string[]`; a consumer that does `form.days.join(',')`
   // must not throw or receive a raw string mistaken for an array.
-  const scalar = projectPolicy(DEFAULT_POLICY_YAML.replace('days: [Sat]', 'days: Sat'))
+  const scalar = projectPolicy(DEFAULT_POLICY_YAML.replace('days: [Wed, Sat]', 'days: Sat'))
   assert.equal(scalar.error, undefined)
   assert.deepEqual(scalar.form.days, [])
 
-  const empty = projectPolicy(DEFAULT_POLICY_YAML.replace('days: [Sat]', 'days:'))
+  const empty = projectPolicy(DEFAULT_POLICY_YAML.replace('days: [Wed, Sat]', 'days:'))
   assert.equal(empty.error, undefined)
   assert.deepEqual(empty.form.days, [])
 })

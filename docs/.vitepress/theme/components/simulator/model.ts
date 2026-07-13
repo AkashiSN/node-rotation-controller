@@ -168,8 +168,15 @@ spec:
   ageThreshold: auto
   minRotationChances: 2
   maintenanceWindows:
+    # Two occurrences a week, not one: with minRotationChances=2, a single
+    # weekly window (worst-case period P = 168h) forces K*P = 336h, which
+    # only clears the AVeryAggressive warning (needs ageThreshold A >= P) at
+    # an expireAfter beyond the Auto Mode hard cap (§1.1) — there is no
+    # expireAfter that is simultaneously under the cap and free of that
+    # warning against a single-day window. Adding Wed halves P and keeps A
+    # comfortably above it at expireAfter = 480h (see DEFAULT_FLEET below).
     - timezone: UTC
-      days: [Sat]
+      days: [Wed, Sat]
       start: "02:00"
       end: "06:00"
   surge:
@@ -186,8 +193,14 @@ spec:
  *  and defaultHorizon's empty-fleet fallback so the two cannot drift apart. */
 export const DEFAULT_FIRST_CREATED_AT = '2026-01-01T00:00:00Z'
 
+// 480h (20d), not 720h (30d): the EKS Auto Mode hard cap is 21d (504h) on
+// expireAfter + terminationGracePeriod combined (spec §1.1). 480h + the 1h
+// terminationGracePeriod below leaves 23h of headroom under that cap, so the
+// page a visitor lands on demonstrates a policy Auto Mode would actually
+// admit instead of opening on a HardCapExceeded warning about our own
+// default. Do not round this back up to 720h.
 export const DEFAULT_FLEET: Fleet = {
-  expireAfter: '720h',
+  expireAfter: '480h',
   terminationGracePeriod: '1h',
   nodes: generateNodes(3, DEFAULT_FIRST_CREATED_AT, '168h'),
 }
