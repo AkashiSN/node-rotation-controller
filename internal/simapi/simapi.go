@@ -83,11 +83,78 @@ type Options struct {
 // policy whose findings forbid any rotation) is a Diagnostic, so the page can
 // always render the header strip and say why the timeline looks as it does.
 type Response struct {
-	Error       string       `json:"error,omitempty"`
-	Result      *Result      `json:"result,omitempty"`
-	Events      []Event      `json:"events,omitempty"`
-	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
-	Partial     bool         `json:"partial"`
+	Error  string  `json:"error,omitempty"`
+	Result *Result `json:"result,omitempty"`
+	Events []Event `json:"events,omitempty"`
+	// Generations, Rotations and Windows are the run's derived structure — the facts a
+	// consumer cannot honestly recover from the events (see the types). Events remains the
+	// backwards-compatible contract: a page that knows nothing of these fields keeps
+	// working, and the two representations agree wherever they overlap.
+	Generations []Generation     `json:"generations,omitempty"`
+	Rotations   []Rotation       `json:"rotations,omitempty"`
+	Windows     []WindowInterval `json:"windows,omitempty"`
+	Diagnostics []Diagnostic     `json:"diagnostics,omitempty"`
+	Partial     bool             `json:"partial"`
+	// SimulatedThrough (RFC3339) is the last instant the simulation actually PROCESSED —
+	// Options.End on a normal run, earlier when the step budget was exhausted. Nothing in
+	// the response lies beyond it. It is absent only when no timeline was produced at all.
+	SimulatedThrough string `json:"simulatedThrough,omitempty"`
+}
+
+// Generation is one generation of one fleet slot. A slot's node count is constant and its
+// generations relay along it, so a consumer draws one row per slot — not one per node name.
+type Generation struct {
+	Slot      int    `json:"slot"`
+	Gen       int    `json:"gen"`
+	Name      string `json:"name"`
+	BirthMode string `json:"birthMode"` // "initial" | "surge" | "surgeless"
+	// PredecessorGen is absent for an initial node. A pointer, not a sentinel: generation 0
+	// is a valid predecessor and must serialize as 0, not be dropped.
+	PredecessorGen *int   `json:"predecessorGen,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	ExpireAfter    string `json:"expireAfter"`
+	// DrainCap is the bound this node's drain is held to; DrainCapSource says whether it is
+	// the node's own terminationGracePeriod or the fixed fallback, so the consumer never
+	// re-derives that constant.
+	DrainCap       string `json:"drainCap"`
+	DrainCapSource string `json:"drainCapSource"` // "explicit" | "fallback"
+	Deadline       string `json:"deadline"`
+	// EligibilityBoundary is EXCLUSIVE: the trigger is a strict inequality, so a node
+	// exactly at this instant is not yet eligible. Label it "eligible after", never as an
+	// event.
+	EligibilityBoundary string `json:"eligibilityBoundary"`
+	// ReadyAt is set only for a surged replacement that became Ready; absent while it is
+	// still provisioning, and absent for the initial and surge-less births.
+	ReadyAt string `json:"readyAt,omitempty"`
+	// Provisional marks a replacement whose rotation has not completed. Omitted when false:
+	// a consumer treats missing as false.
+	Provisional bool `json:"provisional,omitempty"`
+}
+
+// Rotation relates two generations of a slot, so no consumer pairs events to find it.
+type Rotation struct {
+	Slot    int `json:"slot"`
+	FromGen int `json:"fromGen"`
+	// ToGen is absent while the produced generation does not exist yet — a surge-less
+	// rotation still draining at simulatedThrough has staged no replacement, and naming one
+	// would assert a node the simulation never created.
+	ToGen *int   `json:"toGen,omitempty"`
+	Mode  string `json:"mode"` // "surge" | "surgeless"
+	Start string `json:"start"`
+	// Ready and Done are ABSENT while the rotation is in flight — absent, not zero-length.
+	// Ready is always absent on the surge-less path, which stages no surge.
+	Ready string `json:"ready,omitempty"`
+	Done  string `json:"done,omitempty"`
+}
+
+// WindowInterval is one observed occurrence of the effective (union) window schedule.
+// The clipped flags mark a boundary that is an artifact of the horizon rather than a real
+// transition; both are omitted when false, and a consumer treats missing as false.
+type WindowInterval struct {
+	Start        string `json:"start"`
+	End          string `json:"end"`
+	StartClipped bool   `json:"startClipped,omitempty"`
+	EndClipped   bool   `json:"endClipped,omitempty"`
 }
 
 // Result is the derivation the controller would compute and export for this
@@ -302,8 +369,9 @@ func instant(field, s string) (time.Time, error) {
 
 func toResponse(tl sim.Timeline) Response {
 	resp := Response{
-		Result:  toResult(tl.Result),
-		Partial: tl.Partial,
+		Result:           toResult(tl.Result),
+		Partial:          tl.Partial,
+		SimulatedThrough: stamp(tl.SimulatedThrough),
 	}
 	for _, e := range tl.Events {
 		ev := Event{
@@ -324,6 +392,42 @@ func toResponse(tl sim.Timeline) Response {
 			}
 		}
 		resp.Events = append(resp.Events, ev)
+	}
+	for _, g := range tl.Generations {
+		resp.Generations = append(resp.Generations, Generation{
+			Slot:                g.Slot,
+			Gen:                 g.Gen,
+			Name:                g.Name,
+			BirthMode:           string(g.BirthMode),
+			PredecessorGen:      g.PredecessorGen,
+			CreatedAt:           stamp(g.CreatedAt),
+			ExpireAfter:         g.ExpireAfter.String(),
+			DrainCap:            g.DrainCap.String(),
+			DrainCapSource:      string(g.DrainCapSource),
+			Deadline:            stamp(g.Deadline),
+			EligibilityBoundary: stamp(g.EligibilityBoundary),
+			ReadyAt:             stamp(g.ReadyAt),
+			Provisional:         g.Provisional,
+		})
+	}
+	for _, rt := range tl.Rotations {
+		resp.Rotations = append(resp.Rotations, Rotation{
+			Slot:    rt.Slot,
+			FromGen: rt.FromGen,
+			ToGen:   rt.ToGen,
+			Mode:    string(rt.Mode),
+			Start:   stamp(rt.Start),
+			Ready:   stamp(rt.Ready),
+			Done:    stamp(rt.Done),
+		})
+	}
+	for _, w := range tl.Windows {
+		resp.Windows = append(resp.Windows, WindowInterval{
+			Start:        stamp(w.Start),
+			End:          stamp(w.End),
+			StartClipped: w.StartClipped,
+			EndClipped:   w.EndClipped,
+		})
 	}
 	for _, d := range tl.Diagnostics {
 		resp.Diagnostics = append(resp.Diagnostics, Diagnostic{

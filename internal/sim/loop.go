@@ -35,16 +35,26 @@ func (r *run) loop() {
 	inWindow := r.sched.InWindow(now)
 	if inWindow {
 		r.emit(Event{Kind: KindWindowOpen, At: now})
+		r.openWindow(now)
 	}
+
+	// lastProcessed is the last instant whose body COMPLETED. It is not the loop cursor at
+	// break: the step guard runs before the body, so the cursor there names an instant that
+	// was never processed. The final sweep runs at lastProcessed on a partial run, so the
+	// timeline never reports breaches or interval ends from time the simulation never
+	// reached.
+	lastProcessed := r.opts.Start
+	exhausted := false
 
 	for steps := 0; !now.After(r.opts.End); steps++ {
 		if steps >= maxSteps {
+			exhausted = true
 			r.tl.Partial = true
 			r.diagOnce(Diagnostic{
 				Severity: schedule.Warn,
 				Code:     "StepBudgetExhausted",
 				Message: fmt.Sprintf("the simulation stopped at %s: the horizon needs more than %d steps of the %v decision cadence. Shorten the horizon",
-					now.Format(time.RFC3339), maxSteps, tick),
+					lastProcessed.Format(time.RFC3339), maxSteps, tick),
 			})
 			break
 		}
@@ -53,8 +63,10 @@ func (r *run) loop() {
 			inWindow = open
 			if open {
 				r.emit(Event{Kind: KindWindowOpen, At: now})
+				r.openWindow(now)
 			} else {
 				r.emit(Event{Kind: KindWindowClose, At: now})
+				r.closeWindow(now, false)
 			}
 		}
 
@@ -63,6 +75,7 @@ func (r *run) loop() {
 		if r.rot == nil {
 			r.maybeStart(now, inWindow)
 		}
+		lastProcessed = now
 
 		next := r.next(now)
 		if !next.After(now) { // defensive: the clock must always move forward
@@ -71,17 +84,34 @@ func (r *run) loop() {
 		now = next
 	}
 
-	// A deadline does not fall on the tick grid, so the last tick of the horizon can lie
-	// before it: a breach at (lastTick, End] — including End itself, the horizon an
-	// operator asking "does every node make it?" would naturally choose — would otherwise
-	// go unreported. Sweep once more at End. A rotation that completed before its deadline
-	// re-created the node with a fresh CreatedAt, so this cannot invent a breach.
-	r.breachCheck(r.opts.End)
+	// The horizon's trailing edge. On a normal run this is Options.End: a deadline does not
+	// fall on the tick grid, so the last tick can lie before it, and a breach at
+	// (lastTick, End] — including End itself, the horizon an operator asking "does every
+	// node make it?" would naturally choose — would otherwise go unreported. A rotation that
+	// completed before its deadline re-created the node with a fresh CreatedAt, so this
+	// cannot invent a breach.
+	//
+	// On a PARTIAL run it is lastProcessed instead. Sweeping at the REQUESTED end there
+	// would report breaches and interval ends drawn from time the simulator never reached,
+	// which no consumer could tell apart from real ones.
+	through := r.opts.End
+	if exhausted {
+		through = lastProcessed
+	}
+	r.tl.SimulatedThrough = through
 
-	// Close any interval still open at the horizon so the UI is never left with a
-	// dangling "blocked since …" it has to guess the end of.
-	r.flushBlocked(r.opts.End)
-	r.flushCensus(r.opts.End)
+	r.breachCheck(through)
+
+	// Close any interval still open, so the UI is never left with a dangling "blocked
+	// since …" it has to guess the end of. A window still open here is clipped by the
+	// horizon — the interval records where observation stopped.
+	//
+	// No synthetic window-close EVENT is emitted: window-close means a genuine union
+	// transition, and a consumer that has only the events would render a close mark for a
+	// window that never closed.
+	r.flushBlocked(through)
+	r.flushCensus(through)
+	r.closeWindow(through, true)
 }
 
 // next is the following decision instant: the next tick of the grid, or an in-flight
@@ -108,9 +138,14 @@ func (r *run) advance(now time.Time) {
 	}
 	n := &r.nodes[rot.slot]
 	if !rot.surgeless && n.state == annotations.StatePending && !now.Before(rot.readyAt) {
-		// The surge node is Ready; the old NodeClaim is deleted and its drain begins.
+		// The surge node is Ready; the old NodeClaim is deleted and its drain begins. The
+		// event carries the OLD node's name — the generation has not incremented yet — so
+		// the replacement's own ready instant is recorded on its generation, where it is
+		// unambiguous.
 		n.state = annotations.StateDraining
 		r.emit(Event{Kind: KindNodeReady, At: rot.readyAt, Node: n.name()})
+		r.tl.Rotations[rot.rotIdx].Ready = rot.readyAt
+		r.tl.Generations[rot.genIdx].ReadyAt = rot.readyAt
 	}
 	if now.Before(rot.doneAt) {
 		return
@@ -145,6 +180,18 @@ func (r *run) advance(now time.Time) {
 
 	r.poolAnn[annotations.LastRotationAt] = rot.doneAt.Format(time.RFC3339)
 	r.emit(Event{Kind: KindRotationDone, At: rot.doneAt, Node: old, Replacement: n.name(), Surgeless: rot.surgeless})
+
+	r.tl.Rotations[rot.rotIdx].Done = rot.doneAt
+	if rot.surgeless {
+		// The surge-less replacement is born HERE, not at the start: no placeholder was
+		// staged, so nothing of it existed until the drain completed. Only now can it be
+		// recorded — and only now can the rotation name the generation it produced.
+		pred, to := n.gen-1, n.gen // copies: n.gen is mutated by the slot's NEXT rotation
+		r.recordGeneration(rot.slot, n, BirthSurgeless, &pred, false)
+		r.tl.Rotations[rot.rotIdx].ToGen = &to
+	} else {
+		r.tl.Generations[rot.genIdx].Provisional = false
+	}
 	r.rot = nil
 }
 
@@ -213,16 +260,41 @@ func (r *run) maybeStart(now time.Time, inWindow bool) {
 	// surge-less when the opt-in fallback is enabled (ADR-0001): no placeholder, no
 	// surge, drain only. This is a deadline-race branch, not a failure branch.
 	surgeless := decide.SurgelessFallback(pick, gi)
-	rot := &rotation{slot: slot, start: now, surgeless: surgeless}
+	rot := &rotation{slot: slot, start: now, surgeless: surgeless, genIdx: -1}
 	drain := r.drainFor(n)
+	rec := Rotation{Slot: slot, FromGen: n.gen, Mode: RotationSurge, Start: now}
 	if surgeless {
 		n.state = annotations.StateDraining
 		rot.doneAt = now.Add(drain)
+		rec.Mode = RotationSurgeless
 	} else {
 		n.state = annotations.StatePending
 		rot.readyAt = now.Add(r.env.Provisioning)
 		rot.doneAt = rot.readyAt.Add(drain)
+
+		// The surged replacement exists from THIS instant: Karpenter creates its NodeClaim
+		// as soon as the placeholder Pod goes pending, and that CreatedAt is what sets the
+		// next generation's deadline. Recording it now — provisionally — is what lets a
+		// surge still in flight at the horizon's end show its provisioning overlapping the
+		// old node's drain, instead of vanishing from the timeline entirely.
+		//
+		// It is built from the NodePool template, exactly as advance() will rebuild the slot
+		// when the rotation completes: a replacement inherits the template, never the old
+		// node's per-node overrides.
+		next := simNode{
+			base:        n.base,
+			gen:         n.gen + 1,
+			createdAt:   now,
+			expireAfter: r.template.ExpireAfter,
+			tgp:         r.template.TGP,
+		}
+		pred, to := n.gen, next.gen
+		rot.genIdx = r.recordGeneration(slot, &next, BirthSurge, &pred, true)
+		rec.ToGen = &to
 	}
+	r.tl.Rotations = append(r.tl.Rotations, rec)
+	rot.rotIdx = len(r.tl.Rotations) - 1
+
 	r.rot = rot
 	r.emit(Event{Kind: KindRotationStart, At: now, Node: n.name(), Surgeless: surgeless})
 }
