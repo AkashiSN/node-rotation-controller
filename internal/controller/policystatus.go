@@ -20,6 +20,7 @@ import (
 
 	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
+	"github.com/AkashiSN/node-rotation-controller/internal/crd"
 	"github.com/AkashiSN/node-rotation-controller/internal/resolve"
 	"github.com/AkashiSN/node-rotation-controller/internal/window"
 )
@@ -46,7 +47,7 @@ func computeStatus(
 	// Intrinsic validity: does the spec resolve at reconcile time? (The OpenAPI
 	// schema cannot reject an overnight window or a non-positive surge duration.)
 	valid, invalidMsg := true, ""
-	if pol, err := resolve.ToPolicy(target.Spec); err != nil {
+	if pol, err := crd.ToPolicy(target.Spec); err != nil {
 		valid, invalidMsg = false, err.Error()
 	} else if _, err := window.New(pol.MaintenanceWindows); err != nil {
 		valid, invalidMsg = false, err.Error()

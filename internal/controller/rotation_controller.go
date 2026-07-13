@@ -27,6 +27,7 @@ import (
 	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
 	"github.com/AkashiSN/node-rotation-controller/internal/adapt"
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
+	"github.com/AkashiSN/node-rotation-controller/internal/crd"
 	"github.com/AkashiSN/node-rotation-controller/internal/decide"
 	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 	"github.com/AkashiSN/node-rotation-controller/internal/resolve"
@@ -205,7 +206,7 @@ func (r *RotationReconciler) governingPolicy(ctx context.Context, pool *karpv1.N
 		return nil, nil, fmt.Sprintf("NodePool is matched by multiple equally-specific RotationPolicies %v; refusing to rotate until the overlap is resolved", tied), nil
 	}
 
-	pol, err := resolve.ToPolicy(winner.Spec)
+	pol, err := crd.ToPolicy(winner.Spec)
 	if err != nil {
 		return nil, nil, fmt.Sprintf("RotationPolicy %q is invalid: %v", winner.Name, err), nil
 	}

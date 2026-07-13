@@ -80,6 +80,55 @@ manifests: aqua-tools
 build: aqua-tools fmt vet
 	go build -o $(LOCALBIN)/manager ./cmd
 
+# The browser policy simulator's WebAssembly module (cmd/wasm, issue #240). The
+# docs site fetches it, so its size is a page-load cost paid by every visitor.
+WASM_OUT ?= $(LOCALBIN)/simulator.wasm
+# Gzipped ceiling, in bytes. MEASURED from the real binary: 3,420,065 B (3.26 MiB)
+# with Go 1.26 — of which ~3.2 MiB is the irreducible Go wasm runtime. The margin
+# is ~5%, enough for a toolchain bump, far too little for a stray dependency:
+# linking sigs.k8s.io/karpenter alone would add ~6 MB gzipped of scheme/reflect
+# metadata. To re-measure: make wasm && gzip -9 -c $(WASM_OUT) | wc -c
+WASM_MAX_GZ_BYTES ?= 3600000
+
+.PHONY: wasm
+wasm: aqua-tools $(LOCALBIN)
+	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o $(WASM_OUT) ./cmd/wasm
+
+# wasm-guard is the check that keeps the simulator's decision layer pure. It runs
+# in CI on every Go change.
+#
+# The dependency assertion is the real guard; the size ceiling is its backstop for
+# any OTHER dependency that would bloat the download. Note `go list -deps` WITHOUT
+# -test: internal/selection's TEST binary legitimately reaches Karpenter through
+# internal/adapt (the fixtures build karpv1.NodeClaim and project through the
+# adapter — that is what makes those tests a behaviour-preservation proof), so a
+# -test guard would fail spuriously on code that is perfectly pure.
+.PHONY: wasm-guard
+wasm-guard: wasm
+	@# cmd/wasm is behind a js&&wasm build tag, so the host-GOOS `make vet` (and
+	@# golangci-lint, and gopls) never sees it. Vet it under its own GOOS.
+	GOOS=js GOARCH=wasm go vet ./cmd/wasm
+	@set -e; \
+	if GOOS=js GOARCH=wasm go list -deps ./cmd/wasm | grep -q '^sigs\.k8s\.io/karpenter'; then \
+		echo "ERROR: the wasm simulator links sigs.k8s.io/karpenter."; \
+		echo "The decision layer (selection, decide, schedule, sim, simapi) must stay pure —"; \
+		echo "karpenter's scheme/reflect metadata costs ~6 MB gzipped in the browser."; \
+		echo "internal/adapt is the ONLY bridge; keep it out of the wasm import graph."; \
+		echo "Offending path:"; \
+		GOOS=js GOARCH=wasm go list -deps ./cmd/wasm | grep '^sigs\.k8s\.io/karpenter' | sed 's/^/  /'; \
+		exit 1; \
+	fi; \
+	echo "ok: no sigs.k8s.io/karpenter in the wasm dependency graph"; \
+	gz="$$(gzip -9 -c $(WASM_OUT) | wc -c)"; \
+	echo "gzipped size: $$gz bytes (ceiling $(WASM_MAX_GZ_BYTES))"; \
+	if [ "$$gz" -gt "$(WASM_MAX_GZ_BYTES)" ]; then \
+		echo "ERROR: the wasm simulator exceeds its gzipped size ceiling by $$(( gz - $(WASM_MAX_GZ_BYTES) )) bytes."; \
+		echo "Every docs-site visitor pays this on page load. Find the new dependency"; \
+		echo "(GOOS=js GOARCH=wasm go list -deps ./cmd/wasm) and drop it, or raise"; \
+		echo "WASM_MAX_GZ_BYTES in the Makefile deliberately, with the new measurement."; \
+		exit 1; \
+	fi
+
 .PHONY: test
 test: aqua-tools $(LOCALBIN)
 	set -e; \

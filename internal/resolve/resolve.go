@@ -1,6 +1,8 @@
 // Package resolve maps each NodePool to the single RotationPolicy that governs
-// it (spec §5.4), and converts that policy's CRD spec into the validated
-// internal/policy value object.
+// it (spec §5.4). Converting the winning policy's CRD spec into the validated
+// internal/policy value object is internal/crd's job — that half is pure, and
+// keeping it out of this Karpenter-importing package is what lets the wasm
+// simulator run the controller's own defaulting and validation.
 //
 // Targeting and conflict resolution (issue #119 §3, decided):
 //   - A RotationPolicy's spec.nodePoolSelector selects the NodePools it governs.
@@ -21,7 +23,6 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	nrv1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
-	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 )
 
 // Outcome classifies the result of resolving the governing policy for a NodePool.
@@ -91,64 +92,4 @@ func specificity(sel *metav1.LabelSelector) int {
 		return 0
 	}
 	return len(sel.MatchLabels) + len(sel.MatchExpressions)
-}
-
-// ToPolicy converts a RotationPolicy spec into the validated internal value
-// object, applying the §5.4 defaults and running structural validation. A
-// non-nil error means the spec is structurally invalid at runtime (e.g. an
-// overnight window the CRD HH:MM pattern cannot reject); the caller must refuse
-// to rotate the governed NodePool rather than act on an unsafe policy.
-func ToPolicy(spec nrv1.RotationPolicySpec) (*policy.Policy, error) {
-	p := &policy.Policy{
-		AgeThreshold:       spec.AgeThreshold,
-		MaintenanceWindows: toWindows(spec.MaintenanceWindows),
-		Surge:              toSurge(spec.Surge),
-		PrePull:            policy.FeatureToggle{Enabled: spec.PrePull.Enabled},
-	}
-	if spec.MinRotationChances != nil {
-		k := int(*spec.MinRotationChances)
-		p.MinRotationChances = &k
-	}
-	p.ApplyDefaults()
-	if err := p.Validate(); err != nil {
-		return nil, err
-	}
-	return p, nil
-}
-
-func toWindows(in []nrv1.MaintenanceWindow) []policy.MaintenanceWindow {
-	if in == nil {
-		return nil
-	}
-	out := make([]policy.MaintenanceWindow, len(in))
-	for i, w := range in {
-		out[i] = policy.MaintenanceWindow{
-			Timezone: w.Timezone,
-			Days:     append([]string(nil), w.Days...),
-			Start:    w.Start,
-			End:      w.End,
-		}
-	}
-	return out
-}
-
-func toSurge(in nrv1.Surge) policy.Surge {
-	s := policy.Surge{
-		ReadyTimeout:         in.ReadyTimeout,
-		CooldownAfter:        in.CooldownAfter,
-		RetryBackoff:         in.RetryBackoff,
-		DrainEstimate:        in.DrainEstimate,
-		ProvisioningEstimate: in.ProvisioningEstimate,
-		FailurePause:         in.FailurePause,
-		MatchNodeRequirements: policy.MatchNodeRequirements{
-			Required:  append([]string(nil), in.MatchNodeRequirements.Required...),
-			Preferred: append([]string(nil), in.MatchNodeRequirements.Preferred...),
-		},
-		ForcefulFallback: policy.FeatureToggle{Enabled: in.ForcefulFallback.Enabled},
-	}
-	if in.MaxUnavailable != nil {
-		mu := int(*in.MaxUnavailable)
-		s.MaxUnavailable = &mu
-	}
-	return s
 }
