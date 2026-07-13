@@ -35,6 +35,21 @@
   --fig-pin-num: #ffffff;
 }
 
+/* --- Nav bar: keep the hamburger until the desktop layout arrives (issue #252) --- */
+/* VitePress swaps the hamburger for the full nav menu at 768px, but the rest of the desktop
+   layout (sidebar in, local nav out) only arrives at 960px — and this site's six top-level
+   items plus the search box do not fit a 768px bar, so between the two breakpoints the bar
+   pushed past the viewport and gave EVERY page a horizontal scrollbar (919/768).
+   Align the nav's breakpoint with the layout's: below 960px the nav stays the mobile one,
+   whose screen carries the same links.
+   The .VPNavScreen override needs two classes: VitePress hides it above 768px from a scoped
+   rule (`.VPNavScreen[data-v-…]`), which outranks a single class selector. */
+@media (min-width: 768px) and (max-width: 959px) {
+  .VPNavBar .VPNavBarMenu { display: none; }
+  .VPNavBar .VPNavBarHamburger { display: flex; }
+  .Layout .VPNavScreen { display: block; }
+}
+
 /* --- Policy simulator (issue #240) --- */
 /* The class appears twice: docs/simulator.md wraps the WHOLE page (intro included)
    in a .policy-simulator div that carries the gutters — layout: page is full-bleed —
