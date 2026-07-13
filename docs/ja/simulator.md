@@ -7,6 +7,12 @@ title: ポリシーシミュレーター
      .policy-simulator CSS scope and carries the page padding (see custom.css). -->
 <div class="policy-simulator">
 
+<!-- layout: page also means VitePress does NOT wrap this markdown in .vp-doc — the class
+     that carries the heading sizes and paragraph rhythm. Scope the prose with it by hand,
+     and keep <PolicySimulator /> OUTSIDE that scope: vp-doc restyles tables and inputs, and
+     the component brings its own. -->
+<div class="vp-doc">
+
 # ポリシーシミュレーター
 
 `RotationPolicy` とノード群を入力すると、**どのノードがいつローテーションされるか**、
@@ -21,6 +27,8 @@ title: ポリシーシミュレーター
 モデル化します。障害はモデル化しません（surge のタイムアウト、`retryBackoff`、
 `failurePause`）。結果は本番環境の保証ではありません。
 :::
+
+</div>
 
 <PolicySimulator />
 

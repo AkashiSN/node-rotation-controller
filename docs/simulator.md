@@ -7,6 +7,12 @@ title: Policy simulator
      .policy-simulator CSS scope and carries the page padding (see custom.css). -->
 <div class="policy-simulator">
 
+<!-- layout: page also means VitePress does NOT wrap this markdown in .vp-doc — the class
+     that carries the heading sizes and paragraph rhythm. Scope the prose with it by hand,
+     and keep <PolicySimulator /> OUTSIDE that scope: vp-doc restyles tables and inputs, and
+     the component brings its own. -->
+<div class="vp-doc">
+
 # Policy simulator
 
 Enter a `RotationPolicy` and a fleet, and see **which day each node gets rotated** —
@@ -21,6 +27,8 @@ This simulator models rotation start/completion including the window-bounded for
 fallback. It does not model failures — a surge that times out, `retryBackoff`, or
 `failurePause`. The result is not a production guarantee.
 :::
+
+</div>
 
 <PolicySimulator />
 

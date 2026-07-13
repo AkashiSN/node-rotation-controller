@@ -242,8 +242,13 @@ describe('the view is not the horizon', () => {
 describe('the chart is not the sole carrier of the result', () => {
   test('a visually-hidden table restates the run, and is re-rendered on a rerun', async () => {
     const w = mountChart()
-    const table = () => w.find('table.sim-sr-only')
+    const table = () => w.find('.sim-sr-only table')
     expect(table().text()).toContain('node-1-r1')
+
+    // The hidden recipe must sit on the WRAPPER: a <table> ignores `width: 1px` (auto table
+    // layout floors it at min-content), so a `table.sim-sr-only` would stay ~2200px wide and
+    // give the page a horizontal scrollbar into empty space (#250).
+    expect(w.find('table.sim-sr-only').exists()).toBe(false)
 
     // A rerun with a different fleet: the table follows the data, not the first render.
     await w.setProps({
