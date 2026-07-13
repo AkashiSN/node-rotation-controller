@@ -1,8 +1,6 @@
 package selection
 
 import (
-	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
-
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 )
 
@@ -36,16 +34,16 @@ type Census struct {
 // TakeCensus classifies every claim into exactly one Census bucket, applying the
 // eligibility checks in the same order as eligible() so the reported reason is
 // the one that actually rejected the claim.
-func TakeCensus(claims []karpv1.NodeClaim, in Inputs) Census {
+func TakeCensus(claims []Claim, in Inputs) Census {
 	c := Census{Total: len(claims)}
 	for i := range claims {
 		cl := &claims[i]
 		switch {
 		case in.Excluded[cl.Name]:
 			c.OptedOut++
-		case cl.DeletionTimestamp != nil:
+		case cl.Deleting:
 			c.Deleting++
-		case !isReady(cl):
+		case !cl.Ready:
 			c.NotReady++
 		case !stateAllows(cl, in):
 			switch cl.Annotations[annotations.State] {

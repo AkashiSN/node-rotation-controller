@@ -26,6 +26,7 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
+	"github.com/AkashiSN/node-rotation-controller/internal/adapt"
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 	"github.com/AkashiSN/node-rotation-controller/internal/resolve"
@@ -441,6 +442,10 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// views and byName project the same List result once (pointer-identity rule):
+	// byName aliases &claims[i], so a pick resolves back to the Karpenter object
+	// without a re-Get (internal/adapt).
+	views, byName := adapt.Claims(claims)
 
 	// Build the opt-out set (§3.2): claims on a Node carrying an operator-set
 	// do-not-disrupt are declined for proactive rotation. One label-scoped Node
@@ -466,7 +471,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	derived := r.derivedThresholds(pool, res, p, d, idleGap, len(claims))
 
 	// ── 0. Emit the §4.2 reconcile-time gauges from current state, every pass.
-	r.observe(pool, res, now, claims, p, derived, excluded)
+	r.observe(pool, res, now, claims, views, p, derived, excluded)
 
 	// Per-pass heartbeat at debug verbosity (issue #100): a single un-deduplicated
 	// line every reconcile so liveness is visible at raised -v / -zap-devel even
@@ -476,7 +481,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// a human-readable aid, not a substitute for them.
 	log.V(1).Info("reconcile",
 		"phase", reconcilePhase(pool),
-		"candidates", selection.CountEligible(claims, r.selInputs(res, now, excluded)),
+		"candidates", selection.CountEligible(views, r.selInputs(res, now, excluded)),
 		"claims", len(claims),
 		"inWindow", sched.InWindow(now),
 		"findings", len(derived.Findings))
@@ -513,14 +518,17 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 
 	// ── 3. Pick the candidate, gate on its headroom, then anchor.
 	sel := r.selInputs(res, now, excluded)
-	cand := selection.PickEarliestDeadlineEligible(claims, sel)
-	if cand == nil {
+	pick := selection.PickEarliestDeadlineEligible(views, sel)
+	if pick == nil {
 		// The candidates gauge reports that the count is zero; only the census says
 		// why (issue #221): a claim excluded because its drain began is otherwise
 		// indistinguishable from one that entered retryBackoff.
-		r.warn().EmitNoCandidateCensus(ctx, pool, selection.TakeCensus(claims, sel))
+		r.warn().EmitNoCandidateCensus(ctx, pool, selection.TakeCensus(views, sel))
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
+	// Resolve the pick back to the Karpenter object from the SAME List result.
+	// Never re-Get by name: that would widen the list→patch window (spec §3, adapt).
+	cand := byName[pick.Name]
 	// A candidate that cannot complete a graceful surge before its own deadline
 	// rotates surge-less when the opt-in fallback is enabled (spec §3.3); it has
 	// no surge, so the headroom gate (which sizes the placeholder) does not apply.
@@ -551,7 +559,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	kv := []any{
 		"nodeclaim", cand.Name,
 		"age", now.Sub(cand.CreationTimestamp.Time).Round(time.Second).String(),
-		"eligible", selection.CountEligible(claims, sel),
+		"eligible", selection.CountEligible(views, sel),
 		"surgeless", surgeless,
 	}
 	if dl, ok := claimDeadline(cand); ok {
@@ -604,13 +612,13 @@ func claimDeadline(cand *karpv1.NodeClaim) (time.Time, bool) {
 // pool with no failures reports zero retries. The window-active gauge is
 // per-NodePool — each pool's governing-policy schedule resolves independently
 // (spec §5.4) — and set here because the reconcile is the only periodic tick (§5.2).
-func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now time.Time, claims []karpv1.NodeClaim, p time.Duration, derived schedule.Result, excluded map[string]bool) {
+func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now time.Time, claims []karpv1.NodeClaim, views []selection.Claim, p time.Duration, derived schedule.Result, excluded map[string]bool) {
 	rec := r.recorder()
 	rec.ObserveWindow(pool.Name, res.sched.InWindow(now))
 
 	o := PoolObservation{
-		Candidates:      selection.CountEligible(claims, r.selInputs(res, now, excluded)),
-		ShortLeadNodes:  selection.CountShortLead(claims, res.leadTime),
+		Candidates:      selection.CountEligible(views, r.selInputs(res, now, excluded)),
+		ShortLeadNodes:  selection.CountShortLead(views, res.leadTime),
 		RetryCount:      highestRetry(claims),
 		DrainStuck:      r.drainStuck(pool, claims, res, now),
 		WindowPeriod:    p,
@@ -1566,7 +1574,11 @@ func (r *RotationReconciler) excludedHostnames(ctx context.Context, pool *karpv1
 	sel := r.selInputs(res, r.now(), nil)
 	for i := range claims {
 		c := &claims[i]
-		if c.Name == cand.Name || c.Status.NodeName == "" || !selection.Triggered(c, sel) {
+		if c.Name == cand.Name || c.Status.NodeName == "" {
+			continue
+		}
+		v := adapt.Claim(c)
+		if !selection.Triggered(&v, sel) {
 			continue
 		}
 		h, err := r.hostname(ctx, c.Status.NodeName)

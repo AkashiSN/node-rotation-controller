@@ -34,7 +34,7 @@ func TestTakeCensusClassifiesEachClaimByItsFirstDisqualifier(t *testing.T) {
 		claim("young", 1*day),
 	}
 
-	got := selection.TakeCensus(claims, in)
+	got := selection.TakeCensus(views(claims), in)
 
 	want := selection.Census{
 		Total: 9, Eligible: 1, OptedOut: 1, Deleting: 1, NotReady: 1,
@@ -58,9 +58,9 @@ func TestTakeCensusEligibleMatchesCountEligible(t *testing.T) {
 		claim("d", 7*day, ready(false)),
 	}
 
-	c := selection.TakeCensus(claims, in)
+	c := selection.TakeCensus(views(claims), in)
 
-	if want := selection.CountEligible(claims, in); c.Eligible != want {
+	if want := selection.CountEligible(views(claims), in); c.Eligible != want {
 		t.Errorf("Eligible: got %d, want CountEligible = %d", c.Eligible, want)
 	}
 }
@@ -77,7 +77,7 @@ func TestTakeCensusBucketsSumToTotal(t *testing.T) {
 		claim("v", 7*day, ann(annotations.State, annotations.StateDraining)),
 	}
 
-	c := selection.TakeCensus(claims, in)
+	c := selection.TakeCensus(views(claims), in)
 
 	sum := c.Eligible + c.OptedOut + c.Deleting + c.NotReady + c.InFlight + c.Terminal + c.InBackoff + c.NotTriggered
 	if sum != c.Total || c.Total != len(claims) {
@@ -97,7 +97,7 @@ func TestTakeCensusFailedPastBackoffIsEligibleNotInBackoff(t *testing.T) {
 				annotations.RetryCount, "0")),
 	}
 
-	got := selection.TakeCensus(claims, in)
+	got := selection.TakeCensus(views(claims), in)
 
 	want := selection.Census{Total: 1, Eligible: 1}
 	if got != want {
