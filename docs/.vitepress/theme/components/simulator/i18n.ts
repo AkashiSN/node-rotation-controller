@@ -40,6 +40,7 @@ export interface Labels {
   readyTimeout: string
   forcefulFallback: string
   timeline: string
+  horizonInvalid: string
   diagnostics: string
   noDiagnostics: string
   partial: string
@@ -82,6 +83,7 @@ const en: Labels = {
   readyTimeout: 'readyTimeout',
   forcefulFallback: 'Forceful fallback',
   timeline: 'Timeline',
+  horizonInvalid: 'The horizon is empty or invalid — start must be strictly before end.',
   diagnostics: 'Diagnostics',
   noDiagnostics: 'No diagnostics.',
   partial: 'This simulation is PARTIAL — it did not run the whole horizon. See the diagnostics.',
@@ -127,6 +129,7 @@ const ja: Labels = {
   readyTimeout: 'readyTimeout',
   forcefulFallback: 'Forceful fallback',
   timeline: 'タイムライン',
+  horizonInvalid: 'シミュレート期間が空か不正です — 開始は終了より厳密に前である必要があります。',
   diagnostics: '診断',
   noDiagnostics: '診断はありません。',
   partial: 'このシミュレーションは部分的です（期間の最後まで実行されていません）。診断を確認してください。',
