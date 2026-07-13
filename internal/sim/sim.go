@@ -140,6 +140,122 @@ type Event struct {
 	Census *selection.Census
 }
 
+// BirthMode says how a generation came into existence. A single "surgeless" boolean
+// cannot distinguish an initial node from a surged replacement — both would be false.
+type BirthMode string
+
+const (
+	BirthInitial   BirthMode = "initial"   // a node the fleet started with
+	BirthSurge     BirthMode = "surge"     // a surged replacement, born at its rotation's start
+	BirthSurgeless BirthMode = "surgeless" // a forceful-fallback replacement, born at its rotation's done
+)
+
+// DrainCapSource says where a generation's drain cap came from, so a consumer never has
+// to re-derive schedule.DrainFallback for itself.
+type DrainCapSource string
+
+const (
+	DrainCapExplicit DrainCapSource = "explicit" // the node's own terminationGracePeriod
+	DrainCapFallback DrainCapSource = "fallback" // tGP unset — schedule.DrainFallback
+)
+
+// Generation is one generation of one fleet slot: everything a consumer needs to place it
+// on a timeline without re-implementing policy semantics.
+//
+// It exists because the event stream cannot carry these facts. node-ready is emitted under
+// the OLD node's name (the generation has not incremented yet), so a replacement's own
+// ready instant is not recoverable from the events; and the eligibility boundary depends on
+// the claim's own tGP, which no event carries.
+type Generation struct {
+	Slot int    // the fleet slot; the slot's node count is constant, generations relay along it
+	Gen  int    // 0 for an initial node, incrementing once per completed rotation
+	Name string // the node name at this generation ("node-a", "node-a-r1", …)
+	// BirthMode is how this generation was created.
+	BirthMode BirthMode
+	// PredecessorGen is the generation this one replaced; nil for an initial node. A
+	// pointer, not a sentinel: 0 is a valid predecessor.
+	PredecessorGen *int
+	CreatedAt      time.Time
+	// ExpireAfter is the EFFECTIVE value: the declared node's override, else the NodePool
+	// template's (a replacement is provisioned from the template, so it inherits it).
+	ExpireAfter time.Duration
+	// DrainCap is the bound this generation's drain is actually held to — the instant
+	// Karpenter force-completes it — and DrainCapSource says where it came from.
+	DrainCap       time.Duration
+	DrainCapSource DrainCapSource
+	// Deadline is CreatedAt + ExpireAfter: the instant Karpenter's forceful expiration
+	// takes the node if the rotation has not completed.
+	Deadline time.Time
+	// EligibilityBoundary is the instant this generation must be STRICTLY past before it
+	// can be picked. Deliberately not an "eligibleAt": selection.triggered is a strict
+	// inequality (age > expireAfter − leadTime), so no first eligible instant exists —
+	// only a boundary the claim must be past. It is per-generation because the lead time
+	// adds the claim's OWN tGP; Result.A is a template-derived representative and must
+	// never be presented as a per-node fact.
+	EligibilityBoundary time.Time
+	// ReadyAt is when this generation's node became Ready. Set only on the surge path
+	// (BirthSurge); zero while the surge is still provisioning, and zero for the initial
+	// and surge-less births, which stage no surge at all.
+	ReadyAt time.Time
+	// Provisional marks a generation whose rotation has not completed: the replacement
+	// NodeClaim exists (its CreatedAt is the rotation's start) but the old node has not
+	// been retired yet. Without it, a surge still in flight at the horizon's end would
+	// produce no record at all — and the make-before-break overlap, the whole point of the
+	// timeline, would vanish exactly in the case a reader most wants to see.
+	Provisional bool
+}
+
+// RotationMode is the path a rotation took.
+type RotationMode string
+
+const (
+	RotationSurge     RotationMode = "surge"
+	RotationSurgeless RotationMode = "surgeless"
+)
+
+// Rotation relates two generations of a slot, so a consumer never has to pair events to
+// find the relay.
+type Rotation struct {
+	Slot    int
+	FromGen int
+	// ToGen is the generation this rotation produced; nil while it does not exist yet.
+	//
+	// On the surge path the replacement is born AT the start (its CreatedAt is the
+	// rotation-start instant), so ToGen names a provisional generation from the start. On
+	// the SURGE-LESS path there is no placeholder: the replacement is born at Done, so
+	// until then no such generation exists and ToGen is nil. Naming a generation that the
+	// simulation has not created — with a CreatedAt it never reached — would report time
+	// that was never simulated, the very defect the partial-run sweep fixes.
+	ToGen *int
+	Mode  RotationMode
+	Start time.Time
+	// Ready is the instant the surge node became Ready and the old NodeClaim was deleted;
+	// zero while the surge is in flight, and always zero on the surge-less path.
+	Ready time.Time
+	// Done is the instant the old node finished draining; zero while the rotation is in
+	// flight — absent, not zero-length.
+	Done time.Time
+}
+
+// WindowInterval is one OBSERVED occurrence of the effective maintenance-window schedule
+// (the union of every policy entry, each evaluated in its own timezone).
+//
+// The clipped flags mark a boundary that is an artifact of the horizon rather than a real
+// transition of the schedule. They live on the interval, not on the events, because
+// clipping is symmetric: an event boolean could express a clipped start but not a clipped
+// end, and it would leave the consumer pairing events itself.
+type WindowInterval struct {
+	Start time.Time
+	End   time.Time
+	// StartClipped: the simulation began inside an already-open window. It is NOT simply
+	// InWindow(Start) — the horizon may legitimately begin exactly at a union boundary,
+	// which is a real opening. The condition is InWindow(Start) && InWindow(Start−1ns).
+	StartClipped bool
+	// EndClipped: the window was still open at SimulatedThrough. An interval that genuinely
+	// closed exactly at SimulatedThrough is not clipped.
+	EndClipped bool
+}
+
 // Diagnostic explains something the timeline itself cannot: an input clamped, a path
 // not modelled, a policy whose findings forbid any rotation at all.
 type Diagnostic struct {
@@ -151,6 +267,19 @@ type Diagnostic struct {
 // Timeline is a simulation result.
 type Timeline struct {
 	Events []Event
+	// Generations, Rotations and Windows are the derived structure of the run: the facts
+	// a consumer would otherwise have to re-derive from the events by re-implementing
+	// policy semantics. Events stays as the backwards-compatible contract; these are
+	// additive, and the two agree wherever they overlap.
+	Generations []Generation
+	Rotations   []Rotation
+	Windows     []WindowInterval
+	// SimulatedThrough is the last instant the loop actually PROCESSED. On a normal run it
+	// is Options.End; when the step budget is exhausted it is earlier. Nothing in the
+	// timeline — no event At/Until, no window End — lies beyond it: a partial run that
+	// reported breaches and interval ends from time it never reached would be a response
+	// that contradicts itself.
+	SimulatedThrough time.Time
 	// Result is the derivation the controller would compute and export for this policy
 	// (A, t_rot, t_rot_est, G, C and the feasibility findings) — the header strip. It is
 	// policy-derived, so it does NOT follow Env.
@@ -235,8 +364,8 @@ func Run(p *policy.Policy, f Fleet, env Env, o Options) (Timeline, error) {
 		opts:    o,
 		poolAnn: map[string]string{},
 	}
+	r.tl = tl // before initFleet: the initial generations are recorded on it
 	r.initFleet(f)
-	r.tl = tl
 	r.loop()
 	sort.SliceStable(r.tl.Events, func(i, j int) bool { return r.tl.Events[i].At.Before(r.tl.Events[j].At) })
 	return r.tl, nil
@@ -271,6 +400,12 @@ type rotation struct {
 	readyAt   time.Time // surge path only
 	doneAt    time.Time
 	surgeless bool
+	// rotIdx and genIdx point at the records this rotation completes in place, as its
+	// instants become facts: Timeline.Rotations[rotIdx], and the provisional replacement
+	// Timeline.Generations[genIdx] (-1 on the surge-less path, which materializes its
+	// replacement only at done).
+	rotIdx int
+	genIdx int
 }
 
 type run struct {
@@ -294,9 +429,13 @@ type run struct {
 	censusFrom time.Time
 	census     selection.Census
 	hasCensus  bool
+
+	// winOpen says whether the last Timeline.Windows entry is still open.
+	winOpen bool
 }
 
 func (r *run) initFleet(f Fleet) {
+	r.template = f
 	r.nodes = make([]simNode, 0, len(f.Nodes))
 	for _, n := range f.Nodes {
 		sn := simNode{base: n.Name, createdAt: n.CreatedAt, expireAfter: f.ExpireAfter, tgp: f.TGP}
@@ -308,7 +447,74 @@ func (r *run) initFleet(f Fleet) {
 		}
 		r.nodes = append(r.nodes, sn)
 	}
-	r.template = f
+	for i := range r.nodes {
+		r.recordGeneration(i, &r.nodes[i], BirthInitial, nil, false)
+	}
+}
+
+// recordGeneration appends the record for the generation currently occupying a slot and
+// returns its index. Every generation — initial, surged, surge-less — goes through here,
+// so a provisional record and the completed one it becomes cannot drift apart.
+func (r *run) recordGeneration(slot int, n *simNode, birth BirthMode, predecessor *int, provisional bool) int {
+	bound, src := r.drainCap(n)
+	r.tl.Generations = append(r.tl.Generations, Generation{
+		Slot:                slot,
+		Gen:                 n.gen,
+		Name:                n.name(),
+		BirthMode:           birth,
+		PredecessorGen:      predecessor,
+		CreatedAt:           n.createdAt,
+		ExpireAfter:         n.expireAfter,
+		DrainCap:            bound,
+		DrainCapSource:      src,
+		Deadline:            n.deadline(),
+		EligibilityBoundary: r.eligibilityBoundary(n),
+		Provisional:         provisional,
+	})
+	return len(r.tl.Generations) - 1
+}
+
+// eligibilityBoundary is the instant a node must be strictly past to be picked, read off
+// selection's own trigger (selection.triggered, spec §3.2): an explicit ageThreshold is an
+// age offset from CreatedAt; auto mode is the node's deadline minus ITS OWN lead time —
+// LeadTime.For adds the claim's tGP, which is why this is a per-generation fact.
+func (r *run) eligibilityBoundary(n *simNode) time.Time {
+	if r.res.Override != nil {
+		return n.createdAt.Add(*r.res.Override)
+	}
+	c := selection.Claim{TGP: n.tgp}
+	return n.deadline().Add(-r.res.LeadTime.For(&c))
+}
+
+// drainCap is the bound the node's drain is held to — the deadline Karpenter
+// force-completes a drain at — resolved exactly as selection.LeadTime.For resolves it.
+func (r *run) drainCap(n *simNode) (time.Duration, DrainCapSource) {
+	if n.tgp != nil {
+		return *n.tgp, DrainCapExplicit
+	}
+	return schedule.DrainFallback, DrainCapFallback
+}
+
+// openWindow / closeWindow record the observed occurrences of the window schedule
+// alongside the window-open / window-close events.
+func (r *run) openWindow(at time.Time) {
+	r.tl.Windows = append(r.tl.Windows, WindowInterval{
+		Start: at,
+		// A start inside a window that was ALREADY open one nanosecond earlier is the
+		// horizon cutting into an occurrence; a start exactly at a union boundary is a real
+		// opening. InWindow(at) alone cannot tell them apart.
+		StartClipped: r.sched.InWindow(at) && r.sched.InWindow(at.Add(-time.Nanosecond)),
+	})
+	r.winOpen = true
+}
+
+func (r *run) closeWindow(at time.Time, clipped bool) {
+	if !r.winOpen {
+		return
+	}
+	w := &r.tl.Windows[len(r.tl.Windows)-1]
+	w.End, w.EndClipped = at, clipped
+	r.winOpen = false
 }
 
 // drainFor is how long the old node's drain actually takes: Env.Drain, clamped to the
@@ -316,10 +522,7 @@ func (r *run) initFleet(f Fleet) {
 // at, resolved exactly as selection.LeadTime.For resolves it (unset → DrainFallback).
 // A heterogeneous fleet therefore clamps per node.
 func (r *run) drainFor(n *simNode) time.Duration {
-	bound := schedule.DrainFallback
-	if n.tgp != nil {
-		bound = *n.tgp
-	}
+	bound, _ := r.drainCap(n)
 	if r.env.Drain > bound {
 		r.diagOnce(Diagnostic{
 			Severity: schedule.Warn,
