@@ -68,6 +68,9 @@ function patchNode(i: number, part: Partial<Fleet['nodes'][number]>) {
       <button type="button" @click="regenerate">{{ t.generate }}</button>
     </fieldset>
 
+    <!-- .sim-table-wrap: below the table's minimum width (createdAt shows a full
+         RFC 3339 instant uncut) the table scrolls in here, never the page. -->
+    <div class="sim-table-wrap">
     <table class="sim-table">
       <thead>
         <tr><th>{{ t.nodeName }}</th><th>{{ t.createdAt }}</th><th>expireAfter</th><th>tGP</th></tr>
@@ -83,5 +86,6 @@ function patchNode(i: number, part: Partial<Fleet['nodes'][number]>) {
         </tr>
       </tbody>
     </table>
+    </div>
   </section>
 </template>

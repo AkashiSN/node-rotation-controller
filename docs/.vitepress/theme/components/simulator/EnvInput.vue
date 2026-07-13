@@ -26,12 +26,14 @@ function patch(part: Partial<Env>) {
     <p class="sim-hint">{{ t.envHint }}</p>
 
     <fieldset class="sim-form">
-      <label>{{ t.provisioning }}
+      <!-- sim-field-wide: each field takes a full row so the `blank = policy
+           estimate: …` hint under it never wraps mid-value. -->
+      <label class="sim-field-wide">{{ t.provisioning }}
         <input :value="env.provisioning ?? ''" :placeholder="provisioningEstimate"
                @change="patch({ provisioning: ($event.target as HTMLInputElement).value })" />
         <small>{{ t.envBlank(provisioningEstimate) }}</small>
       </label>
-      <label>{{ t.drain }}
+      <label class="sim-field-wide">{{ t.drain }}
         <input :value="env.drain ?? ''" :placeholder="drainEstimate"
                @change="patch({ drain: ($event.target as HTMLInputElement).value })" />
         <small>{{ t.envBlank(drainEstimate) }}</small>

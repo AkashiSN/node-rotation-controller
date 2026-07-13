@@ -60,7 +60,11 @@ const marks = computed(() => tl.value.marks.map(m => ({
       </p>
     </div>
     <p v-if="!horizonValid" class="sim-empty">{{ t.horizonInvalid }}</p>
-    <svg v-else class="sim-svg" :viewBox="`0 0 ${W} ${height}`" role="img" :aria-label="t.timeline">
+    <!-- The chart never shrinks below the width where its row labels are legible:
+         .sim-svg carries a min-width, and this wrapper scrolls horizontally so the
+         PAGE never does. -->
+    <div v-else class="sim-chart-scroll">
+    <svg class="sim-svg" :viewBox="`0 0 ${W} ${height}`" role="img" :aria-label="t.timeline">
       <!-- maintenance windows -->
       <rect v-for="(w, i) in windows" :key="`w${i}`" :x="w.x1" :y="PAD_T - 12"
             :width="Math.max(1, w.x2 - w.x1)" :height="rows.length * ROW + 4" class="sim-window" />
@@ -98,5 +102,6 @@ const marks = computed(() => tl.value.marks.map(m => ({
       <text :x="PAD_L" :y="height - 8" class="sim-axis">{{ horizon.start }}</text>
       <text :x="W - PAD_R" :y="height - 8" text-anchor="end" class="sim-axis">{{ horizon.end }}</text>
     </svg>
+    </div>
   </section>
 </template>

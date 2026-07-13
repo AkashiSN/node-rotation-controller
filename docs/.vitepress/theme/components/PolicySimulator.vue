@@ -82,8 +82,9 @@ const fatals = computed(() => diagnostics.value.filter(d => d.severity === 'fata
 
       <TimelineChart v-if="result" :events="events" :horizon="horizon" :fleet="fleet" />
 
-      <!-- PolicyInput stays OUTSIDE the .sim-inputs grid: a full-row spanning item
-           would keep auto-fit's empty tracks alive and squeeze the three columns. -->
+      <!-- PolicyInput stays OUTSIDE the .sim-inputs grid: it owns a full-width row,
+           while the grid's explicit tracks (Fleet widest — it holds full RFC 3339
+           instants) are sized for exactly these three blocks. -->
       <PolicyInput v-model:yaml="policyYAML" />
 
       <div class="sim-inputs">
