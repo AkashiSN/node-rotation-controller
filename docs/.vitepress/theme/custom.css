@@ -42,6 +42,10 @@
    the wrapper. The nested reset keeps the padding from applying twice. */
 .policy-simulator { margin-top: 1.5rem; padding: 0 24px 64px; }
 .policy-simulator .policy-simulator { margin-top: 0; padding: 0; }
+/* The intro is prose and carries `vp-doc` for its typography (layout: page has no .vp-doc
+   scope of its own — see simulator.md). Cap its measure: the page is full-bleed for the
+   chart's sake, and a paragraph is not a chart. */
+.policy-simulator > .vp-doc { max-width: 60rem; }
 .policy-simulator .sim-block { margin: 1.25rem 0; }
 .policy-simulator h3 { margin: 0 0 0.25rem; font-size: 0.95rem; font-weight: 600; line-height: 1.5; }
 .policy-simulator .sim-hint { color: var(--vp-c-text-2); font-size: 0.8em; line-height: 1.45; margin: 0 0 0.6rem; }
@@ -244,7 +248,9 @@
 .policy-simulator .sim-q-policy { background: var(--vp-c-text-3); }
 .policy-simulator .sim-ruler-ratio { margin-top: 0.6rem; }
 
-/* The chart is not the sole carrier of the result. */
+/* The chart is not the sole carrier of the result. Apply this to a <div>, never to a
+   <table>: a table ignores a width below its min-content width, so it would keep its full
+   width and push a horizontal scrollbar onto the page (#250). */
 .policy-simulator .sim-sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
@@ -261,5 +267,9 @@
    element it explains, so colour AND shape stay in sync from a single source. It sits in
    the chart head, so it carries no top margin. */
 .policy-simulator .sim-legend { font-size: 0.75em; color: var(--vp-c-text-2); display: flex; gap: 0.25rem 0.9rem; flex-wrap: wrap; align-items: center; margin: 0; }
-.policy-simulator .sim-key { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+/* No `white-space: nowrap` on a key: the legend wraps BETWEEN keys on its own (flex-wrap),
+   and a key whose label alone is wider than the viewport — the JA make-before-break line is
+   437px — could then not wrap at all and pushed a horizontal scrollbar onto the page (#250).
+   Flex line-breaking still places whole keys first, so a label only wraps when it must. */
+.policy-simulator .sim-key { display: inline-flex; align-items: center; gap: 0.4rem; }
 .policy-simulator .sim-glyph { width: 20px; height: 14px; flex: none; overflow: visible; }

@@ -449,26 +449,35 @@ defineExpose({ view, reset, zoom })
       </div>
 
       <!-- The chart is not the sole carrier of the result: a visually-hidden table restates
-           it, and is re-rendered on every rerun. -->
-      <table class="sim-sr-only">
-        <caption>{{ t.chart.table }}</caption>
-        <thead>
-          <tr>
-            <th>{{ t.chart.slot }}</th><th>{{ t.chart.generation }}</th><th>{{ t.nodeName }}</th>
-            <th>{{ t.createdAt }}</th><th>{{ t.chart.deadline }}</th><th>{{ t.chart.eligibleAfter }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in tl.rows" :key="row.slot">
-            <td>{{ row.slot }}</td>
-            <td>{{ row.generations.length }}</td>
-            <td>{{ row.generations.map(g => g.name).join(', ') }}</td>
-            <td>{{ row.generations.map(g => formatInstant(g.createdMs, timezone)).join(', ') }}</td>
-            <td>{{ row.generations.map(g => g.deadlineMs === null ? '—' : formatInstant(g.deadlineMs, timezone)).join(', ') }}</td>
-            <td>{{ row.generations.map(g => g.eligibilityMs === null ? '—' : formatInstant(g.eligibilityMs, timezone)).join(', ') }}</td>
-          </tr>
-        </tbody>
-      </table>
+           it, and is re-rendered on every rerun.
+
+           The hidden recipe goes on this WRAPPER, not on the <table>: under auto table
+           layout a table's used width cannot go below its min-content width, so `width: 1px`
+           is ignored and the table stays as wide as its longest row (~2200px). `clip` only
+           suppresses painting, so that absolutely-positioned box still contributed scrollable
+           overflow — the page gained a horizontal scrollbar into an empty region (#250). A
+           <div> honours the 1px and clips the table inside it. -->
+      <div class="sim-sr-only">
+        <table>
+          <caption>{{ t.chart.table }}</caption>
+          <thead>
+            <tr>
+              <th>{{ t.chart.slot }}</th><th>{{ t.chart.generation }}</th><th>{{ t.nodeName }}</th>
+              <th>{{ t.createdAt }}</th><th>{{ t.chart.deadline }}</th><th>{{ t.chart.eligibleAfter }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in tl.rows" :key="row.slot">
+              <td>{{ row.slot }}</td>
+              <td>{{ row.generations.length }}</td>
+              <td>{{ row.generations.map(g => g.name).join(', ') }}</td>
+              <td>{{ row.generations.map(g => formatInstant(g.createdMs, timezone)).join(', ') }}</td>
+              <td>{{ row.generations.map(g => g.deadlineMs === null ? '—' : formatInstant(g.deadlineMs, timezone)).join(', ') }}</td>
+              <td>{{ row.generations.map(g => g.eligibilityMs === null ? '—' : formatInstant(g.eligibilityMs, timezone)).join(', ') }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </template>
   </section>
 </template>
