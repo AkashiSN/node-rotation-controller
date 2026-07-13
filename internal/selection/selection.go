@@ -1,18 +1,15 @@
 // Package selection implements the read path of the reconcile loop (spec §5.2):
 // which NodeClaim is the next rotation candidate (spec §3.2). NodePool targeting
-// (which pool a policy governs) lives in internal/resolve. It has no side effects — pure predicates over Karpenter
-// types and resolved durations — so the caller derives the per-NodePool inputs
-// (leadTime from the schedule, the ageThreshold override from policy) and passes
-// plain values, mirroring the layering of internal/schedule and internal/window.
+// (which pool a policy governs) lives in internal/resolve. It has no side effects — pure predicates over the
+// Claim view (built by internal/adapt) and resolved durations — so the caller
+// derives the per-NodePool inputs (leadTime from the schedule, the ageThreshold
+// override from policy) and passes plain values, mirroring the layering of
+// internal/schedule and internal/window.
 package selection
 
 import (
 	"strconv"
 	"time"
-
-	"github.com/awslabs/operatorpkg/status"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 )
@@ -20,6 +17,26 @@ import (
 // maxBackoffShift caps the escalated re-selection backoff at 8× the base
 // (2^3, spec §5.3).
 const maxBackoffShift = 3
+
+// Claim is the pure view of a Karpenter NodeClaim that selection needs — the
+// seven fields the predicates below actually read. The Karpenter type is not
+// imported here on purpose: these predicates are shared verbatim with the policy
+// simulator, which compiles to wasm, and linking sigs.k8s.io/karpenter costs
+// ~6 MB gzipped for scheme/reflect metadata nothing here uses.
+// internal/adapt builds this from a karpv1.NodeClaim; that is the only bridge.
+// The view aliases its source object — ExpireAfter, TGP, and Annotations share
+// the underlying pointers/map with the NodeClaim it was built from — so it must
+// be treated as read-only; selection never writes through it, but a future
+// writer would silently mutate the CRD object.
+type Claim struct {
+	Name        string
+	CreatedAt   time.Time
+	Deleting    bool              // DeletionTimestamp != nil
+	ExpireAfter *time.Duration    // nil = Never (no forceful-expiration deadline)
+	TGP         *time.Duration    // nil = unset; LeadTime.DrainFallback substitutes
+	Ready       bool              // Ready condition == True
+	Annotations map[string]string // state / failed-at / retry-count
+}
 
 // LeadTime resolves the per-NodeClaim rotation lead time K·P + t_rot, where
 // t_rot = readyTimeout + tGP + buffer (spec §3.2). Base is the tGP-independent
@@ -39,15 +56,15 @@ type LeadTime struct {
 
 // For returns the lead time for one claim: Base plus the claim's own
 // terminationGracePeriod (DrainFallback when unset).
-func (lt LeadTime) For(c *karpv1.NodeClaim) time.Duration {
+func (lt LeadTime) For(c *Claim) time.Duration {
 	return lt.Base + claimTGP(c, lt.DrainFallback)
 }
 
 // claimTGP reads a NodeClaim's own spec.terminationGracePeriod, substituting the
 // fallback bound when Karpenter leaves it nil (spec §3.2).
-func claimTGP(c *karpv1.NodeClaim, fallback time.Duration) time.Duration {
-	if d := c.Spec.TerminationGracePeriod; d != nil {
-		return d.Duration
+func claimTGP(c *Claim, fallback time.Duration) time.Duration {
+	if c.TGP != nil {
+		return *c.TGP
 	}
 	return fallback
 }
@@ -83,8 +100,8 @@ type Inputs struct {
 // the pick is unchanged. Ties (equal deadline, or the deadline-less override
 // mode) fall back to oldest creationTimestamp then NodeClaim name (see
 // isEarlierDeadline). The returned pointer aliases an element of claims.
-func PickEarliestDeadlineEligible(claims []karpv1.NodeClaim, in Inputs) *karpv1.NodeClaim {
-	var best *karpv1.NodeClaim
+func PickEarliestDeadlineEligible(claims []Claim, in Inputs) *Claim {
+	var best *Claim
 	for i := range claims {
 		c := &claims[i]
 		if !eligible(c, in) {
@@ -101,7 +118,7 @@ func PickEarliestDeadlineEligible(claims []karpv1.NodeClaim, in Inputs) *karpv1.
 // predicate — the §4.2 noderotation_candidates gauge. It applies the same
 // predicate as PickEarliestDeadlineEligible (ready, in-scope state, triggered, not
 // deleting), so an in-flight or terminal claim is excluded.
-func CountEligible(claims []karpv1.NodeClaim, in Inputs) int {
+func CountEligible(claims []Claim, in Inputs) int {
 	n := 0
 	for i := range claims {
 		if eligible(&claims[i], in) {
@@ -119,18 +136,17 @@ func CountEligible(claims []karpv1.NodeClaim, in Inputs) int {
 // (LeadTime.For). A nil (Never) expireAfter never races forceful expiration, and a
 // claim already on the forceful path (deletionTimestamp set) is excluded — both
 // mirror selection eligibility. The returned pointers alias the input slice.
-func ShortLeadClaims(claims []karpv1.NodeClaim, leadTime LeadTime) []*karpv1.NodeClaim {
-	var out []*karpv1.NodeClaim
+func ShortLeadClaims(claims []Claim, leadTime LeadTime) []*Claim {
+	var out []*Claim
 	for i := range claims {
 		c := &claims[i]
-		if c.DeletionTimestamp != nil {
+		if c.Deleting {
 			continue
 		}
-		e := c.Spec.ExpireAfter.Duration
-		if e == nil {
+		if c.ExpireAfter == nil {
 			continue
 		}
-		if *e <= leadTime.For(c) {
+		if *c.ExpireAfter <= leadTime.For(c) {
 			out = append(out, c)
 		}
 	}
@@ -139,7 +155,7 @@ func ShortLeadClaims(claims []karpv1.NodeClaim, leadTime LeadTime) []*karpv1.Nod
 
 // CountShortLead returns how many claims are short-lead (§4.2
 // noderotation_short_lead_nodes gauge); see ShortLeadClaims for the predicate.
-func CountShortLead(claims []karpv1.NodeClaim, leadTime LeadTime) int {
+func CountShortLead(claims []Claim, leadTime LeadTime) int {
 	return len(ShortLeadClaims(claims, leadTime))
 }
 
@@ -152,7 +168,7 @@ func CountShortLead(claims []karpv1.NodeClaim, leadTime LeadTime) int {
 // The creationTimestamp fallback keeps the order deterministic across reconciles:
 // metav1.Time is second-granular, so claims batch-provisioned by Karpenter
 // routinely share a timestamp, and Name is the final stable tiebreak.
-func isEarlierDeadline(a, b *karpv1.NodeClaim, in Inputs) bool {
+func isEarlierDeadline(a, b *Claim, in Inputs) bool {
 	da, oka := deadlineOf(a, in)
 	db, okb := deadlineOf(b, in)
 	switch {
@@ -163,8 +179,8 @@ func isEarlierDeadline(a, b *karpv1.NodeClaim, in Inputs) bool {
 	case oka != okb:
 		return oka // a resolvable deadline sorts ahead of a deadline-less claim
 	}
-	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
-		return a.CreationTimestamp.Before(&b.CreationTimestamp)
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
 	}
 	return a.Name < b.Name
 }
@@ -176,24 +192,24 @@ func isEarlierDeadline(a, b *karpv1.NodeClaim, in Inputs) bool {
 // order degrades to creationTimestamp order — identical), and a nil (Never)
 // expireAfter has no deadline at all (§3.2). A false result routes the pair to
 // isEarlierDeadline's creationTimestamp/name fallback.
-func deadlineOf(c *karpv1.NodeClaim, in Inputs) (time.Time, bool) {
+func deadlineOf(c *Claim, in Inputs) (time.Time, bool) {
 	if in.Override != nil {
 		return time.Time{}, false
 	}
-	if e := c.Spec.ExpireAfter.Duration; e != nil {
-		return c.CreationTimestamp.Add(*e), true
+	if c.ExpireAfter != nil {
+		return c.CreatedAt.Add(*c.ExpireAfter), true
 	}
 	return time.Time{}, false
 }
 
-func eligible(c *karpv1.NodeClaim, in Inputs) bool {
+func eligible(c *Claim, in Inputs) bool {
 	if in.Excluded[c.Name] {
 		return false // operator opted this node out via karpenter.sh/do-not-disrupt (§3.2)
 	}
-	if c.DeletionTimestamp != nil {
+	if c.Deleting {
 		return false // already being deleted — typically Forceful Expiration (§3.2)
 	}
-	if !isReady(c) {
+	if !c.Ready {
 		return false // NotReady is left to Node Auto Repair + the backstop (§3.2)
 	}
 	if !stateAllows(c, in) {
@@ -206,7 +222,7 @@ func eligible(c *karpv1.NodeClaim, in Inputs) bool {
 // selection: empty (fresh) always, failed only past its escalated backoff;
 // pending/draining (in-flight, driven by §5.2 step 1) and expired (terminal)
 // never.
-func stateAllows(c *karpv1.NodeClaim, in Inputs) bool {
+func stateAllows(c *Claim, in Inputs) bool {
 	switch c.Annotations[annotations.State] {
 	case "":
 		return true
@@ -217,7 +233,7 @@ func stateAllows(c *karpv1.NodeClaim, in Inputs) bool {
 	}
 }
 
-func failedPastBackoff(c *karpv1.NodeClaim, in Inputs) bool {
+func failedPastBackoff(c *Claim, in Inputs) bool {
 	failedAt, ok := parseTime(c.Annotations[annotations.FailedAt])
 	if !ok {
 		// A failed claim with no parseable failed-at is a torn write; treat the
@@ -235,32 +251,21 @@ func failedPastBackoff(c *karpv1.NodeClaim, in Inputs) bool {
 // §3.3, issue #96) without duplicating the formula.
 // Unlike eligibility it considers age alone: a near-deadline node should be
 // avoided regardless of its Ready/state condition.
-func Triggered(c *karpv1.NodeClaim, in Inputs) bool { return triggered(c, in) }
+func Triggered(c *Claim, in Inputs) bool { return triggered(c, in) }
 
 // triggered evaluates the age/deadline trigger (spec §3.2).
-func triggered(c *karpv1.NodeClaim, in Inputs) bool {
-	age := in.Now.Sub(c.CreationTimestamp.Time)
+func triggered(c *Claim, in Inputs) bool {
+	age := in.Now.Sub(c.CreatedAt)
 	if in.Override != nil {
 		return age > *in.Override
 	}
 	// Auto mode: anchored on this claim's own expireAfter. A nil (Never)
 	// expireAfter has no deadline — the node never races forceful expiration, so
 	// it is never a candidate (§3.2).
-	e := c.Spec.ExpireAfter.Duration
-	if e == nil {
+	if c.ExpireAfter == nil {
 		return false
 	}
-	return age > *e-in.LeadTime.For(c)
-}
-
-// isReady reports whether the NodeClaim's Ready condition is True.
-func isReady(c *karpv1.NodeClaim) bool {
-	for _, cond := range c.Status.Conditions {
-		if cond.Type == status.ConditionReady {
-			return cond.Status == metav1.ConditionTrue
-		}
-	}
-	return false
+	return age > *c.ExpireAfter-in.LeadTime.For(c)
 }
 
 // EscalatedBackoff returns the re-selection backoff for a failed claim:

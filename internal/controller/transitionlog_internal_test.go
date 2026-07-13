@@ -15,6 +15,7 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
+	"github.com/AkashiSN/node-rotation-controller/internal/decide"
 	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 	"github.com/AkashiSN/node-rotation-controller/internal/surge"
 )
@@ -82,57 +83,23 @@ func infoOnlyLogger(lines *[]string) logr.Logger {
 	return funcr.New(func(_, args string) { *lines = append(*lines, args) }, funcr.Options{})
 }
 
-func TestStartGatesReportsTheBlockingGate(t *testing.T) {
-	r := newReconciler(t, testNow, nil)
-	res := r.resolve(withTGP(testNodePool(nil)), testPolicy(), mustSchedule(t))
+// TestStartGatesReportsTheBlockingGate moved to internal/decide/decide_test.go
+// (TestStartGateOrder) with #238: it exercised RotationReconciler.startGates
+// directly, a method that no longer exists now that the §5.2 start-gate logic
+// lives in decide.StartGate. TestStartGateOrder pins the identical five cases
+// (open, out-of-window, frozen, post-success cooldown, post-failure pause)
+// against decide.Inputs.
 
-	t.Run("open", func(t *testing.T) {
-		pool := testNodePool(nil)
-		ok, reason := r.startGates(pool, res, testNow)
-		if !ok || reason != "" {
-			t.Errorf("open gates: got (%v, %q), want (true, \"\")", ok, reason)
-		}
-	})
-
-	t.Run("out of window", func(t *testing.T) {
-		pool := testNodePool(nil)
-		ok, reason := r.startGates(pool, res, testNowOut)
-		if ok || reason != gateOutOfWindow {
-			t.Errorf("got (%v, %q), want (false, %q)", ok, reason, gateOutOfWindow)
-		}
-	})
-
-	t.Run("frozen", func(t *testing.T) {
-		pool := testNodePool(map[string]string{annotations.Freeze: rfc(testNow.Add(time.Hour))})
-		ok, reason := r.startGates(pool, res, testNow)
-		if ok || reason != gateFrozen {
-			t.Errorf("got (%v, %q), want (false, %q)", ok, reason, gateFrozen)
-		}
-	})
-
-	t.Run("post-success cooldown", func(t *testing.T) {
-		pool := testNodePool(map[string]string{annotations.LastRotationAt: rfc(testNow.Add(-time.Minute))})
-		ok, reason := r.startGates(pool, res, testNow)
-		if ok || reason != gateCooldownAfterSuccess {
-			t.Errorf("got (%v, %q), want (false, %q)", ok, reason, gateCooldownAfterSuccess)
-		}
-	})
-
-	t.Run("post-failure pause", func(t *testing.T) {
-		pool := testNodePool(map[string]string{annotations.LastFailureAt: rfc(testNow.Add(-time.Minute))})
-		ok, reason := r.startGates(pool, res, testNow)
-		if ok || reason != gateFailurePause {
-			t.Errorf("got (%v, %q), want (false, %q)", ok, reason, gateFailurePause)
-		}
-	})
-}
-
-// TestStartGatesFailurePauseSplitFromCooldown pins ADR-0004: gate B (post-failure)
-// reads surge.failurePause and gate A (post-success) reads surge.cooldownAfter, so the
-// two are independent. With cooldownAfter lowered to 1m for throughput and failurePause
-// unset (→ max(floor 10m, 1m) = 10m), a success 5m ago no longer blocks while a failure
-// 5m ago still does — the exact case the shared value could not express (issue #216).
-func TestStartGatesFailurePauseSplitFromCooldown(t *testing.T) {
+// TestStartGatesFailurePauseSplitFromCooldown split with #238: the ADR-0004
+// gate-independence assertions (a cooldown-satisfied pool stays open while a
+// failurePause-blocked one still names its own gate, and an explicit failurePause
+// overrides the max(floor, cooldownAfter) default) called
+// RotationReconciler.startGates directly and moved to
+// internal/decide/decide_test.go (TestStartGateFailurePauseIndependentOfCooldown).
+// The resolve()-side half — pinning that r.resolve() itself derives failurePause as
+// max(FailurePauseFloor, cooldownAfter), overridable — stays here, since resolve()
+// is controller-specific and untouched by this refactor.
+func TestResolveFailurePauseDefaultsToMaxFloorCooldown(t *testing.T) {
 	r := newReconciler(t, testNow, nil)
 	sched := mustSchedule(t)
 
@@ -143,25 +110,11 @@ func TestStartGatesFailurePauseSplitFromCooldown(t *testing.T) {
 		t.Fatalf("failurePause = %v, want %v (max(floor 10m, cooldownAfter 1m))", res.failurePause, want)
 	}
 
-	// success 5m ago: gate A (cooldown 1m) is satisfied → open.
-	openPool := testNodePool(map[string]string{annotations.LastRotationAt: rfc(testNow.Add(-5 * time.Minute))})
-	if ok, reason := r.startGates(openPool, res, testNow); !ok {
-		t.Errorf("post-success 5m > cooldown 1m: got (false, %q), want open", reason)
-	}
-	// failure 5m ago: gate B (failurePause 10m) still blocks, and names its own gate.
-	blockPool := testNodePool(map[string]string{annotations.LastFailureAt: rfc(testNow.Add(-5 * time.Minute))})
-	if ok, reason := r.startGates(blockPool, res, testNow); ok || reason != gateFailurePause {
-		t.Errorf("post-failure 5m < failurePause 10m: got (%v, %q), want (false, %q)", ok, reason, gateFailurePause)
-	}
-
 	// An explicit failurePause overrides the max(floor, cooldownAfter) default.
 	pol.Surge.FailurePause = &metav1.Duration{Duration: 2 * time.Minute}
 	res = r.resolve(withTGP(testNodePool(nil)), pol, sched)
 	if res.failurePause != 2*time.Minute {
 		t.Fatalf("explicit failurePause = %v, want 2m", res.failurePause)
-	}
-	if ok, _ := r.startGates(blockPool, res, testNow); !ok {
-		t.Error("post-failure 5m > explicit failurePause 2m: want open")
 	}
 }
 
@@ -179,7 +132,7 @@ func TestNoCandidateLogsTheBlockingGateOnceUntilItChanges(t *testing.T) {
 	if _, err := r.reconcileNodePool(log.IntoContext(context.Background(), captureLogger(&pass1)), pool, testPolicy(), mustSchedule(t)); err != nil {
 		t.Fatalf("pass 1: %v", err)
 	}
-	if !containsLine(pass1, "no rotation candidate", gateCooldownAfterSuccess) {
+	if !containsLine(pass1, "no rotation candidate", string(decide.GateCooldownAfterSuccess)) {
 		t.Errorf("pass 1 must name the blocking gate; lines = %v", pass1)
 	}
 

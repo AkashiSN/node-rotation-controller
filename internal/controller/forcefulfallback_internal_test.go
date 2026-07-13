@@ -28,12 +28,6 @@ func ffEnabledPolicy() *policy.Policy {
 	return p
 }
 
-// ffResolved is a resolved whose t_rot is readyTimeout + drainBound = 47m, matching
-// what resolve() derives for testPolicy over a withTGP NodePool (tGP 30m + Buffer 2m).
-func ffResolved(pol *policy.Policy) resolved {
-	return resolved{pol: pol, readyTimeout: 15 * time.Minute, drainBound: 32 * time.Minute}
-}
-
 // ffClaim builds a candidate whose Forceful Expiration deadline sits gap after
 // testNow (deadline = creationTimestamp + expireAfter). A negative gap puts the
 // deadline in the past.
@@ -52,69 +46,13 @@ func ffNeverClaim(age time.Duration, opts ...ncOpt) *karpv1.NodeClaim {
 	return c
 }
 
-// TestSurgelessFallbackThreshold pins the decision function on both sides of the
-// boundary, on the boundary itself, and for the deadline-less candidate.
-func TestSurgelessFallbackThreshold(t *testing.T) {
-	tests := []struct {
-		name    string
-		enabled bool
-		cand    *karpv1.NodeClaim
-		want    bool
-	}{{
-		// The fallback is opt-in: a candidate that would otherwise qualify surges.
-		name:    "disabled policy never falls back",
-		enabled: false,
-		cand:    ffClaim(ffTRot - time.Second),
-		want:    false,
-	}, {
-		name:    "gap strictly below t_rot falls back",
-		enabled: true,
-		cand:    ffClaim(ffTRot - time.Second),
-		want:    true,
-	}, {
-		// deadline − now == t_rot: a graceful surge started now finishes exactly at
-		// the deadline, so it still wins the race. The inequality is strict.
-		name:    "gap exactly t_rot keeps surging",
-		enabled: true,
-		cand:    ffClaim(ffTRot),
-		want:    false,
-	}, {
-		name:    "gap just above t_rot keeps surging",
-		enabled: true,
-		cand:    ffClaim(ffTRot + time.Second),
-		want:    false,
-	}, {
-		name:    "far deadline keeps surging",
-		enabled: true,
-		cand:    ffClaim(7 * 24 * time.Hour),
-		want:    false,
-	}, {
-		// Already past its deadline: Karpenter is force-expiring it or is about to,
-		// so a surge cannot possibly win.
-		name:    "deadline already passed falls back",
-		enabled: true,
-		cand:    ffClaim(-time.Hour),
-		want:    true,
-	}, {
-		name:    "expireAfter Never never falls back",
-		enabled: true,
-		cand:    ffNeverClaim(20 * 24 * time.Hour),
-		want:    false,
-	}}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			pol := testPolicy()
-			if tc.enabled {
-				pol = ffEnabledPolicy()
-			}
-			r := newReconciler(t, testNow, nil)
-			if got := r.surgelessFallback(tc.cand, ffResolved(pol), testNow); got != tc.want {
-				t.Errorf("surgelessFallback = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
+// The decision-function-level threshold coverage (both sides of the boundary, the
+// boundary itself, and the deadline-less candidate) moved to
+// internal/decide/decide_test.go (TestSurgelessFallbackThreshold) with #238: it now
+// exercises decide.SurgelessFallback directly, since the method this test used to
+// call, RotationReconciler.surgelessFallback, no longer exists. The reconcile-level
+// tests below (which drive the same decision through reconcileNodePool) are
+// untouched and still pin the boundary at this layer.
 
 // ffStep drives one reconcile with an explicit policy (step() hardcodes testPolicy,
 // whose fallback is off).

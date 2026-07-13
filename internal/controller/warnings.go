@@ -10,6 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
+	"github.com/AkashiSN/node-rotation-controller/internal/adapt"
 	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
 	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 )
@@ -108,14 +109,20 @@ func (w *warningEmitter) EmitFindings(ctx context.Context, pool *karpv1.NodePool
 
 // EmitShortLead logs and emits a Warning Event on each NodeClaim that is newly
 // short-lead since the last pass — the spec §3.2 layer-3 "warned via an event".
+// The Event must be raised against the actual Karpenter object (events.EventRecorder
+// requires a runtime.Object, which the pure selection.Claim view is not), so this
+// projects claims itself (internal/adapt) rather than taking a pure view: that
+// guarantees the short-lead names resolved by selection.ShortLeadClaims and the
+// byName lookup used to raise the Event come from the same List result.
 func (w *warningEmitter) EmitShortLead(ctx context.Context, pool *karpv1.NodePool, claims []karpv1.NodeClaim, leadTime selection.LeadTime) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	s := w.poolStateLocked(pool.Name)
 	l := log.FromContext(ctx).WithValues("nodepool", pool.Name)
 
+	views, byName := adapt.Claims(claims)
 	current := map[string]bool{}
-	for _, c := range selection.ShortLeadClaims(claims, leadTime) {
+	for _, c := range selection.ShortLeadClaims(views, leadTime) {
 		current[c.Name] = true
 		// Un-deduplicated debug record (issue #100): see EmitFindings — emitted every
 		// pass at debug verbosity, independent of the transition dedup below.
@@ -126,7 +133,7 @@ func (w *warningEmitter) EmitShortLead(ctx context.Context, pool *karpv1.NodePoo
 		msg := fmt.Sprintf("NodeClaim %s can no longer guarantee the configured rotation chances against its own expireAfter (short-lead, spec §3.2 layer 3); it will be rotated best-effort before forceful expiration", c.Name)
 		l.Info("short-lead NodeClaim", "nodeclaim", c.Name)
 		if w.events != nil {
-			w.events.Eventf(c, nil, corev1.EventTypeWarning, reasonShortLead, actionCheckExpiry, "%s", msg)
+			w.events.Eventf(byName[c.Name], nil, corev1.EventTypeWarning, reasonShortLead, actionCheckExpiry, "%s", msg)
 		}
 	}
 	s.shortLead = current

@@ -8,9 +8,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
+	"github.com/AkashiSN/node-rotation-controller/internal/adapt"
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 )
+
+// views converts the karpv1 fixtures the helpers build into the pure views the
+// package now takes. Keeping the fixtures on the CRD type is deliberate: it keeps
+// every expectation below unchanged, so this file stays the proof that the view
+// refactor is behaviour-preserving, and it exercises internal/adapt on the way.
+func views(claims []karpv1.NodeClaim) []selection.Claim {
+	v, _ := adapt.Claims(claims)
+	return v
+}
 
 // now is the fixed reference instant for every age-based test.
 var now = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -107,7 +117,7 @@ func TestPickEarliestDeadlineEligiblePicksTheOldest(t *testing.T) {
 		claim("oldest", 20*day),
 		claim("middle", 15*day),
 	}
-	got := selection.PickEarliestDeadlineEligible(claims, baseInputs())
+	got := selection.PickEarliestDeadlineEligible(views(claims), baseInputs())
 	if got == nil || got.Name != "oldest" {
 		t.Fatalf("want oldest, got %v", got)
 	}
@@ -121,7 +131,7 @@ func TestPickEarliestDeadlineEligibleTieBreaksOnNameDeterministically(t *testing
 	b := claim("b", 20*day)
 	c := claim("c", 20*day)
 	for _, order := range [][]karpv1.NodeClaim{{a, b, c}, {c, b, a}, {b, c, a}} {
-		if got := selection.PickEarliestDeadlineEligible(order, baseInputs()); got == nil || got.Name != "a" {
+		if got := selection.PickEarliestDeadlineEligible(views(order), baseInputs()); got == nil || got.Name != "a" {
 			t.Fatalf("want a for any order, got %v", got)
 		}
 	}
@@ -129,7 +139,7 @@ func TestPickEarliestDeadlineEligibleTieBreaksOnNameDeterministically(t *testing
 
 func TestPickEarliestDeadlineEligibleNilWhenNoneEligible(t *testing.T) {
 	claims := []karpv1.NodeClaim{claim("too-young", 1*day)}
-	if got := selection.PickEarliestDeadlineEligible(claims, baseInputs()); got != nil {
+	if got := selection.PickEarliestDeadlineEligible(views(claims), baseInputs()); got != nil {
 		t.Fatalf("want nil, got %v", got.Name)
 	}
 }
@@ -137,11 +147,11 @@ func TestPickEarliestDeadlineEligibleNilWhenNoneEligible(t *testing.T) {
 func TestPickEarliestDeadlineEligibleAutoTriggerBoundary(t *testing.T) {
 	// threshold age = E(14d) − leadTime(8d) = 6d; trigger is age > threshold.
 	in := baseInputs()
-	justOver := selection.PickEarliestDeadlineEligible([]karpv1.NodeClaim{claim("c", 6*day+time.Hour)}, in)
+	justOver := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{claim("c", 6*day+time.Hour)}), in)
 	if justOver == nil {
 		t.Fatal("claim just past the trigger should be eligible")
 	}
-	justUnder := selection.PickEarliestDeadlineEligible([]karpv1.NodeClaim{claim("c", 6*day-time.Hour)}, in)
+	justUnder := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{claim("c", 6*day-time.Hour)}), in)
 	if justUnder != nil {
 		t.Fatal("claim just under the trigger should not be eligible")
 	}
@@ -154,7 +164,7 @@ func TestPickEarliestDeadlineEligibleAnchorsOnPerClaimExpireAfter(t *testing.T) 
 	short := claim("short", 7*day, expireAfter(14*day)) // threshold 6d → eligible
 	long := claim("long", 7*day, expireAfter(30*day))   // threshold 22d → not yet
 
-	if got := selection.PickEarliestDeadlineEligible([]karpv1.NodeClaim{long, short}, in); got == nil || got.Name != "short" {
+	if got := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{long, short}), in); got == nil || got.Name != "short" {
 		t.Fatalf("want short, got %v", got)
 	}
 }
@@ -175,7 +185,7 @@ func TestPickEarliestDeadlineUnderHeterogeneousExpireAfter(t *testing.T) {
 		{olderLong, youngerShort},
 		{youngerShort, olderLong},
 	} {
-		got := selection.PickEarliestDeadlineEligible(order, in)
+		got := selection.PickEarliestDeadlineEligible(views(order), in)
 		if got == nil || got.Name != "younger-short" {
 			t.Fatalf("want younger-short (earliest deadline), got %v", got)
 		}
@@ -193,7 +203,7 @@ func TestPickEarliestDeadlineTieFallsBackToCreationThenName(t *testing.T) {
 	older := claim("z-older", 21*day, expireAfter(15*day))     // deadline now−6d, older by 1d
 	younger := claim("a-younger", 20*day, expireAfter(14*day)) // deadline now−6d
 	for _, order := range [][]karpv1.NodeClaim{{older, younger}, {younger, older}} {
-		if got := selection.PickEarliestDeadlineEligible(order, baseInputs()); got == nil || got.Name != "z-older" {
+		if got := selection.PickEarliestDeadlineEligible(views(order), baseInputs()); got == nil || got.Name != "z-older" {
 			t.Fatalf("equal deadlines must tiebreak on oldest creationTimestamp (z-older), got %v", got)
 		}
 	}
@@ -202,7 +212,7 @@ func TestPickEarliestDeadlineTieFallsBackToCreationThenName(t *testing.T) {
 	a := claim("a", 20*day)
 	b := claim("b", 20*day)
 	for _, order := range [][]karpv1.NodeClaim{{a, b}, {b, a}} {
-		if got := selection.PickEarliestDeadlineEligible(order, baseInputs()); got == nil || got.Name != "a" {
+		if got := selection.PickEarliestDeadlineEligible(views(order), baseInputs()); got == nil || got.Name != "a" {
 			t.Fatalf("equal deadline and creationTimestamp must tiebreak on name to a, got %v", got)
 		}
 	}
@@ -210,7 +220,7 @@ func TestPickEarliestDeadlineTieFallsBackToCreationThenName(t *testing.T) {
 
 func TestPickEarliestDeadlineEligibleNeverExpireExcludedInAutoMode(t *testing.T) {
 	claims := []karpv1.NodeClaim{claim("immortal", 100*day, neverExpire())}
-	if got := selection.PickEarliestDeadlineEligible(claims, baseInputs()); got != nil {
+	if got := selection.PickEarliestDeadlineEligible(views(claims), baseInputs()); got != nil {
 		t.Fatalf("a claim with expireAfter=Never has no deadline; want nil, got %v", got.Name)
 	}
 }
@@ -222,13 +232,11 @@ func TestPickEarliestDeadlineEligibleOverrideUsesAge(t *testing.T) {
 
 	// expireAfter is large enough that the auto trigger would NOT fire; only the
 	// age-based override makes these candidates.
-	eligible := selection.PickEarliestDeadlineEligible(
-		[]karpv1.NodeClaim{claim("c", 5*day+time.Hour, expireAfter(720*time.Hour))}, in)
+	eligible := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{claim("c", 5*day+time.Hour, expireAfter(720*time.Hour))}), in)
 	if eligible == nil {
 		t.Fatal("claim older than the override should be eligible")
 	}
-	tooYoung := selection.PickEarliestDeadlineEligible(
-		[]karpv1.NodeClaim{claim("c", 4*day, expireAfter(720*time.Hour))}, in)
+	tooYoung := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{claim("c", 4*day, expireAfter(720*time.Hour))}), in)
 	if tooYoung != nil {
 		t.Fatal("claim younger than the override should not be eligible")
 	}
@@ -245,7 +253,7 @@ func TestPickEarliestDeadlineEligibleExcludesNotReady(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claims := []karpv1.NodeClaim{claim("c", 20*day, tc.opt)}
-			if got := selection.PickEarliestDeadlineEligible(claims, baseInputs()); got != nil {
+			if got := selection.PickEarliestDeadlineEligible(views(claims), baseInputs()); got != nil {
 				t.Fatalf("a NotReady claim must be skipped, got %v", got.Name)
 			}
 		})
@@ -254,7 +262,7 @@ func TestPickEarliestDeadlineEligibleExcludesNotReady(t *testing.T) {
 
 func TestPickEarliestDeadlineEligibleExcludesDeleting(t *testing.T) {
 	claims := []karpv1.NodeClaim{claim("c", 20*day, deleting())}
-	if got := selection.PickEarliestDeadlineEligible(claims, baseInputs()); got != nil {
+	if got := selection.PickEarliestDeadlineEligible(views(claims), baseInputs()); got != nil {
 		t.Fatalf("a claim with deletionTimestamp must be skipped, got %v", got.Name)
 	}
 }
@@ -267,7 +275,7 @@ func TestPickEarliestDeadlineEligibleExcludesInFlightAndTerminalStates(t *testin
 	} {
 		t.Run(state, func(t *testing.T) {
 			claims := []karpv1.NodeClaim{claim("c", 20*day, ann(annotations.State, state))}
-			if got := selection.PickEarliestDeadlineEligible(claims, baseInputs()); got != nil {
+			if got := selection.PickEarliestDeadlineEligible(views(claims), baseInputs()); got != nil {
 				t.Fatalf("state %q must not be re-selected, got %v", state, got.Name)
 			}
 		})
@@ -282,7 +290,7 @@ func TestPickEarliestDeadlineEligibleFailedRespectsBackoff(t *testing.T) {
 		annotations.RetryCount, "1",
 		annotations.FailedAt, now.Add(-20*time.Minute).Format(time.RFC3339),
 	))
-	if got := selection.PickEarliestDeadlineEligible([]karpv1.NodeClaim{withinBackoff}, in); got != nil {
+	if got := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{withinBackoff}), in); got != nil {
 		t.Fatalf("failed claim within backoff must not be re-selected, got %v", got.Name)
 	}
 
@@ -291,7 +299,7 @@ func TestPickEarliestDeadlineEligibleFailedRespectsBackoff(t *testing.T) {
 		annotations.RetryCount, "1",
 		annotations.FailedAt, now.Add(-40*time.Minute).Format(time.RFC3339),
 	))
-	if got := selection.PickEarliestDeadlineEligible([]karpv1.NodeClaim{pastBackoff}, in); got == nil {
+	if got := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{pastBackoff}), in); got == nil {
 		t.Fatal("failed claim past its backoff must be re-selectable")
 	}
 }
@@ -304,7 +312,7 @@ func TestPickEarliestDeadlineEligibleFailedBackoffEscalates(t *testing.T) {
 		annotations.RetryCount, "3",
 		annotations.FailedAt, now.Add(-90*time.Minute).Format(time.RFC3339),
 	))
-	if got := selection.PickEarliestDeadlineEligible([]karpv1.NodeClaim{c}, in); got != nil {
+	if got := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{c}), in); got != nil {
 		t.Fatalf("escalated backoff (120m) should still hold at 90m, got %v", got.Name)
 	}
 }
@@ -317,7 +325,7 @@ func TestPickEarliestDeadlineEligibleFailedWithoutFailedAtIsReselectable(t *test
 		annotations.State, annotations.StateFailed,
 		annotations.RetryCount, "2",
 	))
-	if got := selection.PickEarliestDeadlineEligible([]karpv1.NodeClaim{c}, baseInputs()); got == nil {
+	if got := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{c}), baseInputs()); got == nil {
 		t.Fatal("failed claim with no failed-at must remain re-selectable")
 	}
 }
@@ -331,7 +339,7 @@ func TestPickEarliestDeadlineEligibleFailedWithUnparseableRetryCountUsesBase(t *
 		annotations.RetryCount, "garbage",
 		annotations.FailedAt, now.Add(-20*time.Minute).Format(time.RFC3339),
 	))
-	if got := selection.PickEarliestDeadlineEligible([]karpv1.NodeClaim{withinBase}, in); got != nil {
+	if got := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{withinBase}), in); got != nil {
 		t.Fatalf("unparseable retry-count must fall back to the base backoff (30m), got %v", got.Name)
 	}
 	pastBase := claim("c", 20*day, ann(
@@ -339,7 +347,7 @@ func TestPickEarliestDeadlineEligibleFailedWithUnparseableRetryCountUsesBase(t *
 		annotations.RetryCount, "garbage",
 		annotations.FailedAt, now.Add(-40*time.Minute).Format(time.RFC3339),
 	))
-	if got := selection.PickEarliestDeadlineEligible([]karpv1.NodeClaim{pastBase}, in); got == nil {
+	if got := selection.PickEarliestDeadlineEligible(views([]karpv1.NodeClaim{pastBase}), in); got == nil {
 		t.Fatal("past the base backoff the claim must be re-selectable")
 	}
 }
@@ -348,11 +356,11 @@ func TestTriggeredConsidersAgeAloneIgnoringReadyAndState(t *testing.T) {
 	in := baseInputs() // threshold 6d
 	// Past the trigger but NotReady and in-flight: not *eligible*, yet still
 	// near-deadline, so Triggered (used for the placeholder host exclusion) is true.
-	c := claim("c", 10*day, ready(false), ann(annotations.State, annotations.StatePending))
+	c := views([]karpv1.NodeClaim{claim("c", 10*day, ready(false), ann(annotations.State, annotations.StatePending))})[0]
 	if !selection.Triggered(&c, in) {
 		t.Error("a past-deadline claim must be Triggered regardless of Ready/state")
 	}
-	young := claim("young", 1*day)
+	young := views([]karpv1.NodeClaim{claim("young", 1*day)})[0]
 	if selection.Triggered(&young, in) {
 		t.Error("a young claim must not be Triggered")
 	}
@@ -388,14 +396,14 @@ func TestCountEligibleCountsEveryEligibleClaim(t *testing.T) {
 		claim("pending", 20*day, ann(annotations.State, annotations.StatePending)),
 		claim("deleting", 20*day, deleting()),
 	}
-	if got := selection.CountEligible(claims, baseInputs()); got != 2 {
+	if got := selection.CountEligible(views(claims), baseInputs()); got != 2 {
 		t.Fatalf("want 2 eligible, got %d", got)
 	}
 }
 
 func TestCountEligibleZeroWhenNoneEligible(t *testing.T) {
 	claims := []karpv1.NodeClaim{claim("young", 1*day)}
-	if got := selection.CountEligible(claims, baseInputs()); got != 0 {
+	if got := selection.CountEligible(views(claims), baseInputs()); got != 0 {
 		t.Fatalf("want 0, got %d", got)
 	}
 }
@@ -407,7 +415,7 @@ func TestPickEarliestDeadlineEligibleSkipsOptedOut(t *testing.T) {
 	}
 	in := baseInputs()
 	in.Excluded = map[string]bool{"kept": true}
-	got := selection.PickEarliestDeadlineEligible(claims, in)
+	got := selection.PickEarliestDeadlineEligible(views(claims), in)
 	if got == nil || got.Name != "other" {
 		t.Fatalf("opted-out oldest must be skipped; want other, got %v", got)
 	}
@@ -417,7 +425,7 @@ func TestPickEarliestDeadlineEligibleNilWhenAllOptedOut(t *testing.T) {
 	claims := []karpv1.NodeClaim{claim("only", 20*day)}
 	in := baseInputs()
 	in.Excluded = map[string]bool{"only": true}
-	if got := selection.PickEarliestDeadlineEligible(claims, in); got != nil {
+	if got := selection.PickEarliestDeadlineEligible(views(claims), in); got != nil {
 		t.Fatalf("want nil, got %v", got.Name)
 	}
 }
@@ -426,7 +434,7 @@ func TestCountEligibleSkipsOptedOut(t *testing.T) {
 	claims := []karpv1.NodeClaim{claim("a", 20*day), claim("b", 20*day)}
 	in := baseInputs()
 	in.Excluded = map[string]bool{"a": true}
-	if n := selection.CountEligible(claims, in); n != 1 {
+	if n := selection.CountEligible(views(claims), in); n != 1 {
 		t.Fatalf("want 1 eligible (b), got %d", n)
 	}
 }
@@ -438,7 +446,7 @@ func TestShortLeadClaims(t *testing.T) {
 		claim("short-b", 1*day, expireAfter(1*time.Hour)),
 		claim("never", 1*day, neverExpire()), // nil expireAfter excluded
 	}
-	got := selection.ShortLeadClaims(claims, selection.LeadTime{Base: 24 * time.Hour})
+	got := selection.ShortLeadClaims(views(claims), selection.LeadTime{Base: 24 * time.Hour})
 	if len(got) != 2 {
 		t.Fatalf("want 2 short-lead claims, got %d", len(got))
 	}
@@ -459,7 +467,7 @@ func TestCountShortLeadCountsClaimsThatCannotGuaranteeKChances(t *testing.T) {
 		claim("never", 1*day, neverExpire()),                     // nil expireAfter → never
 		claim("expiring", 1*day, expireAfter(7*day), deleting()), // forceful path begun → excluded
 	}
-	if got := selection.CountShortLead(claims, leadTime); got != 2 {
+	if got := selection.CountShortLead(views(claims), leadTime); got != 2 {
 		t.Fatalf("want 2 short-lead, got %d", got)
 	}
 }
@@ -467,12 +475,12 @@ func TestCountShortLeadCountsClaimsThatCannotGuaranteeKChances(t *testing.T) {
 func TestLeadTimeForUsesPerClaimTGPWithFallback(t *testing.T) {
 	lt := selection.LeadTime{Base: 48 * time.Hour, DrainFallback: time.Hour}
 	// A claim with its own tGP: lead = Base + tGP.
-	withTGP := claim("with", 1*day, tgp(3*time.Hour))
+	withTGP := views([]karpv1.NodeClaim{claim("with", 1*day, tgp(3*time.Hour))})[0]
 	if got := lt.For(&withTGP); got != 51*time.Hour {
 		t.Errorf("For(withTGP) = %v, want 51h (Base 48h + tGP 3h)", got)
 	}
 	// A claim that leaves tGP unset falls back to DrainFallback.
-	noTGP := claim("none", 1*day)
+	noTGP := views([]karpv1.NodeClaim{claim("none", 1*day)})[0]
 	if got := lt.For(&noTGP); got != 49*time.Hour {
 		t.Errorf("For(noTGP) = %v, want 49h (Base 48h + fallback 1h)", got)
 	}
@@ -486,13 +494,13 @@ func TestTriggeredAnchorsOnPerClaimTGPNotTemplate(t *testing.T) {
 	// Base = K·P + readyTimeout + buffer with no tGP term. The candidate carries a
 	// 4d tGP, so its lead = 8d + 4d = 12d ⇒ trigger age threshold = 14d − 12d = 2d.
 	in := selection.Inputs{Now: now, LeadTime: selection.LeadTime{Base: 8 * day, DrainFallback: time.Hour}}
-	c := claim("long-tgp", 3*day, tgp(4*day)) // age 3d > 2d ⇒ triggered
+	c := views([]karpv1.NodeClaim{claim("long-tgp", 3*day, tgp(4*day))})[0] // age 3d > 2d ⇒ triggered
 	if !selection.Triggered(&c, in) {
 		t.Error("claim with a long per-claim tGP must trigger on its own (longer) lead time")
 	}
 	// Same claim without the long tGP: lead = 8d + 1h fallback, threshold ≈ 6d, so
 	// at age 3d it would NOT yet be triggered — proving the tGP drove the result.
-	short := claim("short-tgp", 3*day)
+	short := views([]karpv1.NodeClaim{claim("short-tgp", 3*day)})[0]
 	if selection.Triggered(&short, in) {
 		t.Error("claim relying on the short fallback tGP must not trigger at age 3d")
 	}
@@ -509,8 +517,34 @@ func TestShortLeadClaimsUsesPerClaimTGP(t *testing.T) {
 		// E = 7d, no tGP ⇒ lead = 6d + 1h < 7d ⇒ not short-lead.
 		claim("short-tgp", 1*day, expireAfter(7*day)),
 	}
-	got := selection.ShortLeadClaims(claims, lt)
+	got := selection.ShortLeadClaims(views(claims), lt)
 	if len(got) != 1 || got[0].Name != "long-tgp" {
 		t.Fatalf("want only long-tgp short-lead, got %v", got)
+	}
+}
+
+// TestClaimViewIsPure pins the view's field set: everything selection reads off a
+// NodeClaim and nothing more. It is the compile-time guard that keeps karpv1 out.
+func TestClaimViewIsPure(t *testing.T) {
+	e := 10 * day
+	g := 30 * time.Minute
+	c := selection.Claim{
+		Name:        "n1",
+		CreatedAt:   now.Add(-11 * day),
+		Deleting:    false,
+		ExpireAfter: &e,
+		TGP:         &g,
+		Ready:       true,
+		Annotations: map[string]string{},
+	}
+	in := selection.Inputs{
+		Now:      now,
+		LeadTime: selection.LeadTime{Base: time.Hour, DrainFallback: time.Hour},
+	}
+	if !selection.Triggered(&c, in) {
+		t.Fatalf("claim aged past its deadline minus lead time must be triggered")
+	}
+	if got, want := in.LeadTime.For(&c), time.Hour+g; got != want {
+		t.Fatalf("LeadTime.For = %v, want %v (Base + the claim's own TGP)", got, want)
 	}
 }
