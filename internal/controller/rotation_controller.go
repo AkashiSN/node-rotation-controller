@@ -527,7 +527,8 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	}
 
 	// ── 2. Candidate-independent start gates.
-	if open, gate := decide.StartGate(r.gateInputs(pool, res, now)); !open {
+	gi := r.gateInputs(pool, res, now)
+	if open, gate := decide.StartGate(gi); !open {
 		r.warn().EmitNoCandidate(ctx, pool, string(gate))
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
@@ -548,7 +549,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// A candidate that cannot complete a graceful surge before its own deadline
 	// rotates surge-less when the opt-in fallback is enabled (spec §3.3); it has
 	// no surge, so the headroom gate (which sizes the placeholder) does not apply.
-	surgeless := decide.SurgelessFallback(pick, r.gateInputs(pool, res, now))
+	surgeless := decide.SurgelessFallback(pick, gi)
 	if !surgeless {
 		ok, err := r.headroomFits(ctx, pool, cand)
 		if err != nil {

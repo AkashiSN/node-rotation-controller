@@ -1,9 +1,10 @@
 // Package selection implements the read path of the reconcile loop (spec §5.2):
 // which NodeClaim is the next rotation candidate (spec §3.2). NodePool targeting
-// (which pool a policy governs) lives in internal/resolve. It has no side effects — pure predicates over Karpenter
-// types and resolved durations — so the caller derives the per-NodePool inputs
-// (leadTime from the schedule, the ageThreshold override from policy) and passes
-// plain values, mirroring the layering of internal/schedule and internal/window.
+// (which pool a policy governs) lives in internal/resolve. It has no side effects — pure predicates over the
+// Claim view (built by internal/adapt) and resolved durations — so the caller
+// derives the per-NodePool inputs (leadTime from the schedule, the ageThreshold
+// override from policy) and passes plain values, mirroring the layering of
+// internal/schedule and internal/window.
 package selection
 
 import (
