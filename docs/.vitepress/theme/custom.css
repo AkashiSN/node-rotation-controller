@@ -55,7 +55,13 @@
    in a .policy-simulator div that carries the gutters — layout: page is full-bleed —
    and PolicySimulator.vue's root repeats it so the component is styled even without
    the wrapper. The nested reset keeps the padding from applying twice. */
-.policy-simulator { margin-top: 1.5rem; padding: 0 24px 64px; }
+/* The right gutter is 32px, not 24: VitePress paints the nav's opaque background on
+   `.VPNavBar .content-body`, which (has-sidebar, >= 960px) ends 32px short of the content
+   container's right edge. A full-bleed page with a 24px gutter therefore reaches 8px past
+   that background, and its content — the timeline's date labels, the YAML box's edge —
+   scrolled BESIDE the nav bar rather than under it, showing up right of the GitHub icon
+   (#254). An ordinary .vp-doc page never hits this: it caps its own measure. */
+.policy-simulator { margin-top: 1.5rem; padding: 0 32px 64px 24px; }
 .policy-simulator .policy-simulator { margin-top: 0; padding: 0; }
 /* The intro is prose and carries `vp-doc` for its typography (layout: page has no .vp-doc
    scope of its own — see simulator.md). Cap its measure: the page is full-bleed for the
