@@ -441,6 +441,48 @@ func TestNoEligibleClaimCarriesCensus(t *testing.T) {
 	}
 }
 
+// TestBreachAtHorizonEndIsReported guards the horizon's trailing edge. The clock advances
+// on a one-minute grid, but a deadline is not on the grid: with Options.End set to the
+// node's own expireAfter deadline — the horizon an operator asking "does every node make
+// it?" would naturally choose — the last processed tick lies BEFORE the deadline, so a
+// breach check that only ran on the grid would drop the red mark entirely. Under-reporting
+// a breach is the one error class this simulator must never commit.
+func TestBreachAtHorizonEndIsReported(t *testing.T) {
+	t.Parallel()
+
+	pol := basePolicy() // window 02:00–06:00 daily
+	tgp := time.Hour
+	created := mustTime(t, "2026-02-27T10:38:20Z") // off the tick grid, like a real NodeClaim
+	f := sim.Fleet{
+		ExpireAfter: 14 * 24 * time.Hour,
+		TGP:         &tgp,
+		Nodes:       []sim.Node{{Name: "node-a", CreatedAt: created}},
+	}
+	deadline := created.Add(f.ExpireAfter) // 2026-03-13T10:38:20Z
+
+	// The whole horizon is outside the maintenance window, so the node — long past its
+	// trigger — never rotates and runs into its backstop.
+	tl, err := sim.Run(pol, f, sim.Env{}, sim.Options{
+		Start: mustTime(t, "2026-03-13T07:00:20Z"),
+		End:   deadline,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(kinds(tl.Events, sim.KindRotationStart)) != 0 {
+		t.Fatalf("a rotation started although the horizon is entirely out-of-window")
+	}
+
+	breaches := kinds(tl.Events, sim.KindExpireAfterBreach)
+	if len(breaches) != 1 {
+		t.Fatalf("expire-after-breach events = %+v, want 1 at the horizon's end %s",
+			breaches, deadline.Format(time.RFC3339))
+	}
+	if got := breaches[0]; !got.At.Equal(deadline) || got.Node != "node-a" {
+		t.Errorf("breach = %s at %s, want node-a at %s", got.Node, got.At, deadline)
+	}
+}
+
 // TestRunRejectsUnrunnableInput: error is reserved for input that cannot run at all.
 func TestRunRejectsUnrunnableInput(t *testing.T) {
 	t.Parallel()

@@ -71,6 +71,13 @@ func (r *run) loop() {
 		now = next
 	}
 
+	// A deadline does not fall on the tick grid, so the last tick of the horizon can lie
+	// before it: a breach at (lastTick, End] — including End itself, the horizon an
+	// operator asking "does every node make it?" would naturally choose — would otherwise
+	// go unreported. Sweep once more at End. A rotation that completed before its deadline
+	// re-created the node with a fresh CreatedAt, so this cannot invent a breach.
+	r.breachCheck(r.opts.End)
+
 	// Close any interval still open at the horizon so the UI is never left with a
 	// dangling "blocked since …" it has to guess the end of.
 	r.flushBlocked(r.opts.End)
