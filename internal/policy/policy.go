@@ -161,7 +161,7 @@ func (p *Policy) ApplyDefaults() {
 
 // Validate runs structural checks only (shape, enums, formats, the v1 surge
 // constraints). Scheduling feasibility (A<=0, G<K, throughput) is the job of
-// internal/schedule. Call ApplyDefaults first (resolve.ToPolicy does). NodePool
+// internal/schedule. Call ApplyDefaults first (crd.ToPolicy does). NodePool
 // targeting is not checked here — the selector lives on the CRD, not on Policy.
 func (p *Policy) Validate() error {
 	var errs []error

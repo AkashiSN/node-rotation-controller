@@ -144,6 +144,14 @@ jobs:
           restore-keys: ci-${{ runner.os }}-
       - if: needs.changes.outputs.go == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.infra == 'true'
         run: make build
+      # The docs-site policy simulator (cmd/wasm) must keep linking WITHOUT
+      # sigs.k8s.io/karpenter: its scheme/reflect metadata would add ~6 MB gzipped
+      # to a download every visitor pays for, and the pure decision layer is what
+      # makes the simulator share the controller's logic instead of copying it.
+      # The guard asserts both the absent dependency and a gzipped size ceiling.
+      - name: wasm simulator (build + purity/size guard)
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
+        run: make wasm-guard
       - uses: docker/setup-buildx-action@v4
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.infra == 'true'
       - name: Build container image (no push)

@@ -139,7 +139,7 @@ func TestAgeThresholdOverride(t *testing.T) {
 
 // TestValidateStructuralErrors mutates a structurally-valid Policy into each
 // invalid shape and asserts ApplyDefaults+Validate rejects it. ApplyDefaults runs
-// first (as resolve.ToPolicy does): it never overwrites an explicitly set value,
+// first (as crd.ToPolicy does): it never overwrites an explicitly set value,
 // so an explicit 0m duration or maxUnavailable=0 survives to be rejected.
 func TestValidateStructuralErrors(t *testing.T) {
 	tests := []struct {
