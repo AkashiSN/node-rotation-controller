@@ -137,6 +137,29 @@ func TestSimulateRejectsUnknownPolicyFields(t *testing.T) {
 	}
 }
 
+func TestSimulateRejectsAManifestTheClusterWouldNotAdmit(t *testing.T) {
+	// The boundary's promise is that a manifest which simulates is a manifest the
+	// cluster would accept. A wrong (or absent) apiVersion/kind means Kubernetes
+	// would never have admitted this as a RotationPolicy, so producing a timeline
+	// for it would tell the operator their policy works when it would not apply.
+	for name, yaml := range map[string]string{
+		"wrong apiVersion":   strings.Replace(policyYAML, "apiVersion: noderotation.io/v1alpha1", "apiVersion: apps/v1", 1),
+		"missing apiVersion": strings.Replace(policyYAML, "apiVersion: noderotation.io/v1alpha1\n", "", 1),
+		"wrong kind":         strings.Replace(policyYAML, "kind: RotationPolicy", "kind: Deployment", 1),
+		"missing kind":       strings.Replace(policyYAML, "kind: RotationPolicy\n", "", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp := run(t, yaml, request)
+			if resp.Error == "" {
+				t.Fatalf("Simulate accepted a manifest with a %s, want an error", name)
+			}
+			if resp.Result != nil || resp.Events != nil {
+				t.Error("a manifest the cluster would reject must produce no timeline")
+			}
+		})
+	}
+}
+
 func TestSimulateRejectsMalformedRequest(t *testing.T) {
 	for name, req := range map[string]string{
 		"not JSON": `{`,

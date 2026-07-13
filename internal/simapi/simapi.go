@@ -188,17 +188,25 @@ func simulate(policyYAML, requestJSON string) (Response, error) {
 	return toResponse(tl), nil
 }
 
+// kind is the only kind this boundary runs. The apiVersion it pairs with is
+// nrv1.GroupVersion, so a manifest that names another API is rejected here rather
+// than simulated as if the cluster would have admitted it.
+const kind = "RotationPolicy"
+
 // decodePolicy takes the RotationPolicy manifest an operator would apply and runs
-// it through the controller's own conversion, defaulting and validation. The
-// decode is STRICT: a misspelled field is an error here, as the CRD's structural
-// schema would make it at admission, rather than silently defaulting away.
+// it through the controller's own conversion, defaulting and validation. It is as
+// strict as admission would be: the apiVersion and kind must be this CRD's, and a
+// misspelled field is an error rather than a value silently defaulted away.
 func decodePolicy(policyYAML string) (*policy.Policy, error) {
 	var rp nrv1.RotationPolicy
 	if err := yaml.UnmarshalStrict([]byte(policyYAML), &rp); err != nil {
 		return nil, fmt.Errorf("policy YAML is not a valid RotationPolicy: %w", err)
 	}
-	if rp.Kind != "" && rp.Kind != "RotationPolicy" {
-		return nil, fmt.Errorf("policy kind is %q, want RotationPolicy", rp.Kind)
+	if want := nrv1.GroupVersion.String(); rp.APIVersion != want {
+		return nil, fmt.Errorf("policy apiVersion is %q, want %s: the simulator runs the RotationPolicy CRD, and a cluster would not admit this manifest either", rp.APIVersion, want)
+	}
+	if rp.Kind != kind {
+		return nil, fmt.Errorf("policy kind is %q, want %s", rp.Kind, kind)
 	}
 	p, err := crd.ToPolicy(rp.Spec)
 	if err != nil {
