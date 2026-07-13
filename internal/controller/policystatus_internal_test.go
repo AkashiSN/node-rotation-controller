@@ -2,13 +2,17 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
@@ -169,4 +173,55 @@ func TestStatusReconciler_NoOpWhenUnchanged(t *testing.T) {
 func TestStatusReconciler_MissingPolicyIsNoError(t *testing.T) {
 	r, _ := newStatusReconciler()
 	reconcilePolicy(t, r, "gone") // IgnoreNotFound — must not error
+}
+
+// newStatusReconcilerWithStatusUpdateErr builds a reconciler whose Status().Update
+// always fails with updateErr, so the conflict/error handling on the status write
+// can be exercised deterministically.
+func newStatusReconcilerWithStatusUpdateErr(updateErr error, objs ...client.Object) *RotationPolicyStatusReconciler {
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme.New()).
+		WithObjects(objs...).
+		WithStatusSubresource(&noderotationv1alpha1.RotationPolicy{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
+				return updateErr
+			},
+		}).
+		Build()
+	return &RotationPolicyStatusReconciler{Client: cl}
+}
+
+func TestStatusReconciler_ConflictRequeuesWithoutError(t *testing.T) {
+	// A benign optimistic-concurrency conflict on the status write must NOT surface
+	// as a reconcile error (which controller-runtime logs at ERROR + stack trace).
+	// It is silently requeued for a fresh recompute, mirroring the anchor write
+	// (rotation_controller.go) — so a logged ERROR always signals a real problem (#236).
+	conflict := apierrors.NewConflict(
+		schema.GroupResource{Group: noderotationv1alpha1.GroupVersion.Group, Resource: "rotationpolicies"},
+		"api", errors.New("the object has been modified"))
+	pol := testRotationPolicy("api", map[string]string{"workload": "api"})
+	pool := poolGov("p1", map[string]string{"workload": "api"}, true)
+	r := newStatusReconcilerWithStatusUpdateErr(conflict, pol, &pool)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	if err != nil {
+		t.Fatalf("conflict must not return an error, got %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Errorf("conflict must requeue for a fresh recompute, got %+v", res)
+	}
+}
+
+func TestStatusReconciler_NonConflictErrorPropagates(t *testing.T) {
+	// A non-conflict status-write failure is a real problem and must still surface
+	// as a reconcile error so the ERROR channel stays meaningful.
+	boom := errors.New("boom")
+	pol := testRotationPolicy("api", map[string]string{"workload": "api"})
+	pool := poolGov("p1", map[string]string{"workload": "api"}, true)
+	r := newStatusReconcilerWithStatusUpdateErr(boom, pol, &pool)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}}); !errors.Is(err, boom) {
+		t.Fatalf("non-conflict error must propagate, got %v", err)
+	}
 }
