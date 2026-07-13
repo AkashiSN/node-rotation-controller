@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import {
-  DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV, defaultHorizon, buildRequest,
+  COVERAGE_CHOICES, DEFAULT_COVERAGE, DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV,
+  buildRequest, horizonForCoverage, parseGoDuration,
   type Env, type Fleet, type Horizon, type SimResponse,
 } from './simulator/model.ts'
+import { projectPolicy } from './simulator/policyYaml.ts'
+import { isValidTimezone } from './simulator/timeutil.ts'
 import { useWasm } from './simulator/useWasm.ts'
 import { useLabels } from './simulator/i18n.ts'
 import PolicyInput from './simulator/PolicyInput.vue'
@@ -11,6 +14,8 @@ import FleetInput from './simulator/FleetInput.vue'
 import EnvInput from './simulator/EnvInput.vue'
 import ResultHeader from './simulator/ResultHeader.vue'
 import TimelineChart from './simulator/TimelineChart.vue'
+import WindowCalendar from './simulator/WindowCalendar.vue'
+import ScaleRuler from './simulator/ScaleRuler.vue'
 import DiagnosticsPanel from './simulator/DiagnosticsPanel.vue'
 
 const t = useLabels()
@@ -19,13 +24,31 @@ const { loading, ready, error: loadError, load, simulate } = useWasm()
 const policyYAML = ref(DEFAULT_POLICY_YAML)
 const fleet = ref<Fleet>(structuredClone(DEFAULT_FLEET))
 const env = ref<Env>({ ...DEFAULT_ENV })
-const horizon = ref<Horizon>(defaultHorizon(DEFAULT_FLEET))
-// Once the user edits either end, the horizon is theirs: policy and fleet edits stop
-// moving it. Until then it tracks the fleet, so adding a node never leaves its
-// deadline off the right edge.
-const horizonPinned = ref(false)
 
-watch(fleet, f => { if (!horizonPinned.value) horizon.value = defaultHorizon(f) }, { deep: true })
+// The horizon's pin state machine, made explicit — the old single flag only covered half of
+// it, so a coverage choice and a hand-typed instant could disagree with no way back:
+//
+//   - choosing a coverage multiplier UNPINS: the horizon tracks the fleet again, at that
+//     multiple, so adding a node never leaves its deadline off the right edge;
+//   - editing an instant by hand PINS: fleet and policy edits stop moving the horizon, and
+//     the coverage buttons show as inactive rather than lying about the current span.
+const coverage = ref<number>(DEFAULT_COVERAGE)
+const horizonPinned = ref(false)
+const horizon = ref<Horizon>(horizonForCoverage(DEFAULT_FLEET, DEFAULT_COVERAGE))
+
+watch([fleet, coverage], () => {
+  if (!horizonPinned.value) horizon.value = horizonForCoverage(fleet.value, coverage.value)
+}, { deep: true })
+
+function chooseCoverage(n: number) {
+  horizonPinned.value = false
+  coverage.value = n
+  horizon.value = horizonForCoverage(fleet.value, n)
+}
+function pinHorizon(patch: Partial<Horizon>) {
+  horizonPinned.value = true
+  horizon.value = { ...horizon.value, ...patch }
+}
 
 const response = ref<SimResponse>({})
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -43,15 +66,37 @@ onMounted(async () => { await load(); run() })
 watch([policyYAML, fleet, env, horizon], schedule, { deep: true })
 
 const result = computed(() => response.value.result)
-const events = computed(() => response.value.events ?? [])
 const diagnostics = computed(() => response.value.diagnostics ?? [])
 // A PARTIAL run can return a result and NO events at all (e.g. env.provisioning above
-// readyTimeout: every rotation times out and the sim gives up). The page would then
-// show a forecast strip over an empty timeline — reading as "nothing ever rotates" —
-// while the only explanation sat at the bottom of the page, under a full-height YAML
-// textarea and the node table. Surface the fatal diagnostics ABOVE the timeline, in
-// the controller's own words, verbatim. The full DiagnosticsPanel stays where it is.
+// readyTimeout: every rotation times out and the sim gives up). The page would then show a
+// forecast strip over an empty timeline — reading as "nothing ever rotates" — while the only
+// explanation sat at the bottom of the page. Surface the fatal diagnostics ABOVE the chart,
+// in the controller's own words, verbatim.
 const fatals = computed(() => diagnostics.value.filter(d => d.severity === 'fatal'))
+
+const policyForm = computed(() => projectPolicy(policyYAML.value).form)
+
+// The DISPLAY TIMEZONE is the policy's — maintenanceWindows[0].timezone — never the
+// browser's, and it is always shown as a label. A zone this runtime does not know degrades
+// to UTC rather than throwing inside a render.
+const timezone = computed(() => {
+  const tz = policyForm.value.timezone
+  return tz && isValidTimezone(tz) ? tz : 'UTC'
+})
+
+// The env fields are BLANK by default, and blank means "the policy's own estimate". The
+// ruler needs the resolved value, and resolving it here — rather than hydrating the form —
+// is what keeps a later policy edit still able to move it.
+const provisioningMs = computed(() =>
+  parseGoDuration(env.value.provisioning || result.value?.provisioningEstimate || '') ?? 0)
+const drainMs = computed(() =>
+  parseGoDuration(env.value.drain || result.value?.drainEstimate || '') ?? 0)
+
+const simulatedThroughMs = computed(() => {
+  const at = new Date(response.value.simulatedThrough ?? horizon.value.end).getTime()
+  return Number.isFinite(at) ? at : new Date(horizon.value.end).getTime()
+})
+const horizonStartMs = computed(() => new Date(horizon.value.start).getTime())
 </script>
 
 <template>
@@ -80,7 +125,21 @@ const fatals = computed(() => diagnostics.value.filter(d => d.severity === 'fata
         </ul>
       </div>
 
-      <TimelineChart v-if="result" :events="events" :horizon="horizon" :fleet="fleet" />
+      <TimelineChart v-if="result" :response="response" :horizon="horizon" :fleet="fleet"
+                     :timezone="timezone" />
+
+      <WindowCalendar v-if="result" :windows="(response.windows ?? []).map(w => ({
+                        startMs: new Date(w.start).getTime(),
+                        endMs: new Date(w.end).getTime(),
+                        startClipped: w.startClipped === true,
+                        endClipped: w.endClipped === true,
+                      }))"
+                      :span-start-ms="horizonStartMs" :span-end-ms="simulatedThroughMs"
+                      :timezone="timezone" :partial="response.partial === true" />
+
+      <ScaleRuler v-if="result" :result="result" :fleet="fleet" :response="response"
+                  :provisioning-ms="provisioningMs" :drain-ms="drainMs"
+                  :ready-timeout="policyForm.readyTimeout" :cooldown-after="policyForm.cooldownAfter" />
 
       <!-- PolicyInput stays OUTSIDE the .sim-inputs grid: it owns a full-width row,
            while the grid's explicit tracks (Fleet widest — it holds full RFC 3339
@@ -94,16 +153,32 @@ const fatals = computed(() => diagnostics.value.filter(d => d.severity === 'fata
                   :drain-estimate="result?.drainEstimate ?? ''" />
         <section class="sim-block">
           <h3>{{ t.horizon }}</h3>
-          <fieldset class="sim-form">
-            <label class="sim-field-wide">{{ t.start }}
-              <input :value="horizon.start"
-                     @change="horizonPinned = true; horizon = { ...horizon, start: ($event.target as HTMLInputElement).value }" />
-            </label>
-            <label class="sim-field-wide">{{ t.end }}
-              <input :value="horizon.end"
-                     @change="horizonPinned = true; horizon = { ...horizon, end: ($event.target as HTMLInputElement).value }" />
-            </label>
-          </fieldset>
+          <p class="sim-hint">{{ t.chart.coverageHint }}</p>
+          <div class="sim-controls">
+            <span class="sim-ruler-name">{{ t.chart.coverage }}</span>
+            <button v-for="n in COVERAGE_CHOICES" :key="n" type="button"
+                    :class="['sim-btn', { 'sim-btn-on': !horizonPinned && coverage === n }]"
+                    :aria-pressed="!horizonPinned && coverage === n"
+                    @click="chooseCoverage(n)">{{ t.chart.coverageOption(n) }}</button>
+          </div>
+          <p class="sim-hint"><code>{{ horizon.end }}</code></p>
+          <p v-if="horizonPinned" class="sim-hint">{{ t.chart.pinned }}</p>
+
+          <!-- The raw instants stay, behind a details, as the escape hatch for reproducing
+               an exact span. Editing one PINS the horizon. -->
+          <details class="sim-advanced">
+            <summary>{{ t.chart.advanced }}</summary>
+            <fieldset class="sim-form">
+              <label class="sim-field-wide">{{ t.start }}
+                <input :value="horizon.start"
+                       @change="pinHorizon({ start: ($event.target as HTMLInputElement).value })" />
+              </label>
+              <label class="sim-field-wide">{{ t.end }}
+                <input :value="horizon.end"
+                       @change="pinHorizon({ end: ($event.target as HTMLInputElement).value })" />
+              </label>
+            </fieldset>
+          </details>
         </section>
       </div>
 

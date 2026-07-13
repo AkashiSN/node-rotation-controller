@@ -1,9 +1,32 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  parseGoDuration, generateNodes, defaultHorizon, buildRequest,
-  DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV, DEFAULT_FIRST_CREATED_AT,
+  parseGoDuration, generateNodes, defaultHorizon, buildRequest, horizonForCoverage,
+  DEFAULT_COVERAGE, DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV, DEFAULT_FIRST_CREATED_AT,
 } from './model.ts'
+
+test('lifetime coverage is a multiple of the LONGEST effective lifetime, not of the template', () => {
+  // A heterogeneous fleet: node-b's own expireAfter is longer than the template's. Bounding
+  // the horizon on the TEMPLATE would push node-b's deadline off the right edge, and the
+  // page would then report no breach for time it never simulated.
+  const fleet = {
+    expireAfter: '480h',
+    nodes: [
+      { name: 'node-a', createdAt: '2026-01-01T00:00:00Z' },
+      { name: 'node-b', createdAt: '2026-01-01T00:00:00Z', expireAfter: '720h' },
+    ],
+  }
+  const h = horizonForCoverage(fleet, 2)
+  assert.equal(new Date(h.end).getTime() - new Date(h.start).getTime(), 2 * 720 * 3600_000)
+
+  // The multiplier is the control; 1x is one lifetime, 3x is three.
+  assert.equal(
+    new Date(horizonForCoverage(fleet, 1).end).getTime() - new Date(h.start).getTime(),
+    720 * 3600_000,
+  )
+  // And the default a visitor lands on is the 2x that puts a SECOND generation on screen.
+  assert.deepEqual(defaultHorizon(fleet), horizonForCoverage(fleet, DEFAULT_COVERAGE))
+})
 
 test('parseGoDuration handles the units Go emits', () => {
   assert.equal(parseGoDuration('720h'), 720 * 3600_000)
