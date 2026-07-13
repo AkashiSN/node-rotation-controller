@@ -13,7 +13,7 @@
 // This parser drives the form and nothing else. It never gates the simulate() call:
 // the raw YAML is always what is sent, so the errors a user sees are the
 // controller's own (strict decode, apiVersion + kind exact).
-import { parseDocument } from 'yaml'
+import { isSeq, parseDocument } from 'yaml'
 
 export interface PolicyForm {
   timezone: string
@@ -77,12 +77,18 @@ export function projectPolicy(yamlText: string): { form: PolicyForm; error?: str
   }
 
   const windows = doc.getIn(['spec', 'maintenanceWindows']) as { items?: unknown[] } | undefined
-  const days = doc.getIn(['spec', 'maintenanceWindows', 0, 'days'], true) as { toJSON?: () => string[] } | undefined
+  // The YAML is the user's, and `days: Sat` (a bare scalar) is a valid but easy typo
+  // for `days: [Sat]` — projecting it would hand the form a string where it promises
+  // string[]. Only an actual sequence projects to its items; a scalar, null, or
+  // absent `days` all project to `[]`. The raw YAML still goes to the Go decoder
+  // unchanged, so the real error (the user's typo) is still reported there.
+  const daysNode = doc.getIn(['spec', 'maintenanceWindows', 0, 'days'], true)
+  const days = isSeq(daysNode) ? ((daysNode.toJSON() as string[]) ?? []) : []
 
   return {
     form: {
       timezone: str(PATHS.timezone),
-      days: days?.toJSON ? days.toJSON() : [],
+      days,
       start: str(PATHS.start),
       end: str(PATHS.end),
       minRotationChances: get(PATHS.minRotationChances) as number ?? null,
@@ -108,5 +114,12 @@ export function applyPolicyEdit(yamlText: string, field: keyof PolicyForm, value
   // yaml's default stringify pads flow collections ("[ Sat ]"), which would
   // reformat every untouched flow-style `days: [Sat]` on ANY unrelated edit.
   // Disable the padding so an edit changes only the field it touches.
-  return doc.toString({ flowCollectionPadding: false })
+  //
+  // yaml's default `lineWidth: 80` also line-folds any plain scalar that crosses
+  // 80 columns and contains whitespace — e.g. a long unmodeled description — onto
+  // multiple lines, again on ANY unrelated edit. `lineWidth: 0` disables folding.
+  // This does NOT preserve the source's original indent width (yaml re-emits with
+  // its own default indent); that's not achievable through this API and is out of
+  // scope here.
+  return doc.toString({ flowCollectionPadding: false, lineWidth: 0 })
 }

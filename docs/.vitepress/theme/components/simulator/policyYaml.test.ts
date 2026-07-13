@@ -47,6 +47,37 @@ test('a form edit PRESERVES an unknown field, so Go still rejects the manifest',
   assert.match(out, /bogusField: 1/)
 })
 
+test('projectPolicy always projects days as a string[], even for a bare scalar or empty value', () => {
+  // `days: Sat` is valid YAML (a bare scalar) and an easy typo for `days: [Sat]`.
+  // The form's contract is `string[]`; a consumer that does `form.days.join(',')`
+  // must not throw or receive a raw string mistaken for an array.
+  const scalar = projectPolicy(DEFAULT_POLICY_YAML.replace('days: [Sat]', 'days: Sat'))
+  assert.equal(scalar.error, undefined)
+  assert.deepEqual(scalar.form.days, [])
+
+  const empty = projectPolicy(DEFAULT_POLICY_YAML.replace('days: [Sat]', 'days:'))
+  assert.equal(empty.error, undefined)
+  assert.deepEqual(empty.form.days, [])
+})
+
+test('applyPolicyEdit does not re-wrap a long untouched scalar elsewhere in the manifest', () => {
+  // yaml's default `lineWidth: 80` line-folds a plain scalar at whitespace once it
+  // crosses the width — a value with no spaces (e.g. all-digit) can't be folded and
+  // so wouldn't reproduce the bug; this one has spaces, like a real description.
+  const longValue = Array.from({ length: 20 }, (_, i) => `word${i}`).join(' ')
+  assert.equal(longValue.length, 129, 'sanity: exercise the >80-char fold threshold')
+  const withLongScalar = DEFAULT_POLICY_YAML.replace(
+    '  ageThreshold: auto\n',
+    `  ageThreshold: auto\n  someLongUnknownField: ${longValue}\n`,
+  )
+  const out = applyPolicyEdit(withLongScalar, 'cooldownAfter', '1m')
+  assert.match(
+    out,
+    new RegExp(`someLongUnknownField: ${longValue}\\n`),
+    'a long untouched scalar must survive on a single line, not be folded by an unrelated edit',
+  )
+})
+
 test('a form edit preserves comments and a second maintenance window', () => {
   const commented = `apiVersion: noderotation.io/v1alpha1
 kind: RotationPolicy
