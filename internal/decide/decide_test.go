@@ -84,6 +84,45 @@ func TestStartGateOrder(t *testing.T) {
 	}
 }
 
+// TestStartGateFailurePauseIndependentOfCooldown pins ADR-0004: gate B
+// (post-failure) reads surge.failurePause and gate A (post-success) reads
+// surge.cooldownAfter, so the two are independent — a success 5m ago no longer
+// blocks a 1m cooldown while a failure 5m ago still blocks a 10m failurePause, the
+// exact case a shared value could not express (issue #216). Moved from
+// internal/controller/transitionlog_internal_test.go's
+// TestStartGatesFailurePauseSplitFromCooldown with #238: that test called
+// RotationReconciler.startGates directly, a method that no longer exists now that
+// this logic lives in decide.StartGate. The resolve()-side half of that test — that
+// r.resolve() itself derives failurePause as max(FailurePauseFloor, cooldownAfter),
+// overridable — is controller-specific and stayed there, renamed
+// TestResolveFailurePauseDefaultsToMaxFloorCooldown.
+func TestStartGateFailurePauseIndependentOfCooldown(t *testing.T) {
+	// cooldownAfter 1m, failurePause 10m (== max(FailurePauseFloor, cooldownAfter)
+	// resolved by the controller for cooldownAfter 1m; see
+	// TestResolveFailurePauseDefaultsToMaxFloorCooldown).
+	base := decide.Inputs{Now: now, InWindow: true, Cooldown: time.Minute, FailurePause: 10 * time.Minute}
+
+	// success 5m ago: gate A (cooldown 1m) is satisfied → open.
+	open := base
+	open.Annotations = map[string]string{annotations.LastRotationAt: rfc(now.Add(-5 * time.Minute))}
+	if ok, gate := decide.StartGate(open); !ok {
+		t.Errorf("post-success 5m > cooldown 1m: got (false, %q), want open", gate)
+	}
+
+	// failure 5m ago: gate B (failurePause 10m) still blocks, and names its own gate.
+	blocked := base
+	blocked.Annotations = map[string]string{annotations.LastFailureAt: rfc(now.Add(-5 * time.Minute))}
+	if ok, gate := decide.StartGate(blocked); ok || gate != decide.GateFailurePause {
+		t.Errorf("post-failure 5m < failurePause 10m: got (%v, %q), want (false, %q)", ok, gate, decide.GateFailurePause)
+	}
+
+	// An explicit failurePause (2m) overrides the max(floor, cooldownAfter) default.
+	blocked.FailurePause = 2 * time.Minute
+	if ok, _ := decide.StartGate(blocked); !ok {
+		t.Error("post-failure 5m > explicit failurePause 2m: want open")
+	}
+}
+
 // TestGateStringsAreStable: these exact strings reach logs and events today.
 func TestGateStringsAreStable(t *testing.T) {
 	for gate, want := range map[decide.Gate]string{
@@ -126,5 +165,89 @@ func TestSurgelessFallback(t *testing.T) {
 	off.FallbackEnabled = false
 	if decide.SurgelessFallback(&racing, off) {
 		t.Error("fallback disabled must never fire (ADR-0001 is opt-in)")
+	}
+}
+
+// ffTRot is readyTimeout (15m) + drainBound (32m) = 47m — the same t_rot
+// internal/controller's forcefulfallback_internal_test.go fixtures used before this
+// boundary-precision coverage moved here with #238 (the method it called,
+// RotationReconciler.surgelessFallback, no longer exists; the reconcile-level tests
+// in that file, which drive the same decision through reconcileNodePool, still pin
+// it at that layer and were left untouched).
+const ffTRot = 47 * time.Minute
+
+// ffClaim builds a candidate whose Forceful Expiration deadline sits gap after now
+// (deadline = CreatedAt + *ExpireAfter, expireAfter fixed at 14d as the original
+// fixture had it). A negative gap puts the deadline in the past.
+func ffClaim(gap time.Duration) selection.Claim {
+	e := 14 * 24 * time.Hour
+	return selection.Claim{Name: "nc-old", CreatedAt: now.Add(gap - e), ExpireAfter: &e}
+}
+
+// ffNeverClaim builds a candidate with expireAfter: Never — no deadline at all.
+func ffNeverClaim(age time.Duration) selection.Claim {
+	return selection.Claim{Name: "nc-old", CreatedAt: now.Add(-age)}
+}
+
+// TestSurgelessFallbackThreshold pins the decision function on both sides of the
+// boundary, on the boundary itself, and for the deadline-less candidate.
+func TestSurgelessFallbackThreshold(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		cand    selection.Claim
+		want    bool
+	}{{
+		// The fallback is opt-in: a candidate that would otherwise qualify surges.
+		name:    "disabled policy never falls back",
+		enabled: false,
+		cand:    ffClaim(ffTRot - time.Second),
+		want:    false,
+	}, {
+		name:    "gap strictly below t_rot falls back",
+		enabled: true,
+		cand:    ffClaim(ffTRot - time.Second),
+		want:    true,
+	}, {
+		// deadline − now == t_rot: a graceful surge started now finishes exactly at
+		// the deadline, so it still wins the race. The inequality is strict.
+		name:    "gap exactly t_rot keeps surging",
+		enabled: true,
+		cand:    ffClaim(ffTRot),
+		want:    false,
+	}, {
+		name:    "gap just above t_rot keeps surging",
+		enabled: true,
+		cand:    ffClaim(ffTRot + time.Second),
+		want:    false,
+	}, {
+		name:    "far deadline keeps surging",
+		enabled: true,
+		cand:    ffClaim(7 * 24 * time.Hour),
+		want:    false,
+	}, {
+		// Already past its deadline: Karpenter is force-expiring it or is about to,
+		// so a surge cannot possibly win.
+		name:    "deadline already passed falls back",
+		enabled: true,
+		cand:    ffClaim(-time.Hour),
+		want:    true,
+	}, {
+		name:    "expireAfter Never never falls back",
+		enabled: true,
+		cand:    ffNeverClaim(20 * 24 * time.Hour),
+		want:    false,
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			in := decide.Inputs{
+				Now: now, FallbackEnabled: tc.enabled,
+				ReadyTimeout: 15 * time.Minute, DrainBound: 32 * time.Minute, // t_rot = 47m = ffTRot
+			}
+			if got := decide.SurgelessFallback(&tc.cand, in); got != tc.want {
+				t.Errorf("SurgelessFallback = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

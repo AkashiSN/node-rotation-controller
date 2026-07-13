@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +27,7 @@ import (
 	noderotationv1alpha1 "github.com/AkashiSN/node-rotation-controller/api/v1alpha1"
 	"github.com/AkashiSN/node-rotation-controller/internal/adapt"
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
+	"github.com/AkashiSN/node-rotation-controller/internal/decide"
 	"github.com/AkashiSN/node-rotation-controller/internal/policy"
 	"github.com/AkashiSN/node-rotation-controller/internal/resolve"
 	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
@@ -426,6 +426,22 @@ func (r *RotationReconciler) selInputs(res resolved, now time.Time, excluded map
 	}
 }
 
+// gateInputs maps the NodePool's resolved policy onto the pure decide view. The
+// window verdict is resolved here — decide takes a bool, not a *window.Schedule, so
+// the simulator can drive it from its virtual clock.
+func (r *RotationReconciler) gateInputs(pool *karpv1.NodePool, res resolved, now time.Time) decide.Inputs {
+	return decide.Inputs{
+		Now:             now,
+		InWindow:        res.sched.InWindow(now),
+		Annotations:     pool.Annotations,
+		Cooldown:        res.cooldown,
+		FailurePause:    res.failurePause,
+		FallbackEnabled: res.pol.Surge.ForcefulFallback.Enabled,
+		ReadyTimeout:    res.readyTimeout,
+		DrainBound:      res.drainBound,
+	}
+}
+
 // reconcileNodePool is the §5.2 driver: drive any in-flight rotation first
 // (serial), else evaluate the start gates and begin a new one. pol and sched are
 // the NodePool's governing RotationPolicy and its maintenance schedule, resolved
@@ -511,8 +527,8 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	}
 
 	// ── 2. Candidate-independent start gates.
-	if open, gate := r.startGates(pool, res, now); !open {
-		r.warn().EmitNoCandidate(ctx, pool, gate)
+	if open, gate := decide.StartGate(r.gateInputs(pool, res, now)); !open {
+		r.warn().EmitNoCandidate(ctx, pool, string(gate))
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
 
@@ -532,7 +548,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// A candidate that cannot complete a graceful surge before its own deadline
 	// rotates surge-less when the opt-in fallback is enabled (spec §3.3); it has
 	// no surge, so the headroom gate (which sizes the placeholder) does not apply.
-	surgeless := r.surgelessFallback(cand, res, now)
+	surgeless := decide.SurgelessFallback(pick, r.gateInputs(pool, res, now))
 	if !surgeless {
 		ok, err := r.headroomFits(ctx, pool, cand)
 		if err != nil {
@@ -562,8 +578,8 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		"eligible", selection.CountEligible(views, sel),
 		"surgeless", surgeless,
 	}
-	if dl, ok := claimDeadline(cand); ok {
-		kv = append(kv, "deadline", rfc3339(dl))
+	if pick.ExpireAfter != nil {
+		kv = append(kv, "deadline", rfc3339(pick.CreatedAt.Add(*pick.ExpireAfter)))
 	}
 	log.Info("rotation candidate selected", kv...)
 	if r.Events != nil {
@@ -574,36 +590,6 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		return r.startForcefulFallback(ctx, pool, cand)
 	}
 	return r.advance(ctx, pool, cand.Name, res)
-}
-
-// surgelessFallback reports whether the candidate must rotate via the opt-in
-// window-bounded surge-less path (spec §3.3): the fallback is enabled and a
-// graceful surge started now cannot finish before the candidate's own deadline
-// (deadline − now < t_rot), so the surge would only lose the race to Forceful
-// Expiration. The pool is already confirmed in-window by startGates. A candidate
-// with expireAfter: Never has no deadline and never qualifies.
-func (r *RotationReconciler) surgelessFallback(cand *karpv1.NodeClaim, res resolved, now time.Time) bool {
-	if !res.pol.Surge.ForcefulFallback.Enabled {
-		return false
-	}
-	dl, ok := claimDeadline(cand)
-	if !ok {
-		return false
-	}
-	// t_rot = readyTimeout + tGP + Buffer (spec §3.2); res.drainBound is tGP + Buffer.
-	tRot := res.readyTimeout + res.drainBound
-	return dl.Sub(now) < tRot
-}
-
-// claimDeadline returns the candidate's Forceful Expiration deadline
-// (creationTimestamp + spec.expireAfter); ok is false for expireAfter: Never
-// (nil Duration), which has no deadline (mirrors internal/selection).
-func claimDeadline(cand *karpv1.NodeClaim) (time.Time, bool) {
-	e := cand.Spec.ExpireAfter.Duration
-	if e == nil {
-		return time.Time{}, false
-	}
-	return cand.CreationTimestamp.Add(*e), true
 }
 
 // observe computes and emits the §4.2 reconcile-time gauges from the live claims
@@ -734,32 +720,6 @@ func firstFatal(findings []schedule.Finding) (schedule.Finding, bool) {
 	return schedule.Finding{}, false
 }
 
-// Names of the §5.2 step-2 start gates, reported by startGates so a blocked pool
-// can say which gate held it rather than idling silently (issue #221).
-const (
-	gateOutOfWindow          = "outOfWindow"
-	gateFrozen               = "frozen"
-	gateCooldownAfterSuccess = "cooldownAfterSuccess"
-	gateFailurePause         = "failurePause" // post-failure inter-attempt pause (gate B, §4.4, ADR-0004)
-)
-
-// startGates is the §5.2 step-2 gate set, shared verbatim with the failed →
-// pending re-entry so the two never diverge. It returns the name of the first
-// gate that blocks the start, or "" when all are open.
-func (r *RotationReconciler) startGates(pool *karpv1.NodePool, res resolved, now time.Time) (bool, string) {
-	switch {
-	case !res.sched.InWindow(now):
-		return false, gateOutOfWindow
-	case frozen(pool, now):
-		return false, gateFrozen
-	case since(pool.Annotations[annotations.LastRotationAt], now) < res.cooldown:
-		return false, gateCooldownAfterSuccess
-	case since(pool.Annotations[annotations.LastFailureAt], now) < res.failurePause:
-		return false, gateFailurePause
-	}
-	return true, ""
-}
-
 // advance runs one step for the in-flight rotation, keyed by the anchor name. res
 // carries the NodePool's governing policy and schedule (spec §5.4), resolved once
 // by the caller.
@@ -854,7 +814,7 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	// Freeze hold: suspend escalation only (no placeholder (re)creation, no
 	// transition to draining); the attempt times out and rolls back cleanly if
 	// the freeze outlasts readyTimeout (spec §3.1).
-	if frozen(pool, r.now()) {
+	if decide.Frozen(pool.Annotations, r.now()) {
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
 	}
 
@@ -1105,7 +1065,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 		return ctrl.Result{}, err
 	}
 	// A re-entry is a NEW attempt, so it must pass EVERYTHING a fresh start would.
-	open, _ := r.startGates(pool, res, now)
+	open, _ := decide.StartGate(r.gateInputs(pool, res, now))
 	if open &&
 		now.Sub(failedAt) >= selection.EscalatedBackoff(retry, res.retryBackoff) &&
 		headroomOK {
@@ -1226,21 +1186,6 @@ func rotationMode(pool *karpv1.NodePool) string {
 		return m
 	}
 	return "surge"
-}
-
-// frozen reports whether the NodePool's freeze annotation is in the future.
-func frozen(pool *karpv1.NodePool, now time.Time) bool {
-	until, ok := parseTime(pool.Annotations[annotations.Freeze])
-	return ok && now.Before(until)
-}
-
-// since returns now − the RFC3339 timestamp, or +∞ when it is unset/unparseable.
-func since(ts string, now time.Time) time.Duration {
-	t, ok := parseTime(ts)
-	if !ok {
-		return time.Duration(math.MaxInt64)
-	}
-	return now.Sub(t)
 }
 
 // ── Surge readiness / induced-claim resolution ─────────────────────────────
