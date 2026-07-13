@@ -128,6 +128,15 @@ export function generateNodes(count: number, firstCreatedAt: string, spread: str
  *  breach for time it never simulated. */
 export function defaultHorizon(fleet: Fleet): Horizon {
   const template = parseGoDuration(fleet.expireAfter) ?? 0
+  // fleet.nodes CAN be empty: the UI has a node-count field a visitor can set
+  // to 0, and generateNodes(0, ...) returns []. Math.min/max(...[]) is
+  // +/-Infinity, and new Date(Infinity).toISOString() throws RangeError — inside
+  // a Vue watcher that would blank the whole page with no message. Fall back to
+  // a fixed, reproducible anchor so this function stays total.
+  if (fleet.nodes.length === 0) {
+    const start = new Date(DEFAULT_FIRST_CREATED_AT).getTime()
+    return { start: new Date(start).toISOString(), end: new Date(start + 2 * template).toISOString() }
+  }
   const created = fleet.nodes.map(n => new Date(n.createdAt).getTime())
   const ends = fleet.nodes.map((n, i) =>
     created[i] + 2 * (parseGoDuration(n.expireAfter ?? '') ?? template))
@@ -173,11 +182,14 @@ spec:
 `
 
 /** A fixed date, not `now`: the page a visitor lands on must be reproducible, and
- *  the smoke test asserts against exactly these defaults. */
+ *  the smoke test asserts against exactly these defaults. Shared by DEFAULT_FLEET
+ *  and defaultHorizon's empty-fleet fallback so the two cannot drift apart. */
+export const DEFAULT_FIRST_CREATED_AT = '2026-01-01T00:00:00Z'
+
 export const DEFAULT_FLEET: Fleet = {
   expireAfter: '720h',
   terminationGracePeriod: '1h',
-  nodes: generateNodes(3, '2026-01-01T00:00:00Z', '168h'),
+  nodes: generateNodes(3, DEFAULT_FIRST_CREATED_AT, '168h'),
 }
 
 /** Blank on purpose: blank means "the policy's own estimates", which is what makes

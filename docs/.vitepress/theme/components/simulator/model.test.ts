@@ -47,6 +47,17 @@ test('defaultHorizon spans the last node TWO of its OWN expireAfter generations'
   assert.equal(h.end, '2026-05-08T00:00:00.000Z')            // 2026-01-08 + 2*1440h (120 days)
 })
 
+test('defaultHorizon is total: an empty fleet must not throw', () => {
+  // generateNodes(0, ...) is reachable from the UI (a node-count field a user
+  // can set to 0) and returns []; Math.min(...[]) is Infinity, and
+  // new Date(Infinity).toISOString() throws RangeError inside a Vue watcher,
+  // blanking the whole page. defaultHorizon must stay total over this input.
+  const h = defaultHorizon({ expireAfter: '720h', nodes: [] })
+  assert.ok(!Number.isNaN(new Date(h.start).getTime()))
+  assert.ok(!Number.isNaN(new Date(h.end).getTime()))
+  assert.ok(new Date(h.end) > new Date(h.start))
+})
+
 test('the shipped defaults are internally consistent', () => {
   const req = buildRequest(DEFAULT_FLEET, DEFAULT_ENV, defaultHorizon(DEFAULT_FLEET))
   assert.equal(req.fleet.nodes.length, 3)
