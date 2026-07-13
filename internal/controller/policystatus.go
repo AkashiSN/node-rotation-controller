@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -110,6 +111,14 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
+// statusRecheckDelay is how long after a status WRITE this reconciler re-verifies
+// the status against caught-up caches (#244). It is deliberately far shorter than
+// shortRequeue: the recheck is the only path back to a correct status (see
+// Reconcile), so it is a correction, not a poll — a 30s-scale wait would leave a
+// wrong status advertised for that long. It is not zero because the point is to
+// let the informer caches catch up first.
+const statusRecheckDelay = 1 * time.Second
+
 // RotationPolicyStatusReconciler populates RotationPolicy.status as an
 // observational, derived view (#119 deliverable 3). It is separate from the
 // NodePool-keyed RotationReconciler and writes ONLY status — it never touches the
@@ -122,6 +131,27 @@ type RotationPolicyStatusReconciler struct {
 // Reconcile recomputes one policy's status from a fresh List of all policies and
 // all pools, then writes it back only when it changed (the DeepEqual guard avoids
 // a status-write hot loop, since a status Update re-fires this reconciler).
+//
+// Every WRITE — successful or conflicted — schedules exactly one recheck
+// statusRecheckDelay later, because the policy, the policy-list and the pool caches
+// are separate informers that can sit at different revisions, and NOTHING ELSE will
+// re-trigger this reconciler afterwards: a status write bumps no generation, so the
+// RotationPolicy watch's GenerationChangedPredicate filters it out, and no further
+// NodePool event is coming. So a status computed from a lagging cache would stand
+// until the next full resync (10h). Two lags are possible and both are corrected by
+// the recheck (#244):
+//
+//   - a lagging POLICY cache: Get returns the policy as it was BEFORE the status
+//     this controller just wrote, so the Update carries a stale resourceVersion and
+//     the API server rejects it with a conflict — the correct status never lands;
+//   - a lagging POOL cache: the List misses a NodePool, so the count is too low, yet
+//     the resourceVersion is current, so the wrong status is written WITHOUT a
+//     conflict, silently overwriting a correct one.
+//
+// The recheck converges and cannot hot-loop: it recomputes against caught-up caches
+// and, when the result is stable, the DeepEqual guard suppresses the write and
+// returns an empty Result, ending the chain. Only a status that actually changed
+// costs another pass.
 func (r *RotationPolicyStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var target noderotationv1alpha1.RotationPolicy
 	if err := r.Get(ctx, req.NamespacedName, &target); err != nil {
@@ -142,20 +172,21 @@ func (r *RotationPolicyStatusReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 	target.Status = desired
 	if err := r.Status().Update(ctx, &target); err != nil {
-		// A conflict is benign: another reconcile (the NodePool anchor flips in
-		// bursts during a rotation, firing this status-only reconciler concurrently)
-		// already superseded this version. The status is purely observational and
-		// self-heals on the requeue's fresh recompute, so treat it as a silent
-		// requeue rather than a reconcile error — controller-runtime logs any
-		// returned error at ERROR + stack trace, and this controller's ERROR channel
-		// must stay meaningful. Mirrors the anchor write in rotation_controller.go
-		// (spec §5.2/§5.4, #236).
+		// A conflict is benign: this version was superseded — either by another
+		// reconcile (the NodePool anchor flips in bursts during a rotation, firing
+		// this status-only reconciler concurrently) or by this controller's own last
+		// write, not yet visible in the policy cache we Get from. The status is purely
+		// observational and self-heals on the recheck's fresh recompute, so treat it
+		// as a silent requeue rather than a reconcile error — controller-runtime logs
+		// any returned error at ERROR + stack trace, and this controller's ERROR
+		// channel must stay meaningful. Mirrors the anchor write in
+		// rotation_controller.go (spec §5.2/§5.4, #236).
 		if apierrors.IsConflict(err) {
-			return ctrl.Result{RequeueAfter: shortRequeue}, nil
+			return ctrl.Result{RequeueAfter: statusRecheckDelay}, nil
 		}
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: statusRecheckDelay}, nil
 }
 
 // SetupWithManager wires the status reconciler. Both a RotationPolicy spec change
