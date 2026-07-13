@@ -144,19 +144,114 @@
    are legible. Below that it scrolls horizontally inside its OWN container — the
    page body never gains a horizontal scrollbar because of it. */
 .policy-simulator .sim-chart-scroll { overflow-x: auto; }
-.policy-simulator .sim-svg { display: block; width: 100%; min-width: 860px; height: auto; }
+.policy-simulator .sim-svg { display: block; width: 100%; min-width: 860px; height: auto; touch-action: none; cursor: grab; }
+.policy-simulator .sim-svg:active { cursor: grabbing; }
+.policy-simulator .sim-svg:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 2px; }
 .policy-simulator .sim-window { fill: var(--vp-c-brand-soft); }
-.policy-simulator .sim-life { stroke: var(--vp-c-text-3); stroke-width: 3; }
-/* The chevron for a lifetime that outlives the horizon — drawn into the right gutter. */
-.policy-simulator .sim-ongoing { fill: var(--vp-c-text-3); }
+/* A window occurrence the HORIZON cut into, not one the schedule closed: dashed, so the
+   artifact is never read as a policy boundary. */
+.policy-simulator .sim-window-clipped { stroke: var(--vp-c-brand-2); stroke-width: 1; stroke-dasharray: 3 3; }
+/* Below ~3px a band would be a hairline rectangle a reader mistakes for a border. */
+.policy-simulator .sim-window-tick { stroke: var(--vp-c-brand-2); stroke-width: 1.5; }
 .policy-simulator .sim-deadline { stroke: var(--vp-c-text-2); stroke-width: 1; stroke-dasharray: 2 2; }
-.policy-simulator .sim-rotation { fill: var(--vp-c-brand-1); }
-.policy-simulator .sim-surgeless { fill: var(--vp-c-warning-1); }
-.policy-simulator .sim-ready { fill: var(--vp-c-text-3); }
-.policy-simulator .sim-done { fill: var(--vp-c-brand-1); }
-.policy-simulator .sim-ongoing { fill: var(--vp-c-text-3); }
 .policy-simulator .sim-breach line { stroke: var(--vp-c-danger-1); stroke-width: 2; }
 .policy-simulator .sim-blocked { fill: var(--vp-c-text-3); opacity: 0.25; }
+
+/* The three segments of a generation. The provisioning of gen n+1 runs while gen n is still
+   RUNNING (its NodeClaim is deleted only at node-ready) — that coexistence is
+   make-before-break, and the two bars must stay distinguishable where they overlap. The
+   drain that follows is a third colour again: it is what the surge bought time for. */
+.policy-simulator .sim-seg { rx: 2; }
+.policy-simulator .sim-seg-provisioning { fill: var(--vp-c-brand-1); opacity: 0.85; }
+.policy-simulator .sim-seg-running { fill: var(--vp-c-text-3); opacity: 0.55; }
+.policy-simulator .sim-seg-drain { fill: var(--vp-c-warning-1); opacity: 0.75; }
+/* An OPEN boundary: hatched, never a zero-length bar. A duration the simulation did not
+   establish must not be painted as one it did. */
+.policy-simulator .sim-seg-open { fill: url(#sim-hatch); stroke: var(--vp-c-text-3); stroke-width: 1; stroke-dasharray: 3 2; }
+.policy-simulator .sim-seg-malformed { stroke: var(--vp-c-danger-1); }
+.policy-simulator .sim-hatch-line { stroke: var(--vp-c-text-3); stroke-width: 2; }
+/* terminationGracePeriod as a CAP: a dimension bracket, visibly not the drain itself. */
+.policy-simulator .sim-cap line { stroke: var(--vp-c-text-2); stroke-width: 1; }
+/* The make-before-break span: the replacement is coming up while the old node still serves.
+   It is the payload of the page, so it is NAMED — not left to be inferred from two bars
+   that happen to sit next to each other. */
+.policy-simulator .sim-overlap-band {
+  fill: none; stroke: var(--vp-c-brand-1); stroke-width: 1; stroke-dasharray: 2 2; rx: 3;
+}
+/* "Eligible after": the region from the boundary to the deadline. The left edge is
+   EXCLUSIVE — the trigger is a strict inequality — so the fill fades in from it. */
+.policy-simulator .sim-eligible { fill: var(--vp-c-brand-soft); opacity: 0.5; }
+.policy-simulator .sim-gridline { stroke: var(--vp-c-divider); stroke-width: 0.5; }
+/* Where the simulation actually STOPPED. A bar reaching it continues; it was not cut off. */
+.policy-simulator .sim-through { stroke: var(--vp-c-text-2); stroke-width: 1.5; stroke-dasharray: 6 3; }
+.policy-simulator .sim-axis-coarse { font-weight: 600; }
+.policy-simulator .sim-axis-fine { fill: var(--vp-c-text-3); }
+.policy-simulator .sim-rowlabel-undeclared { font-style: italic; fill: var(--vp-c-warning-1); }
+.policy-simulator [tabindex="0"]:focus-visible { outline: 2px solid var(--vp-c-brand-1); }
+
+/* Button-first interaction: a teaching page cannot hide its payload behind a gesture. */
+.policy-simulator .sim-controls { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; margin: 0.5rem 0; }
+.policy-simulator .sim-btn {
+  font-size: 0.75rem; padding: 0.15rem 0.5rem; border: 1px solid var(--vp-c-divider);
+  border-radius: 5px; background: var(--vp-c-bg-soft); color: var(--vp-c-text-1); cursor: pointer;
+}
+.policy-simulator .sim-btn:disabled { opacity: 0.45; cursor: default; }
+.policy-simulator .sim-btn-on { border-color: var(--vp-c-brand-1); color: var(--vp-c-brand-1); font-weight: 600; }
+.policy-simulator .sim-view-label { font-size: 0.75em; color: var(--vp-c-text-2); margin: 0 0 0.4rem; }
+.policy-simulator .sim-tz { color: var(--vp-c-text-3); }
+.policy-simulator .sim-advanced { font-size: 0.8em; color: var(--vp-c-text-2); margin-top: 0.4rem; }
+
+/* The minimap: the whole horizon, with the view as a brush. It is what makes "the view is
+   not the horizon" visible rather than merely true. */
+.policy-simulator .sim-minimap { display: block; width: 100%; height: 28px; touch-action: none; cursor: pointer; }
+.policy-simulator .sim-minimap-bg { fill: var(--vp-c-bg-soft); }
+.policy-simulator .sim-minimap-window { fill: var(--vp-c-brand-soft); }
+.policy-simulator .sim-minimap-rotation { stroke: var(--vp-c-brand-1); stroke-width: 1; }
+.policy-simulator .sim-minimap-brush { fill: var(--vp-c-brand-1); opacity: 0.22; stroke: var(--vp-c-brand-1); stroke-width: 1; }
+
+/* The window calendar: weekday x 15 minutes, shaded by the OPEN-TIME RATIO. */
+.policy-simulator .sim-cal-scroll { overflow-x: auto; }
+.policy-simulator .sim-cal { border-collapse: collapse; font-size: 0.7em; min-width: 720px; }
+.policy-simulator .sim-cal-hour { font-weight: 400; color: var(--vp-c-text-3); text-align: left; border-left: 1px solid var(--vp-c-divider); }
+.policy-simulator .sim-cal-day { font-weight: 400; color: var(--vp-c-text-2); text-align: right; padding-right: 0.4rem; white-space: nowrap; }
+.policy-simulator .sim-cal-cell {
+  width: 6px; height: 14px; padding: 0; border: 1px solid var(--vp-c-bg);
+  background: color-mix(in srgb, var(--vp-c-brand-1) calc(var(--open, 0) * 100%), var(--vp-c-bg-soft));
+}
+/* Never observed (a wall-clock hour a DST change skipped) is UNKNOWN, not "shut" — they are
+   opposite claims, so they cannot share a shade. */
+.policy-simulator .sim-cal-unknown {
+  background: repeating-linear-gradient(45deg, var(--vp-c-bg-soft), var(--vp-c-bg-soft) 2px, var(--vp-c-divider) 2px, var(--vp-c-divider) 4px);
+}
+
+/* The ruler: two groups, each its own linear scale. */
+.policy-simulator .sim-ruler { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.5rem 2rem; }
+@media (max-width: 800px) { .policy-simulator .sim-ruler { grid-template-columns: minmax(0, 1fr); } }
+.policy-simulator .sim-ruler-group h4 { margin: 0 0 0.3rem; font-size: 0.85em; color: var(--vp-c-text-2); }
+.policy-simulator .sim-ruler-row { display: grid; grid-template-columns: 9rem minmax(0, 1fr) 4.5rem; align-items: center; gap: 0.4rem; font-size: 0.75em; }
+.policy-simulator .sim-ruler-name { font-family: var(--vp-font-family-mono); color: var(--vp-c-text-2); }
+.policy-simulator .sim-ruler-track { display: block; background: var(--vp-c-bg-soft); border-radius: 3px; height: 10px; }
+.policy-simulator .sim-ruler-bar { display: block; height: 10px; border-radius: 3px; background: var(--vp-c-text-3); }
+.policy-simulator .sim-ruler-value { font-family: var(--vp-font-family-mono); color: var(--vp-c-text-1); }
+/* The note names the KIND of quantity, because a forecast and a measurement are not the
+   same thing and must never be drawn as though they were. */
+.policy-simulator .sim-ruler-note { grid-column: 2 / -1; color: var(--vp-c-text-3); font-size: 0.9em; }
+.policy-simulator .sim-q-lifecycle { background: var(--vp-c-text-2); }
+.policy-simulator .sim-q-bound { background: var(--vp-c-danger-2); }
+.policy-simulator .sim-q-cap { background: var(--vp-c-warning-2); }
+.policy-simulator .sim-q-actual { background: var(--vp-c-brand-1); }
+.policy-simulator .sim-q-forecast { background: var(--vp-c-brand-soft); border: 1px dashed var(--vp-c-brand-2); }
+.policy-simulator .sim-q-policy { background: var(--vp-c-text-3); }
+.policy-simulator .sim-ruler-ratio { margin-top: 0.6rem; }
+
+/* The chart is not the sole carrier of the result. */
+.policy-simulator .sim-sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .policy-simulator * { transition: none !important; animation: none !important; }
+}
 /* 12px in the 1000-unit viewBox stays >= ~10px effective even at the chart's
    min-width (860px), so row labels are readable at every viewport. */
 .policy-simulator .sim-rowlabel, .policy-simulator .sim-axis {

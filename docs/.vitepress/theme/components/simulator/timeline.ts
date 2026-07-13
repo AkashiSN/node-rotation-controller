@@ -1,229 +1,388 @@
 // docs/.vitepress/theme/components/simulator/timeline.ts
 //
-// The timeline's GEOMETRY, in the data's own units (milliseconds and row indices).
+// The timeline's GEOMETRY, in the data's own units (milliseconds and slot indices).
 // PURE by design — no Vue, no SVG, no coordinate scaling: TimelineChart.vue keeps the
-// x() scale and the rendering, this module keeps every DERIVATION worth getting right
-// (what a row is, when a node was born, where its deadline falls, how the interval
-// events pair up), so `node --test` can pin them without a DOM.
-import { parseGoDuration, type Fleet, type Horizon, type SimEvent } from './model.ts'
+// x() scale and the rendering, this module keeps every DERIVATION worth getting right,
+// so `node --test` can pin them without a DOM.
+//
+// The governing rule, and the reason this module reads the wire's generations /
+// rotations / windows instead of re-deriving them from the events:
+//
+//   THE CHART MUST NEVER STATE SOMETHING THE SIMULATION DID NOT ESTABLISH.
+//
+// A horizon artifact is not a policy boundary. A template-derived representative
+// (Result.ageThreshold) is not a per-node fact. An absent instant is not a zero-length
+// duration — it is drawn open-ended, and the page says WHY it is open (the simulation
+// ended while the rotation was in flight, or the response is malformed: opposite
+// meanings, so they never share a label).
+import {
+  parseGoDuration,
+  type BirthMode, type DrainCapSource, type Fleet, type Horizon,
+  type SimEvent, type SimGeneration, type SimResponse, type SimRotation,
+} from './model.ts'
 
-export interface Bar {
-  name: string
-  /** Birth instant, clamped to the horizon; null when the source instant is malformed. */
-  bornMs: number | null
-  /** rotation-done, or the horizon end for a node that never rotated. */
+/** A generation's life is three segments. Generation n+1 PROVISIONS while generation n is
+ *  still RUNNING — its predecessor's NodeClaim is deleted only at node-ready — and that
+ *  coexistence IS make-before-break: the single most important thing this chart has to show.
+ *  (Not "provisioning against the drain": the drain begins exactly where the provisioning
+ *  ends, so those two are adjacent and never overlap. See segmentsOf.) */
+export type SegmentKind = 'provisioning' | 'running' | 'drain'
+
+/** Why a segment has no established end.
+ *  - `in-flight`: the simulation simply stopped while it was still running. Legitimate.
+ *  - `malformed`: the response contradicts itself. A bug.
+ *  They mean opposite things to a reader, so they never share an accessible label. */
+export type OpenReason = 'in-flight' | 'malformed'
+
+export interface Segment {
+  kind: SegmentKind
+  startMs: number
+  /** null when the end was never established. NEVER collapsed onto the start: a
+   *  zero-length drain is a duration the simulation did not report. */
   endMs: number | null
-  /** createdAt + effective expireAfter; null when malformed or outside the horizon. */
-  deadlineMs: number | null
-  /** The node is still alive at the horizon end — either it never rotated, or its
-   *  rotation-done falls at/after the horizon end and endMs was clamped in. The chart
-   *  marks these bars as CONTINUING (a right chevron) so a lifetime that outlives the
-   *  visible window does not read as "cut off" at the right edge. */
-  ongoing: boolean
+  /** Where an open segment's hatching runs to (simulatedThrough). */
+  openToMs: number
+  openReason: OpenReason | null
 }
 
-export interface Band {
+export interface GenerationView {
+  slot: number
+  gen: number
+  name: string
+  birthMode: BirthMode
+  /** The rotation that produced it has not completed. */
+  provisional: boolean
+  createdMs: number
+  /** Surge births only, and only once Ready. */
+  readyMs: number | null
+  deadlineMs: number | null
+  /** EXCLUSIVE: "eligible AFTER this instant". The trigger is a strict inequality. */
+  eligibilityMs: number | null
+  drainCapMs: number
+  drainCapSource: DrainCapSource
+  /** The drain's start — the outgoing rotation's `ready` (surge) or `start` (surge-less). */
+  drainStartMs: number | null
+  /** drainStart + drainCap: the instant Karpenter force-completes the drain. A CAP drawn
+   *  as a dimension, whose endpoint is a DIFFERENT glyph from the drain's actual end —
+   *  "the drain took 10m, the cap was 1h" has to be legible as geometry. */
+  drainCapEndMs: number | null
+  drainEndMs: number | null
+  /** expire-after-breach, which the simulator emits AT the deadline by construction. The
+   *  chart must keep the glyph legible against the deadline line rather than overdrawing
+   *  it — a regression there would silently hide every breach in the run. */
+  breachMs: number | null
+  segments: Segment[]
+}
+
+export interface Row {
+  slot: number
+  /** The slot's name — its first generation's, which is the node the fleet declared. */
+  label: string
+  /** False for a slot the response reports but the fleet never declared. Such a row is
+   *  APPENDED rather than dropped: a response the page cannot place is still a response
+   *  the reader must see. */
+  declared: boolean
+  generations: GenerationView[]
+}
+
+export interface WindowView {
   startMs: number
   endMs: number
+  /** The boundary is an artifact of the horizon, not a real transition of the schedule. */
+  startClipped: boolean
+  endClipped: boolean
 }
 
-export interface BlockedBand extends Band {
+export interface BlockedBand {
+  startMs: number
+  endMs: number
   label: string
 }
 
-export interface Mark {
-  kind: SimEvent['kind']
-  node: string
-  row: number
-  surgeless: boolean
-  atMs: number
-  title: string
-}
-
-export interface Timeline {
-  rows: string[]
-  bars: Bar[]
-  windows: Band[]
+export interface TimelineModel {
+  rows: Row[]
+  windows: WindowView[]
   blocked: BlockedBand[]
-  marks: Mark[]
+  /** The last instant the simulation processed. A bar alive here CONTINUES; it is not
+   *  truncated, and the chart says so explicitly. */
+  simulatedThroughMs: number
+  /** Contradictions in the response. Surfaced, never painted over. */
+  anomalies: string[]
 }
 
-const MARK_KINDS: SimEvent['kind'][] = [
-  'rotation-start', 'node-ready', 'rotation-done', 'expire-after-breach',
-]
-
-const at = (e: SimEvent) => new Date(e.at).getTime()
-
-/** Clamp an instant to the visible horizon: an interval can start before the horizon
- *  or run past its end, and an unclamped band would render outside the plot area. */
-export function clampToHorizon(ms: number, t0: number, t1: number): number {
-  return Math.min(Math.max(ms, t0), t1)
+const ms = (iso: string | undefined): number | null => {
+  if (!iso) return null
+  const t = new Date(iso).getTime()
+  return Number.isFinite(t) ? t : null
 }
 
-/** One row per node, including the replacements sim materialises: a replacement is a
- *  new node name, and it becomes the next generation's candidate. */
-export function rowsOf(events: SimEvent[], fleet: Fleet): string[] {
-  const names = fleet.nodes.map(n => n.name)
-  for (const e of events) {
-    if (e.replacement && !names.includes(e.replacement)) names.push(e.replacement)
+const key = (slot: number, gen: number) => `${slot}/${gen}`
+
+/** Index the generations by (slot, gen), keeping the FIRST of any duplicate pair and
+ *  reporting the rest: two generations drawn stacked on one row would be unreadable, and
+ *  silently dropping one would hide a producer bug. */
+function indexGenerations(gens: SimGeneration[]): {
+  index: Map<string, SimGeneration>
+  anomalies: string[]
+} {
+  const index = new Map<string, SimGeneration>()
+  const anomalies: string[] = []
+  for (const g of gens) {
+    const k = key(g.slot, g.gen)
+    if (index.has(k)) {
+      anomalies.push(`duplicate generation (slot ${g.slot}, gen ${g.gen}): kept the first, dropped ${g.name}`)
+      continue
+    }
+    index.set(k, g)
   }
-  return names
+  return { index, anomalies }
 }
 
-/** The instant a REPLACEMENT node was created, derived the way internal/sim does it.
+/** The rotation that takes a generation OUT of its slot, if the run reached it. */
+function outgoing(rots: SimRotation[], slot: number, gen: number): SimRotation | undefined {
+  return rots.find(r => r.slot === slot && r.fromGen === gen)
+}
+
+/** The segments of one generation.
  *
- *  `Replacement` is carried on the rotation-done event and on no other kind — but the
- *  replacement is NOT born then. On the surge path Karpenter creates the replacement
- *  NodeClaim as soon as the low-priority placeholder Pod goes pending, i.e. at
- *  ROTATION-START, and the provisioning time is what elapses from there to Ready
- *  (internal/sim/loop.go: `createdAt := rot.start`). Only the surge-less
- *  (forceful-fallback) path, where no placeholder exists, has the replacement created
- *  at rotation-done.
+ *  | segment      | from                                  | to                                     |
+ *  | provisioning | createdAt (= its rotation's start)     | its own readyAt                        |
+ *  | running      | readyAt (surge) / createdAt (others)   | the instant its OWN drain begins        |
+ *  | drain        | rotation's ready (surge) / start (s-l) | rotation's done                        |
  *
- *  Anchoring on rotation-done for a surged replacement would (a) erase the
- *  make-before-break overlap the product exists to demonstrate — old and new bars drawn
- *  end-to-end — and (b) place the deadline tick at doneAt + expireAfter, LATER than the
- *  real deadline (createdAt + expireAfter), so a breach mark could land to the LEFT of
- *  the deadline line the page itself drew. Under-reporting a breach is the one error
- *  direction the simulator must never make.
+ *  RUNNING ENDS WHERE THE DRAIN BEGINS — not at the rotation's start, which is what the
+ *  design doc's table said. Two reasons, and they are the same reason:
  *
- *  Total by construction: a rotation-done with no matching rotation-start (truncated or
- *  malformed event stream) falls back to the rotation-done instant rather than throwing.
- */
-function bornOfReplacement(done: SimEvent, events: SimEvent[]): number {
-  if (done.surgeless === true) return at(done)
-  const doneMs = at(done)
-  // A node rotates once per generation, so there can be several rotation-starts for the
-  // same node name across the horizon: take the LATEST one at or before this done.
-  let best: number | null = null
-  for (const e of events) {
-    if (e.kind !== 'rotation-start' || e.node !== done.node) continue
-    const ms = at(e)
-    if (!Number.isFinite(ms) || ms > doneMs) continue
-    if (best === null || ms > best) best = ms
+ *  1. The old node is NOT idle between rotation-start and node-ready. Its NodeClaim is
+ *     deleted only when the surge node goes Ready (internal/sim/loop.go:113); until then it
+ *     is still carrying load. Ending its bar at the rotation's start would leave that span
+ *     unaccounted for — a hole in the one node the reader is watching.
+ *  2. It is what makes MAKE-BEFORE-BREAK visible at all. The design says "the provisioning
+ *     of generation n+1 overlaps the drain of generation n", but with its own boundaries
+ *     those two are strictly ADJACENT: provisioning is [start, ready] and the drain is
+ *     [ready, done]; they touch at `ready` and never overlap. The span in which two nodes
+ *     genuinely coexist is [start, ready] — the replacement PROVISIONING while its
+ *     predecessor is still RUNNING — and that is the overlap this chart has to show. */
+function segmentsOf(
+  g: SimGeneration, rot: SimRotation | undefined, throughMs: number,
+): Segment[] {
+  const out: Segment[] = []
+  const created = ms(g.createdAt)
+  if (created === null) return out
+
+  const ready = ms(g.readyAt)
+  const start = rot ? ms(rot.start) : null
+  const rotReady = rot ? ms(rot.ready) : null
+  const done = rot ? ms(rot.done) : null
+
+  // provisioning — the surge path only. An initial node was never provisioned by us, and
+  // a surge-less replacement stages no placeholder: it is born already drained-in.
+  if (g.birthMode === 'surge') {
+    out.push({
+      kind: 'provisioning',
+      startMs: created,
+      endMs: ready,
+      openToMs: throughMs,
+      // Still provisioning when the simulation stopped: legitimate. A generation that is
+      // NOT provisional (its rotation completed) and still has no readyAt is a
+      // contradiction — the wire promises a completed surge carries one.
+      openReason: ready === null ? (g.provisional ? 'in-flight' : 'malformed') : null,
+    })
   }
-  return best ?? doneMs
+
+  // The instant this generation stops carrying load: when its own drain begins.
+  const drainFrom = rot ? (rot.mode === 'surge' ? rotReady : start) : null
+
+  // running — from the instant the node is actually carrying load, to the instant its
+  // NodeClaim is deleted.
+  const runFrom = g.birthMode === 'surge' ? ready : created
+  if (runFrom !== null) {
+    out.push({
+      kind: 'running',
+      startMs: runFrom,
+      // Ends where the drain begins. With no drain start: either no rotation reached it
+      // (the generation was still running when the simulation stopped — known-alive, not
+      // unknown, and drawn as a bar that CONTINUES rather than one that was cut off), or a
+      // rotation is in flight but its surge is not Ready yet, in which case the node is
+      // STILL RUNNING. Only a malformed record (a completed rotation with no `ready`) falls
+      // back to the rotation's start, and its drain is hatched as malformed below.
+      endMs: drainFrom ?? (rot && done !== null ? start : throughMs),
+      openToMs: throughMs,
+      openReason: null,
+    })
+  }
+
+  // drain — the old node's, from the instant its NodeClaim is deleted.
+  if (rot) {
+    if (drainFrom !== null) {
+      out.push({
+        kind: 'drain',
+        startMs: drainFrom,
+        endMs: done,
+        openToMs: throughMs,
+        openReason: done === null ? 'in-flight' : null,
+      })
+    } else if (done !== null && start !== null) {
+      // A surge that completed but carries no `ready`: the drain's START is unknowable, so
+      // the whole span is hatched as malformed rather than guessed at.
+      out.push({
+        kind: 'drain',
+        startMs: start,
+        endMs: null,
+        openToMs: done,
+        openReason: 'malformed',
+      })
+    }
+  }
+  return out
 }
 
-/** Per-row lifetime bar: from the node's createdAt to its rotation-done (or the horizon
- *  end, for a node that never rotates). */
-export function barsOf(events: SimEvent[], horizon: Horizon, fleet: Fleet): Bar[] {
+function viewOf(
+  g: SimGeneration, rot: SimRotation | undefined, throughMs: number, breachMs: number | null,
+): GenerationView {
+  const created = ms(g.createdAt) ?? NaN
+  const start = rot ? ms(rot.start) : null
+  const rotReady = rot ? ms(rot.ready) : null
+  const drainStart = rot ? (rot.mode === 'surge' ? rotReady : start) : null
+  const cap = parseGoDuration(g.drainCap) ?? 0
+  return {
+    slot: g.slot,
+    gen: g.gen,
+    name: g.name,
+    birthMode: g.birthMode,
+    provisional: g.provisional === true,
+    createdMs: created,
+    readyMs: ms(g.readyAt),
+    deadlineMs: ms(g.deadline),
+    eligibilityMs: ms(g.eligibilityBoundary),
+    drainCapMs: cap,
+    drainCapSource: g.drainCapSource,
+    drainStartMs: drainStart,
+    drainCapEndMs: drainStart === null ? null : drainStart + cap,
+    drainEndMs: rot ? ms(rot.done) : null,
+    breachMs,
+    segments: segmentsOf(g, rot, throughMs),
+  }
+}
+
+/** One row per SLOT. The row count is the fleet's node count and does not grow with the
+ *  horizon — which is what fixes "why did node-1 rotate twice": it did not; its slot
+ *  relayed through three generations, left to right along one row. */
+export function buildTimeline(resp: SimResponse, horizon: Horizon, fleet: Fleet): TimelineModel {
   const t0 = new Date(horizon.start).getTime()
   const t1 = new Date(horizon.end).getTime()
-  return rowsOf(events, fleet).map(name => {
-    const declared = fleet.nodes.find(n => n.name === name)
-    // `rows` only ever adds a name it saw on a rotation-done's `replacement`, so this
-    // lookup succeeds for every undeclared row; it is still resolved as a total
-    // function (fallback to the horizon start) rather than asserted, because a thrown
-    // TypeError here would blank the whole page over a single bad row.
-    const bornEvent = declared ? undefined : events.find(e => e.replacement === name)
-    const bornMs = declared
-      ? new Date(declared.createdAt).getTime()
-      : bornEvent ? bornOfReplacement(bornEvent, events) : t0
-    const done = events.find(e => e.kind === 'rotation-done' && e.node === name)
-    const doneMs = done ? at(done) : NaN
-    const endMs = Number.isFinite(doneMs) ? doneMs : t1
-    // Alive at the horizon end: no rotation-done at all, or a done that lands beyond the
-    // window (so endMs was clamped back in). Such a bar continues past the right edge and
-    // must not look truncated there.
-    const ongoing = !Number.isFinite(doneMs) || doneMs >= t1
-    // A replacement is provisioned from the NodePool TEMPLATE, so it inherits the
-    // template's expireAfter — only a declared node can carry a per-node override
-    // (internal/sim/loop.go pins the same rule).
-    const eff = declared?.expireAfter ?? fleet.expireAfter
-    const deadlineMs = bornMs + (parseGoDuration(eff) ?? 0)
-    // A malformed createdAt (or event `at`) parses to NaN, and clamping keeps it NaN:
-    // an SVG x1="NaN" paints nothing with no explanation. Report it as absent (null) so
-    // the caller can skip the mark instead of emitting a garbage attribute.
-    return {
-      name,
-      bornMs: Number.isFinite(bornMs) ? clampToHorizon(bornMs, t0, t1) : null,
-      endMs: Number.isFinite(endMs) ? clampToHorizon(endMs, t0, t1) : null,
-      deadlineMs: Number.isFinite(deadlineMs) && deadlineMs >= t0 && deadlineMs <= t1
-        ? deadlineMs : null,
-      ongoing,
-    }
-  })
-}
+  const throughMs = ms(resp.simulatedThrough) ?? (Number.isFinite(t1) ? t1 : t0)
 
-/** Maintenance-window bands, paired from the window-open / window-close events. */
-export function windowsOf(events: SimEvent[], horizon: Horizon): Band[] {
-  const t0 = new Date(horizon.start).getTime()
-  const t1 = new Date(horizon.end).getTime()
-  const out: Band[] = []
-  // The wire contract does not promise chronological order. Pairing by array position
-  // (not time) would drop a close that precedes its open in the array, leaving the open
-  // dangling to hit the unclosed-window fallback below and draw a band across the WHOLE
-  // horizon. Sort a local copy — never mutate the caller's array.
-  const sorted = [...events].sort((a, b) => at(a) - at(b))
-  let open: number | null = null
-  for (const e of sorted) {
-    if (e.kind === 'window-open') open = at(e)
-    if (e.kind === 'window-close' && open !== null) {
-      out.push({ startMs: clampToHorizon(open, t0, t1), endMs: clampToHorizon(at(e), t0, t1) })
-      open = null
+  const gens = resp.generations ?? []
+  const rots = resp.rotations ?? []
+  const { index, anomalies } = indexGenerations(gens)
+
+  // The breach the simulator reports lands AT the node's deadline by construction, so it
+  // is keyed by NAME. A replacement's name can collide with a declared node's, so the
+  // (slot, gen) that owns it is resolved through the generation records — which are unique
+  // by construction — and a name that maps to more than one is reported rather than
+  // silently attached to the wrong row.
+  const breaches = new Map<string, number>()
+  for (const e of resp.events ?? []) {
+    if (e.kind !== 'expire-after-breach' || !e.node) continue
+    const at = ms(e.at)
+    if (at === null) continue
+    breaches.set(`${e.node}@${at}`, at)
+  }
+  const breachOf = (g: SimGeneration): number | null => {
+    const deadline = ms(g.deadline)
+    if (deadline === null) return null
+    return breaches.has(`${g.name}@${deadline}`) ? deadline : null
+  }
+
+  const bySlot = new Map<number, SimGeneration[]>()
+  for (const g of index.values()) {
+    const list = bySlot.get(g.slot) ?? []
+    list.push(g)
+    bySlot.set(g.slot, list)
+  }
+
+  const rows: Row[] = []
+  const emit = (slot: number, declared: boolean, fallbackLabel: string) => {
+    const list = (bySlot.get(slot) ?? []).slice().sort((a, b) =>
+      a.gen - b.gen ||
+      (ms(a.createdAt) ?? 0) - (ms(b.createdAt) ?? 0) ||
+      a.name.localeCompare(b.name))
+    rows.push({
+      slot,
+      label: list[0]?.name ?? fallbackLabel,
+      declared,
+      generations: list.map(g => viewOf(g, outgoing(rots, g.slot, g.gen), throughMs, breachOf(g))),
+    })
+  }
+
+  // The declared fleet, in its own order, so the rows never reshuffle as the run changes.
+  fleet.nodes.forEach((n, i) => emit(i, true, n.name))
+  // Then any slot the response reports that the fleet did not declare.
+  for (const slot of [...bySlot.keys()].sort((a, b) => a - b)) {
+    if (slot < fleet.nodes.length) continue
+    anomalies.push(`slot ${slot} is not a declared fleet node; its row is appended`)
+    emit(slot, false, `slot ${slot}`)
+  }
+
+  for (const r of rots) {
+    if (r.toGen !== undefined && !index.has(key(r.slot, r.toGen))) {
+      anomalies.push(`rotation (slot ${r.slot}, gen ${r.fromGen} → ${r.toGen}) names a generation that is not in the response`)
     }
   }
-  // An open with no close was still open at the end of the simulated horizon.
-  if (open !== null) out.push({ startMs: clampToHorizon(open, t0, t1), endMs: t1 })
-  return out.filter(b => Number.isFinite(b.startMs) && Number.isFinite(b.endMs))
+
+  return {
+    rows,
+    windows: windowsOf(resp),
+    blocked: blockedOf(resp.events ?? [], throughMs),
+    simulatedThroughMs: throughMs,
+    anomalies,
+  }
+}
+
+/** The OBSERVED window occurrences, straight from the wire. They are no longer paired
+ *  from the events: pairing cannot express a clipped boundary, and the clipped flags are
+ *  what keep a horizon artifact from being drawn as a real opening or closing. */
+export function windowsOf(resp: SimResponse): WindowView[] {
+  const out: WindowView[] = []
+  for (const w of resp.windows ?? []) {
+    const startMs = ms(w.start)
+    const endMs = ms(w.end)
+    if (startMs === null || endMs === null || endMs < startMs) continue
+    out.push({
+      startMs,
+      endMs,
+      startClipped: w.startClipped === true,
+      endClipped: w.endClipped === true,
+    })
+  }
+  return out.sort((a, b) => a.startMs - b.startMs)
 }
 
 /** blocked-by-gate / no-eligible-claim are EDGE-TRIGGERED and carry an interval
  *  (at..until) — one event for a week-long stretch. They are bands, never point marks:
  *  drawing them as points would throw away the coalescing that keeps the payload small
  *  and the picture readable. */
-export function blockedOf(events: SimEvent[], horizon: Horizon): BlockedBand[] {
-  const t0 = new Date(horizon.start).getTime()
-  const t1 = new Date(horizon.end).getTime()
-  // No `until` means the interval was still open at the end of the simulated horizon —
-  // mirror windowsOf()'s unclosed-window fallback rather than falling back to `e.at`,
-  // which produces a zero-width band that the width filter below silently drops.
-  const until = (e: SimEvent) => (e.until ? new Date(e.until).getTime() : t1)
-  return events
-    .filter(e => e.kind === 'blocked-by-gate' || e.kind === 'no-eligible-claim')
-    .map(e => ({
-      startMs: clampToHorizon(at(e), t0, t1),
-      endMs: clampToHorizon(until(e), t0, t1),
-      label: e.gate ?? 'no-eligible-claim',
-    }))
-    .filter(b => Number.isFinite(b.startMs) && Number.isFinite(b.endMs) && b.endMs > b.startMs)
-}
-
-/** The point marks: rotation-start (surge-less distinguishable), node-ready,
- *  rotation-done and — in red — every expire-after-breach. */
-export function marksOf(events: SimEvent[], horizon: Horizon, fleet: Fleet): Mark[] {
-  const t0 = new Date(horizon.start).getTime()
-  const t1 = new Date(horizon.end).getTime()
-  const rows = rowsOf(events, fleet)
-  const out: Mark[] = []
+export function blockedOf(events: SimEvent[], throughMs: number): BlockedBand[] {
+  const out: BlockedBand[] = []
   for (const e of events) {
-    if (!MARK_KINDS.includes(e.kind)) continue
-    const node = e.node ?? ''
-    const row = rows.indexOf(node)
-    if (row < 0) continue
-    const atMs = at(e)
-    // A malformed `at` parses to NaN; skip the mark rather than emit cx="NaN" (see the
-    // same treatment in barsOf above).
-    if (!Number.isFinite(atMs)) continue
-    out.push({
-      kind: e.kind,
-      node,
-      row,
-      surgeless: e.surgeless === true,
-      atMs: clampToHorizon(atMs, t0, t1),
-      title: `${e.kind}${e.surgeless ? ' (surge-less)' : ''} — ${node} @ ${e.at}`,
-    })
+    if (e.kind !== 'blocked-by-gate' && e.kind !== 'no-eligible-claim') continue
+    const startMs = ms(e.at)
+    if (startMs === null) continue
+    // No `until` means the interval was still open when the simulation stopped — it runs
+    // to simulatedThrough, never to a zero-width band at `at`.
+    const endMs = ms(e.until) ?? throughMs
+    if (endMs <= startMs) continue
+    out.push({ startMs, endMs, label: e.gate ?? 'no-eligible-claim' })
   }
-  return out
+  return out.sort((a, b) => a.startMs - b.startMs)
 }
 
-export function buildTimeline(events: SimEvent[], horizon: Horizon, fleet: Fleet): Timeline {
-  return {
-    rows: rowsOf(events, fleet),
-    bars: barsOf(events, horizon, fleet),
-    windows: windowsOf(events, horizon),
-    blocked: blockedOf(events, horizon),
-    marks: marksOf(events, horizon, fleet),
-  }
+/** Every rotation start in the run, sorted — the targets the *first / previous / next
+ *  rotation* buttons navigate to. */
+export function rotationInstants(resp: SimResponse): number[] {
+  return (resp.rotations ?? [])
+    .map(r => ms(r.start))
+    .filter((v): v is number => v !== null)
+    .sort((a, b) => a - b)
 }

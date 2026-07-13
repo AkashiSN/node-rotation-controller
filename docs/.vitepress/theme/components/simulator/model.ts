@@ -79,14 +79,80 @@ export interface SimEvent {
   census?: Record<string, number>
 }
 
+/** How a generation came into existence. A single "surgeless" boolean cannot tell an
+ *  initial node from a surged replacement — both would be false. */
+export type BirthMode = 'initial' | 'surge' | 'surgeless'
+
+/** Where a generation's drain cap came from: its own terminationGracePeriod, or the
+ *  controller's fixed fallback. The page must never re-derive that constant. */
+export type DrainCapSource = 'explicit' | 'fallback'
+
+/** One generation of one fleet slot (internal/sim). It carries the facts the event
+ *  stream cannot: `node-ready` is emitted under the OLD node's name, so a replacement's
+ *  own ready instant is unrecoverable from the events, and the eligibility boundary
+ *  depends on the claim's own tGP, which no event carries. */
+export interface SimGeneration {
+  slot: number
+  gen: number
+  name: string
+  birthMode: BirthMode
+  /** Absent for an initial node. 0 is a REAL predecessor, not an absent one. */
+  predecessorGen?: number
+  createdAt: string
+  expireAfter: string
+  drainCap: string
+  drainCapSource: DrainCapSource
+  deadline: string
+  /** EXCLUSIVE: the trigger is a strict inequality, so a node exactly at this instant is
+   *  not yet eligible. It is labelled "eligible after", never as an event. */
+  eligibilityBoundary: string
+  /** Only on the surge path, and only once the replacement became Ready. */
+  readyAt?: string
+  /** A replacement whose rotation has not completed. Omitted when false. */
+  provisional?: boolean
+}
+
+export type RotationMode = 'surge' | 'surgeless'
+
+/** The relay between two generations of a slot. */
+export interface SimRotation {
+  slot: number
+  fromGen: number
+  /** Absent while the produced generation does not exist yet: a surge-less rotation
+   *  still draining has staged no replacement (it is born at `done`). */
+  toGen?: number
+  mode: RotationMode
+  start: string
+  /** ABSENT — not zero — while the rotation is in flight; always absent surge-less. */
+  ready?: string
+  done?: string
+}
+
+/** One OBSERVED occurrence of the effective (union) window schedule. The clipped flags
+ *  mark a boundary that is an artifact of the horizon rather than a real transition of
+ *  the schedule; both are omitted when false. */
+export interface SimWindow {
+  start: string
+  end: string
+  startClipped?: boolean
+  endClipped?: boolean
+}
+
 /** What simulate() returns. `error` is set ONLY for input that cannot be run at
  *  all; everything else is a diagnostic, so the page can always render something. */
 export interface SimResponse {
   error?: string
   result?: SimResult
   events?: SimEvent[]
+  generations?: SimGeneration[]
+  rotations?: SimRotation[]
+  windows?: SimWindow[]
   diagnostics?: Diagnostic[]
   partial?: boolean
+  /** The last instant the simulation actually PROCESSED — the requested end on a normal
+   *  run, earlier when the step budget was exhausted. Nothing in the response lies beyond
+   *  it, and a bar still alive there CONTINUES rather than being truncated. */
+  simulatedThrough?: string
 }
 
 const UNITS: Record<string, number> = {
@@ -121,16 +187,35 @@ export function generateNodes(count: number, firstCreatedAt: string, spread: str
   }))
 }
 
-/** The horizon a visitor lands on: from the earliest node to the last node's
- *  SECOND-generation deadline, so at least one full expireAfter generation is on
- *  screen and a breach is visible.
- *
- *  Each node contributes createdAt + 2 x its EFFECTIVE expireAfter (its own
- *  override, else the template) — a heterogeneous fleet would otherwise push the
- *  overriding node's deadline off the right edge, and the page would report no
- *  breach for time it never simulated. */
+/** The horizon a visitor lands on: DEFAULT_COVERAGE lifetimes of the fleet. */
 export function defaultHorizon(fleet: Fleet): Horizon {
+  return horizonForCoverage(fleet, DEFAULT_COVERAGE)
+}
+
+/** The horizon-control multipliers: how many EFFECTIVE NODE LIFETIMES the horizon
+ *  covers. Deliberately not "generations": staggered createdAt, per-node expireAfter
+ *  overrides, window waits, cooldown, the forceful fallback and a fatal policy all break
+ *  that equivalence, so a control promising N generations would be lying whenever any of
+ *  them applied. */
+export const COVERAGE_CHOICES = [1, 2, 3] as const
+export type Coverage = (typeof COVERAGE_CHOICES)[number]
+
+/** 2x: one full expireAfter generation past the first, so a second generation — and a
+ *  breach, when the policy cannot make it — is on screen without the visitor doing
+ *  anything. */
+export const DEFAULT_COVERAGE: Coverage = 2
+
+/** The horizon that covers `coverage` EFFECTIVE node lifetimes: from the earliest node
+ *  to the last node's coverage-th deadline.
+ *
+ *  Each node contributes createdAt + coverage x its EFFECTIVE expireAfter (its own
+ *  override, else the template) — a heterogeneous fleet would otherwise push the
+ *  overriding node's deadline off the right edge, and the page would report no breach for
+ *  time it never simulated. The multiplier generalises exactly that bound and must not
+ *  regress it. */
+export function horizonForCoverage(fleet: Fleet, coverage: number): Horizon {
   const template = parseGoDuration(fleet.expireAfter) ?? 0
+  const n = Number.isFinite(coverage) && coverage > 0 ? coverage : DEFAULT_COVERAGE
   // fleet.nodes CAN be empty: the UI has a node-count field a visitor can set
   // to 0, and generateNodes(0, ...) returns []. Math.min/max(...[]) is
   // +/-Infinity, and new Date(Infinity).toISOString() throws RangeError — inside
@@ -150,11 +235,11 @@ export function defaultHorizon(fleet: Fleet): Horizon {
     .filter(({ createdAt }) => !Number.isNaN(createdAt))
   if (parseable.length === 0) {
     const start = new Date(DEFAULT_FIRST_CREATED_AT).getTime()
-    return { start: new Date(start).toISOString(), end: new Date(start + 2 * template).toISOString() }
+    return { start: new Date(start).toISOString(), end: new Date(start + n * template).toISOString() }
   }
   const created = parseable.map(({ createdAt }) => createdAt)
-  const ends = parseable.map(({ n, createdAt }) =>
-    createdAt + 2 * (parseGoDuration(n.expireAfter ?? '') ?? template))
+  const ends = parseable.map(({ n: node, createdAt }) =>
+    createdAt + n * (parseGoDuration(node.expireAfter ?? '') ?? template))
   return {
     start: new Date(Math.min(...created)).toISOString(),
     end: new Date(Math.max(...ends)).toISOString(),
