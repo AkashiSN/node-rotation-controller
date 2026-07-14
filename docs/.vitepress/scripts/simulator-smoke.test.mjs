@@ -9,7 +9,8 @@ import { readFile } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV, defaultHorizon, buildRequest,
+  DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV, defaultHorizon, defaultPolicyYaml,
+  buildRequest,
 } from '../theme/components/simulator/model.ts'
 import { buildTimeline } from '../theme/components/simulator/timeline.ts'
 import { buildCalendar } from '../theme/components/simulator/calendar.ts'
@@ -50,6 +51,30 @@ test('the page defaults produce a timeline, not an error', async () => {
   assert.ok(
     !out.diagnostics || out.diagnostics.every(d => d.severity !== 'fatal'),
     `the shipped defaults must produce no fatal diagnostics: ${JSON.stringify(out.diagnostics)}`,
+  )
+})
+
+// The Japanese page opens on a DIFFERENT seed manifest (Asia/Tokyo), so it is a second front
+// door — and a front door is only open if the controller admits the manifest behind it. The
+// zone shifts the window's wall clock against the fixed horizon anchor, so this is not
+// redundant with the test above: it is the same gate, on the other door.
+test('the JAPANESE page defaults produce a clean timeline too', async () => {
+  const simulate = await loadSimulate()
+  const req = buildRequest(DEFAULT_FLEET, DEFAULT_ENV, defaultHorizon(DEFAULT_FLEET))
+  const out = JSON.parse(simulate(defaultPolicyYaml('ja'), JSON.stringify(req)))
+
+  assert.equal(out.error, undefined, `the ja default template must be runnable: ${out.error}`)
+  assert.ok(out.result, 'a result is required')
+  assert.ok(out.events.some(e => e.kind === 'rotation-done'),
+    'the ja default fleet must complete at least one rotation inside the default horizon')
+  assert.equal(out.partial, false)
+  assert.ok(
+    !out.result.findings || out.result.findings.length === 0,
+    `the ja defaults must produce no findings: ${JSON.stringify(out.result.findings)}`,
+  )
+  assert.ok(
+    !out.diagnostics || out.diagnostics.every(d => d.severity !== 'fatal'),
+    `the ja defaults must produce no fatal diagnostics: ${JSON.stringify(out.diagnostics)}`,
   )
 })
 
