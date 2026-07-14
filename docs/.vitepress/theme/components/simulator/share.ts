@@ -19,13 +19,20 @@ export const SHARE_PARAM = 's'
  *  rather than silently misread as v1. */
 const VERSION = 1
 
-/** A generous ceiling on the `?s=` value itself, shared by BOTH ends of the codec.
- *  decodeState() refuses anything past it before a decompression stream is even opened; the
- *  default link is 966 chars and a 50-node fleet (FleetInput.vue's own generator cap) sits
- *  far below it, so anything past it is already unpasteable. encodeState() enforces the
- *  SAME constant on its own output — a producer that could exceed the consumer's ceiling
- *  would mint links the page that made them refuses to open. */
-export const MAX_VALUE_CHARS = 16384
+/** A ceiling on the `?s=` value itself, shared by BOTH ends of the codec. This protects
+ *  against a URL the HOST will refuse to serve, not merely against a link that is annoying to
+ *  paste: measured against this site's own host, a `?s=` value around 8119 chars still got
+ *  HTTP 200, but ~8188 chars came back HTTP 414 URI Too Long — the classic ~8190-byte HTTP
+ *  request-line limit shared by nginx, Apache, and GitHub Pages. A ceiling on the value alone
+ *  is not enough headroom, either: the value is only PART of the URL, and origin + path add
+ *  ~55 chars on this host today, more on a custom domain. 7000 stays well clear of that line
+ *  while sitting far above anything the UI itself can ever produce — the default link is 966
+ *  chars and even the 200-node fleet cap (FleetInput.vue's own generator limit) encodes to
+ *  2364. decodeState() refuses anything past this ceiling before a decompression stream is
+ *  even opened; encodeState() enforces the SAME constant on its own output — a producer that
+ *  could exceed the consumer's ceiling would mint links the page that made them refuses to
+ *  open, or worse, links the HOST itself bounces with a bare 414 before the page ever runs. */
+export const MAX_VALUE_CHARS = 7000
 
 /** deflate-raw reaches ~1000:1 on repetitive input, so an innocuous-looking `?s=` well
  *  under MAX_VALUE_CHARS can still inflate to gigabytes on the visitor's main thread. The
