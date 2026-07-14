@@ -1,0 +1,31 @@
+suite: Deployment
+# The controller Pod's own priorityClassName is optional and unset by default,
+# so an install keeps today's behavior (the cluster default priority). It must
+# not be confused with placeholder.priorityClass, the negative-priority class
+# the surge placeholder Pod runs at (spec §3.3) — that one is passed to the
+# controller as the --priority-class flag and never lands on the Pod spec.
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: no priorityClassName on the Pod spec by default
+    asserts:
+      - notExists:
+          path: spec.template.spec.priorityClassName
+
+  - it: renders priorityClassName when set
+    set:
+      priorityClassName: system-cluster-critical
+    asserts:
+      - equal:
+          path: spec.template.spec.priorityClassName
+          value: system-cluster-critical
+
+  - it: the placeholder PriorityClass stays a flag, not the controller's own priority
+    set:
+      placeholder.priorityClass.name: custom-placeholder
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --priority-class=custom-placeholder
+      - notExists:
+          path: spec.template.spec.priorityClassName

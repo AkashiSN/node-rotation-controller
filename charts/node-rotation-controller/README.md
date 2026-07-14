@@ -233,6 +233,7 @@ for how to read each metric and respond.
 | `podSecurityContext` | see `values.yaml` | Pod-level security context (nonroot, RuntimeDefault seccomp). |
 | `securityContext` | see `values.yaml` | Container-level security context (no privilege escalation, read-only rootfs, drop ALL caps). |
 | `resources` | `50m`/`64Mi` req, `200m`/`128Mi` lim | Controller resource requests/limits. The controller is light; surge nodes are the real cost (spec §4.4). |
+| `priorityClassName` | `""` | PriorityClass for the controller Pod; empty means the cluster default priority. Set e.g. `system-cluster-critical` when the controller shares a pool with ordinary workloads. Distinct from `placeholder.priorityClass`, which is the surge placeholder's negative-priority class. |
 | `nodeSelector` | `{}` | Node selector for the controller Pod. |
 | `tolerations` | `[]` | Tolerations for the controller Pod. |
 | `affinity` | `{}` | Affinity for the controller Pod. |

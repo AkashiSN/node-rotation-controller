@@ -60,6 +60,13 @@ resources:
     cpu: 200m
     memory: 128Mi
 
+# -- PriorityClass for the controller Pod. Empty means the cluster default
+# priority. Set e.g. `system-cluster-critical` when the controller shares a pool
+# with ordinary workloads and must outrank them. This is the CONTROLLER's own
+# priority — unrelated to `placeholder.priorityClass`, the negative-priority
+# class of the surge placeholder Pod (spec §3.3).
+priorityClassName: ""
+
 # -- Node selector for the controller Pod.
 nodeSelector: {}
 # -- Tolerations for the controller Pod.
