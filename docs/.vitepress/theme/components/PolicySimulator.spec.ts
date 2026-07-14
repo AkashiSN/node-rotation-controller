@@ -127,7 +127,6 @@ describe('a run is shareable as a link', () => {
   const visit = (search: string) => {
     window.history.replaceState({}, '', `/ja/simulator${search}`)
   }
-  const flush = async () => { await new Promise(r => setTimeout(r, 0)); await new Promise(r => setTimeout(r, 0)) }
   const shareButton = (w: ReturnType<typeof mountPage>) =>
     w.findAll('button').find(b => b.text().includes('Copy share link'))!
 
@@ -145,7 +144,12 @@ describe('a run is shareable as a link', () => {
     // THIS mount's own private array — not the one any earlier test's component still
     // writes into.
     const myCalls = latestCalls
-    await flush()
+    // onMounted awaits decodeState(), which pipes through a real DecompressionStream — the
+    // number of micro/macrotask turns that takes is not fixed (it depends on the platform's
+    // stream implementation and the event loop's current load), so a fixed-tick flush() races
+    // it and occasionally samples state before the decode has landed. Poll for the CONDITION
+    // (the first simulate() call having happened) instead of a tick count.
+    await vi.waitUntil(() => myCalls.length > 0)
     const vm = w.vm as any
     expect(vm.policyYAML).toBe(state.policy)
     expect(vm.fleet.nodes[0].name).toBe('shared-1')
@@ -165,7 +169,10 @@ describe('a run is shareable as a link', () => {
   test('a damaged link is NOT a broken page: the defaults render, and the page says why', async () => {
     visit('?s=!!!truncated-by-a-chat-client')
     const w = mountPage()
-    await flush()
+    // Same non-fixed decode latency as above applies to the failure path too: poll for the
+    // rendered banner (which only appears once shareError is set AND Vue has flushed the
+    // DOM) rather than a tick count that can undershoot on a slow run.
+    await vi.waitUntil(() => w.text().includes('Could not read the shared link'))
     const vm = w.vm as any
     expect(vm.policyYAML).toBe(DEFAULT_POLICY_YAML)     // the defaults, not an empty page
     expect(vm.shareError).toBeTruthy()
@@ -182,13 +189,20 @@ describe('a run is shareable as a link', () => {
       value: { writeText: async (v: string) => { written.push(v) } },
     })
     const w = mountPage()
-    await flush()
+    const myCalls = latestCalls
+    // No ?s= param here, so decodeState() never runs, but onMounted still awaits load()
+    // before its first run() — poll for that first simulate() call to know the mount has
+    // settled before reading history.length as the "before" baseline.
+    await vi.waitUntil(() => myCalls.length > 0)
     // The constraint under test is replaceState, never pushState — and asserting only the
     // URL's final shape cannot tell the two apart, since both would leave the same
     // window.location.search behind. History LENGTH is what distinguishes them.
     const historyLengthBefore = window.history.length
     await shareButton(w).trigger('click')
-    await flush()
+    // copyShareLink() is itself async (encodeState() awaits a CompressionStream pipeline
+    // before clipboard.writeText() resolves); poll for the write landing instead of a tick
+    // count that can undershoot before the promise chain settles.
+    await vi.waitUntil(() => written.length > 0)
 
     expect(written).toHaveLength(1)
     expect(written[0]).toContain('/ja/simulator?s=')
@@ -211,14 +225,17 @@ describe('a run is shareable as a link', () => {
       value: { writeText: async (v: string) => { written.push(v) } },
     })
     const w = mountPage()
-    await flush()
+    const myCalls = latestCalls
+    await vi.waitUntil(() => myCalls.length > 0)
     const vm = w.vm as any
     vm.policyYAML = DEFAULT_POLICY_YAML + randomBytes(15000).toString('hex')
     await w.vm.$nextTick()
     const searchBefore = window.location.search
 
     await shareButton(w).trigger('click')
-    await flush()
+    // copyShareLink()'s try/catch around encodeState() is async; poll for the rendered
+    // "too large" banner instead of a fixed tick count, so a slow encode still gets caught.
+    await vi.waitUntil(() => w.text().includes('too large to fit in a share link'))
 
     expect(written).toHaveLength(0)
     expect(window.location.search).toBe(searchBefore)
@@ -238,7 +255,9 @@ describe('a run is shareable as a link', () => {
     }))
     visit(`?s=${value}`)
     const w = mountPage()
-    await flush()
+    // Poll for the rendered version banner rather than a fixed tick count — same
+    // non-fixed decode latency as the other decodeState() paths.
+    await vi.waitUntil(() => w.text().includes('newer version of the simulator'))
     expect(w.text()).toContain('newer version of the simulator')
     expect(w.text()).not.toContain('Could not read the shared link')
   })
@@ -252,7 +271,10 @@ describe('a run is shareable as a link', () => {
     }
     visit(`?s=${await encodeState(state)}`)
     const w = mountPage()
-    await flush()
+    const myCalls = latestCalls
+    // Poll for the run against the rejecting fleet actually having happened, rather than a
+    // fixed tick count, before checking that a resultless run still exposes the share button.
+    await vi.waitUntil(() => myCalls.length > 0)
     expect((w.vm as any).result).toBeUndefined()  // the mocked simulate() rejected this fleet
     expect(shareButton(w)).toBeTruthy()
   })
