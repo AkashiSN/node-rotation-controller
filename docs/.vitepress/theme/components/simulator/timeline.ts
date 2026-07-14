@@ -378,11 +378,80 @@ export function blockedOf(events: SimEvent[], throughMs: number): BlockedBand[] 
   return out.sort((a, b) => a.startMs - b.startMs)
 }
 
-/** Every rotation start in the run, sorted — the targets the *first / previous / next
- *  rotation* buttons navigate to. */
+/** Every rotation start in the run, sorted. The minimap marks all of them — it is a density
+ *  map of the whole run — but the buttons do NOT step through them one by one; see
+ *  rotationOccasions below. */
 export function rotationInstants(resp: SimResponse): number[] {
   return (resp.rotations ?? [])
     .map(r => ms(r.start))
     .filter((v): v is number => v !== null)
     .sort((a, b) => a - b)
+}
+
+/** A ROTATION OCCASION: one maintenance-window occurrence in which at least one rotation
+ *  started, with every rotation it holds.
+ *
+ *  This — not the individual rotation start — is what *first / previous / next rotation*
+ *  navigates. Inside one occurrence the controller rotates serially, one node every
+ *  `t_rot_est + cooldownAfter` (~25m at the defaults), so the next rotation start is already
+ *  on screen: stepping to it nudged the view by 25 minutes and read as a jitter, not a jump,
+ *  and leaving a busy window cost one click per node that rotated in it (#261). An occasion
+ *  is the unit a reader actually wants: fit it, and there is nothing left to step to inside
+ *  it, because it is all in view. */
+export interface RotationOccasion {
+  /** The instant the buttons count from: the FIRST rotation start in this occasion. It is a
+   *  real instant of the run, so `prev`/`next` order the occasions by when rotation actually
+   *  began — not by a window boundary the rotation may sit far inside. */
+  atMs: number
+  /** The interval to fit. The window occurrence, or the rotation instant itself when there
+   *  is no occurrence to fit (see `windowless`). */
+  startMs: number
+  endMs: number
+  /** How many rotations start inside it. */
+  count: number
+  /** No window occurrence bounds this rotation: either the schedule admits rotation at any
+   *  time (a continuously-open union has no occurrence narrower than the run), or the
+   *  response reports a rotation outside every window it also reports. The view then falls
+   *  back to the rotation instant — CENTRED, which the old `at − 30m … at + 60m` was not. */
+  windowless: boolean
+}
+
+/** Group the run's rotation starts into occasions.
+ *
+ *  `horizonSpanMs` is what makes a continuously-open schedule fall back gracefully: an
+ *  occurrence as wide as the run is nothing to zoom to, so its rotations are treated as
+ *  windowless rather than "fitted" to a view that cannot move. */
+export function rotationOccasions(resp: SimResponse, horizonSpanMs: number): RotationOccasion[] {
+  const windows = windowsOf(resp)          // sorted, and disjoint by construction (a union)
+  const starts = rotationInstants(resp)    // sorted
+  const out: RotationOccasion[] = []
+  const byWindow = new Map<number, RotationOccasion>()
+  let wi = 0
+
+  for (const at of starts) {
+    // The starts are sorted, so the window pointer only ever moves forward.
+    while (wi < windows.length && windows[wi].endMs < at) wi++
+    const w = windows[wi]
+    const inside = w !== undefined && w.startMs <= at && at <= w.endMs
+    // A window that spans the whole run gives the view nowhere to go.
+    const fittable = inside && w.endMs - w.startMs < horizonSpanMs
+
+    if (!fittable) {
+      out.push({ atMs: at, startMs: at, endMs: at, count: 1, windowless: true })
+      continue
+    }
+    const held = byWindow.get(wi)
+    if (held) {
+      held.count++
+      continue
+    }
+    const occasion: RotationOccasion = {
+      atMs: at, startMs: w.startMs, endMs: w.endMs, count: 1, windowless: false,
+    }
+    byWindow.set(wi, occasion)
+    out.push(occasion)
+  }
+  // `starts` is sorted and the pointer is monotone, so `out` is already in order — but the
+  // buttons' whole contract is that it is, so say it rather than rely on it.
+  return out.sort((a, b) => a.atMs - b.atMs)
 }

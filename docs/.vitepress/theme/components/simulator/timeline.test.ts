@@ -2,7 +2,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { blockedOf, buildTimeline, rotationInstants, windowsOf } from './timeline.ts'
+import {
+  blockedOf, buildTimeline, rotationInstants, rotationOccasions, windowsOf,
+} from './timeline.ts'
 import type { Fleet, Horizon, SimResponse } from './model.ts'
 
 const FLEET: Fleet = {
@@ -361,4 +363,97 @@ test('50 nodes over a 3x horizon: the build stays linear, and the row count stay
   assert.equal(tl.anomalies.length, 0)
   // A generous ceiling — this is a guard against a quadratic regression, not a benchmark.
   assert.ok(elapsed < 250, `buildTimeline took ${elapsed.toFixed(0)}ms for ${SLOTS} slots`)
+})
+
+// ——— rotation OCCASIONS ————————————————————————————————————————————————————————
+//
+// The unit the first/previous/next buttons navigate: a window occurrence in which rotation
+// happened, not an individual rotation start (#261).
+
+const HORIZON_MS = 40 * 24 * 3600_000
+
+/** A run with `starts` rotation starts and the given window occurrences. */
+const runOf = (starts: string[], windows: { start: string; end: string }[]): SimResponse => ({
+  rotations: starts.map((start, i) => ({ slot: i, fromGen: 0, toGen: 1, mode: 'surge' as const, start })),
+  windows,
+})
+
+test('every rotation inside ONE window occurrence is ONE occasion, fitted to that window', () => {
+  // The default policy's own shape: four nodes rotating serially inside one 4h window, 25m
+  // apart. Stepping through them individually moved the view by 25 minutes a click — a
+  // jitter, not a jump — and leaving the window took four clicks.
+  const run = runOf(
+    ['2026-01-14T02:00:00Z', '2026-01-14T02:25:00Z', '2026-01-14T02:50:00Z', '2026-01-14T03:15:00Z'],
+    [{ start: '2026-01-14T02:00:00Z', end: '2026-01-14T06:00:00Z' }],
+  )
+  const occasions = rotationOccasions(run, HORIZON_MS)
+
+  assert.equal(rotationInstants(run).length, 4, 'the minimap still marks every rotation')
+  assert.equal(occasions.length, 1, 'but the buttons see ONE occasion')
+  assert.equal(occasions[0].count, 4)
+  assert.equal(occasions[0].windowless, false)
+  // The interval to fit is the WINDOW — both boundaries, so the reader sees where rotation
+  // was allowed to start, not just where it did.
+  assert.equal(occasions[0].startMs, ms('2026-01-14T02:00:00Z'))
+  assert.equal(occasions[0].endMs, ms('2026-01-14T06:00:00Z'))
+  // And it is anchored on the first rotation, which is a real instant of the run.
+  assert.equal(occasions[0].atMs, ms('2026-01-14T02:00:00Z'))
+})
+
+test('occasions are ordered, and a window with NO rotation is not one', () => {
+  const occasions = rotationOccasions(
+    runOf(
+      ['2026-01-14T02:10:00Z', '2026-01-17T03:00:00Z', '2026-01-17T03:25:00Z'],
+      [
+        { start: '2026-01-03T02:00:00Z', end: '2026-01-03T06:00:00Z' },   // opened, nothing rotated
+        { start: '2026-01-14T02:00:00Z', end: '2026-01-14T06:00:00Z' },
+        { start: '2026-01-17T02:00:00Z', end: '2026-01-17T06:00:00Z' },
+      ],
+    ),
+    HORIZON_MS,
+  )
+  assert.equal(occasions.length, 2, 'an occurrence in which nothing rotated is not an occasion')
+  assert.deepEqual(occasions.map(o => o.count), [1, 2])
+  assert.deepEqual(
+    occasions.map(o => o.startMs),
+    [ms('2026-01-14T02:00:00Z'), ms('2026-01-17T02:00:00Z')],
+  )
+})
+
+test('a CONTINUOUSLY-OPEN schedule has no occurrence to fit: each rotation is its own, windowless', () => {
+  // A window as wide as the run gives the view nowhere to go — fitting it would be a button
+  // that does nothing. The rotations fall back to being their own targets.
+  const occasions = rotationOccasions(
+    runOf(
+      ['2026-01-14T02:00:00Z', '2026-01-20T02:00:00Z'],
+      [{ start: '2026-01-01T00:00:00Z', end: '2026-02-10T00:00:00Z' }],   // == the horizon
+    ),
+    HORIZON_MS,
+  )
+  assert.equal(occasions.length, 2)
+  assert.ok(occasions.every(o => o.windowless), 'a run-wide occurrence is not a target')
+  assert.deepEqual(occasions.map(o => o.startMs), occasions.map(o => o.atMs))
+})
+
+test('a rotation the response reports OUTSIDE every window it reports is still reachable', () => {
+  // The chart must never lose a rotation just because the response is odd about it: it
+  // becomes its own windowless occasion rather than being dropped from the navigation.
+  const occasions = rotationOccasions(
+    runOf(
+      ['2026-01-09T12:00:00Z', '2026-01-14T02:00:00Z'],
+      [{ start: '2026-01-14T02:00:00Z', end: '2026-01-14T06:00:00Z' }],
+    ),
+    HORIZON_MS,
+  )
+  assert.equal(occasions.length, 2)
+  assert.equal(occasions[0].windowless, true)
+  assert.equal(occasions[0].atMs, ms('2026-01-09T12:00:00Z'))
+  assert.equal(occasions[1].windowless, false)
+})
+
+test('a run with no rotation has no occasions — the buttons disable rather than lie', () => {
+  assert.deepEqual(
+    rotationOccasions({ windows: [{ start: '2026-01-14T02:00:00Z', end: '2026-01-14T06:00:00Z' }] }, HORIZON_MS),
+    [],
+  )
 })

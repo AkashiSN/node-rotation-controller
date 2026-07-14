@@ -13,9 +13,12 @@
 // per-generation line.
 import { computed, ref, watch } from 'vue'
 import type { Fleet, Horizon, SimResponse } from './model.ts'
-import { buildTimeline, rotationInstants, type GenerationView, type Segment } from './timeline.ts'
 import {
-  SEMANTIC, clampView, fitTo, nextTarget, panBy, prevTarget,
+  buildTimeline, rotationInstants, rotationOccasions,
+  type GenerationView, type Segment,
+} from './timeline.ts'
+import {
+  SEMANTIC, clampView, fitInstant, fitTo, nextTarget, panBy, prevTarget,
   pxOf, reconcileView, ticksOf, zoomBy, type View,
 } from './zoom.ts'
 import { formatDuration, formatInstant } from './timeutil.ts'
@@ -48,7 +51,13 @@ const horizonValid = computed(() =>
 const horizonSpan = computed(() => ({ startMs: t0.value, endMs: t1.value }))
 
 const tl = computed(() => buildTimeline(props.response, props.horizon, props.fleet))
-const targets = computed(() => rotationInstants(props.response))
+
+// The minimap marks EVERY rotation — it is a density map of the whole run. The BUTTONS step
+// by occasion (one window occurrence's worth of rotations), which is a different, coarser
+// thing: see rotationOccasions.
+const instants = computed(() => rotationInstants(props.response))
+const occasions = computed(() => rotationOccasions(props.response, t1.value - t0.value))
+const targets = computed(() => occasions.value.map(o => o.atMs))
 
 // THE VIEW — the sub-range on screen. It is not the horizon, and the page says so: the
 // horizon is what Go was asked to simulate, and zoom never changes it.
@@ -208,13 +217,13 @@ const viewLabel = computed(() =>
 
 const centre = computed(() => (view.value.startMs + view.value.endMs) / 2)
 
-/** The rotation the buttons last took us to, while it is still on screen. */
+/** The occasion the buttons last took us to, while it is still on screen. */
 const visited = ref<number | null>(null)
 
 /** Where "next" and "previous" count from.
  *
- *  - After a button jump, from the rotation we actually landed on — so "previous" steps to
- *    the one BEFORE it rather than re-centring on it.
+ *  - After a button jump, from the occasion we actually landed on — so "previous" steps to
+ *    the one BEFORE it rather than re-fitting the same one.
  *  - While the whole horizon is on screen, from before the first instant: counting from the
  *    horizon's midpoint would silently skip every rotation in the first half of the run,
  *    which is most of them.
@@ -229,9 +238,19 @@ const canNext = computed(() => nextTarget(targets.value, cursor.value) !== null)
 
 function goTo(at: number | null) {
   if (at === null) return
-  // Fit the rotation's own scale (minutes), not the horizon's (weeks) — that scale
-  // collision is the whole reason this chart needed a redesign.
-  view.value = fitTo(at - 30 * 60_000, at + 60 * 60_000, horizonSpan.value)
+  const occasion = occasions.value.find(o => o.atMs === at)
+  if (!occasion) return
+  // Fit the OCCASION: the window occurrence, centred, with both of its boundaries and every
+  // rotation it holds on screen at once. Not the rotation instant — at the defaults an
+  // occurrence holds up to ten of them, ~25m apart, and a view fitted to one of them was
+  // both narrower than the window it sat in and off-centre inside it.
+  //
+  // A drain may run past the window's close; that bar continues past the right edge, and the
+  // chart already says so (the continuation mark). Widening the fit to swallow it would move
+  // the window off centre for a boundary the reader is not looking for.
+  view.value = occasion.windowless
+    ? fitInstant(occasion.atMs, horizonSpan.value)
+    : fitTo(occasion.startMs, occasion.endMs, horizonSpan.value)
   visited.value = at
 }
 const first = () => goTo(targets.value[0] ?? null)
@@ -340,10 +359,11 @@ defineExpose({ view, reset, zoom })
         <button type="button" class="sim-btn" :disabled="span >= t1 - t0" @click="zoom(1.25)">{{ t.chart.zoomOut }}</button>
         <button type="button" class="sim-btn" @click="reset">{{ t.chart.reset }}</button>
       </div>
+      <p class="sim-hint">{{ t.chart.rotationHint }}</p>
       <p class="sim-hint">{{ t.chart.viewHint }}</p>
       <p class="sim-view-label"><strong>{{ t.chart.view }}:</strong> <code>{{ viewLabel }}</code> <span class="sim-tz">({{ timezone }})</span></p>
 
-      <MinimapStrip :horizon="horizonSpan" :view="view" :targets="targets" :windows="tl.windows"
+      <MinimapStrip :horizon="horizonSpan" :view="view" :targets="instants" :windows="tl.windows"
                     :timezone="timezone" @update:view="v => (view = clampView(v, horizonSpan))" />
 
       <div class="sim-chart-scroll">

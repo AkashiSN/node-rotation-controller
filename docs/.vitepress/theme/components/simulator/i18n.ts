@@ -77,6 +77,7 @@ export interface Labels {
     continues: string
     surgeless: string
     /** The view controls. */
+    rotationHint: string
     firstRotation: string
     prevRotation: string
     nextRotation: string
@@ -189,6 +190,7 @@ const en: Labels = {
     malformed: 'the response is missing this boundary (a bug)',
     continues: 'still alive when the simulation ended — the bar continues',
     surgeless: 'surge-less (forceful fallback): no replacement is staged first',
+    rotationHint: 'The rotation buttons step by OCCASION — one maintenance-window occurrence in which rotation happened — and fit it. Rotations are serial inside an occurrence (one node every t_rot_est + cooldownAfter), so they are all on screen together and there is nothing left to step to inside it.',
     firstRotation: 'First rotation',
     prevRotation: 'Previous rotation',
     nextRotation: 'Next rotation',
@@ -307,6 +309,7 @@ const ja: Labels = {
     malformed: 'この境界がレスポンスにない（バグ）',
     continues: 'シミュレーション終了時点でまだ生存 — バーはこの先も続く',
     surgeless: 'surge なし（forceful fallback）: 代替ノードを先に立てない',
+    rotationHint: 'ローテーションのボタンは「回」単位で移動します（ローテーションが起きたメンテナンス窓 1 回分）。その窓に合わせて表示するので、窓の境界も、そこで起きたローテーションもすべて一度に画面に入ります（窓の中でのローテーションは直列で、間隔は t_rot_est + cooldownAfter です）。',
     firstRotation: '最初のローテーション',
     prevRotation: '前のローテーション',
     nextRotation: '次のローテーション',

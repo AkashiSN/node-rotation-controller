@@ -212,6 +212,19 @@ export function fitTo(startMs: number, endMs: number, horizon: Span, padFrac = 0
   return clampView({ startMs: startMs - pad, endMs: endMs + pad }, horizon)
 }
 
+/** The width a lone rotation instant is shown at, when there is no window occurrence to fit
+ *  around it (a continuously-open schedule). Wide enough to hold a whole rotation at the
+ *  defaults — provisioning + drain + cooldown — with the instant in the MIDDLE. */
+export const INSTANT_VIEW_MS = 90 * MINUTE_MS
+
+/** Fit a lone instant, centred. The old rotation buttons landed on `fitTo(at − 30m, at + 60m)`,
+ *  which put the rotation ~40% from the left and, at 2h33m, was NARROWER than the 4h window it
+ *  sat inside — so the window's own boundaries were off-screen. This is symmetric about the
+ *  instant by construction; only the horizon's own edge can shift it. */
+export function fitInstant(atMs: number, horizon: Span): View {
+  return fitTo(atMs - INSTANT_VIEW_MS / 2, atMs + INSTANT_VIEW_MS / 2, horizon)
+}
+
 /** Centre the view on an instant, keeping its current width — used by the rotation
  *  buttons, so stepping between rotations does not also change the zoom level. */
 export function centreOn(view: View, atMs: number, horizon: Span): View {
