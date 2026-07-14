@@ -25,7 +25,11 @@ claim=$(kubectl get nodeclaims -l karpenter.sh/nodepool=$pool -o jsonpath='{.ite
 # the explicit non-empty check below instead.
 created=$(kubectl get nodeclaim "$claim" -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
 [ -n "$created" ] || teardown "could not read creationTimestamp for claim $claim"
-d=$(( $(date -u -d "$created" +%s) + E ))
+# Convert first, guarded: a command substitution nested inside $(( ... )) is
+# ALSO errexit-checked, so an unparseable timestamp inside the arithmetic
+# would crash raw (exit 1) and skip teardown() — convert, then compute.
+created_epoch=$(date -u -d "$created" +%s 2>/dev/null) || teardown "unparseable creationTimestamp: $created"
+d=$(( created_epoch + E ))
 in_window() { [ $(( $1 % 1800 )) -lt 1680 ]; }
 R=$(( d - 660 ))                                  # d - 11m
 in_window "$R" || R=$(( (R / 1800 + 1) * 1800 ))  # next occurrence start (gap <= 2m)
