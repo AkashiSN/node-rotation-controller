@@ -67,6 +67,6 @@ The PriorityClass name for the surge placeholder Pod. Not namespaced/prefixed by
 release: it is a cluster-scoped object and must match the controller's
 --priority-class flag exactly (spec §3.3).
 */}}
-{{- define "node-rotation-controller.priorityClassName" -}}
+{{- define "node-rotation-controller.placeholderPriorityClassName" -}}
 {{- .Values.placeholder.priorityClass.name }}
 {{- end }}

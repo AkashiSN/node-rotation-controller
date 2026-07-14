@@ -276,6 +276,12 @@ jobs:
             --set-json "rotationPolicies=$(entry ',"prePull":{"enabled":true}')"
           assert_rejected "placeholder.priorityClass.value=0 (must be negative, max -1)" \
             --set placeholder.priorityClass.value=0
+          # PodSpec.priorityClassName is a string. --set coerces a bare `true` to a
+          # bool, which would render an invalid Deployment; the schema rejects it
+          # before that. (A numeric-looking NAME is legal and must survive as a
+          # string — deployment_test.yaml pins that the template quotes it.)
+          assert_rejected "priorityClassName=true (must be a string)" \
+            --set priorityClassName=true
           # An unknown policy key must be rejected at render time, so a typo never
           # reaches the cluster as a RotationPolicy the CRD's OpenAPI schema would
           # reject at admission (or worse, prune silently). A policy entry's `spec`

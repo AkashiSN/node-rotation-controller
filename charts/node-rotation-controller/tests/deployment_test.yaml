@@ -20,6 +20,21 @@ tests:
           path: spec.template.spec.priorityClassName
           value: system-cluster-critical
 
+  - it: a numeric-looking PriorityClass name stays a string
+    # The template quotes the value: unquoted, `123` would render as a YAML number
+    # and the Deployment would be rejected — PodSpec.priorityClassName is a string.
+    # Non-string INPUT (e.g. --set priorityClassName=true) is rejected by
+    # values.schema.json, asserted by the expected-to-fail renders in CI.
+    set:
+      priorityClassName: "123"
+    asserts:
+      - equal:
+          path: spec.template.spec.priorityClassName
+          value: "123"
+      - isType:
+          path: spec.template.spec.priorityClassName
+          type: string
+
   - it: the placeholder PriorityClass stays a flag, not the controller's own priority
     set:
       placeholder.priorityClass.name: custom-placeholder

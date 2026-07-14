@@ -2,7 +2,7 @@
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
-  name: {{ include "node-rotation-controller.priorityClassName" . }}
+  name: {{ include "node-rotation-controller.placeholderPriorityClassName" . }}
   labels:
     {{- include "node-rotation-controller.labels" . | nindent 4 }}
 # The surge placeholder runs under this dedicated negative-priority class so it
