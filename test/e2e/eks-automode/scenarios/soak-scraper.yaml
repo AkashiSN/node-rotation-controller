@@ -84,9 +84,14 @@ spec:
                 pods=$(kubectl get pods -n node-rotation-system -l app.kubernetes.io/name=node-rotation-controller -o jsonpath='{.items[*].metadata.name}') || pods=""
                 [ -n "$pods" ] || echo "$seq $ts - SCRAPE_ERROR no-controller-pod"
                 for p in $pods; do
-                  kubectl get --raw "/api/v1/namespaces/node-rotation-system/pods/${p}:8080/proxy/metrics" 2>/dev/null \
-                    | grep '^noderotation_' | sed "s/^/$seq $ts $p /" \
-                    || echo "$seq $ts $p SCRAPE_ERROR proxy"
+                  # Capture first so the tested exit status is kubectl's own:
+                  # piped directly, the pipeline's status would be sed's
+                  # (always 0) and the SCRAPE_ERROR fallback could never fire.
+                  if out=$(kubectl get --raw "/api/v1/namespaces/node-rotation-system/pods/${p}:8080/proxy/metrics" 2>/dev/null); then
+                    printf '%s\n' "$out" | grep '^noderotation_' | sed "s/^/$seq $ts $p /"
+                  else
+                    echo "$seq $ts $p SCRAPE_ERROR proxy"
+                  fi
                 done
                 sleep 60
               done
