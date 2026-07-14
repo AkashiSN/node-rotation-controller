@@ -27,8 +27,11 @@ const VERSION = 1
  *  is not enough headroom, either: the value is only PART of the URL, and origin + path add
  *  ~55 chars on this host today, more on a custom domain. 7000 stays well clear of that line
  *  while sitting far above anything the UI itself can ever produce — the default link is 966
- *  chars and even the 200-node fleet cap (FleetInput.vue's own generator limit) encodes to
- *  2364. decodeState() refuses anything past this ceiling before a decompression stream is
+ *  chars, a fleet at the 200-node decode cap encodes to 4075 (4306 with every per-node
+ *  override filled in), and FleetInput.vue's own generator stops at 50 (1374 chars). Measure
+ *  such a fleet the way the UI builds it: a fleet whose createdAt instants happen to be
+ *  hour-aligned compresses far better than a real spread and flatters the number.
+ *  decodeState() refuses anything past this ceiling before a decompression stream is
  *  even opened; encodeState() enforces the SAME constant on its own output — a producer that
  *  could exceed the consumer's ceiling would mint links the page that made them refuses to
  *  open, or worse, links the HOST itself bounces with a bare 414 before the page ever runs. */
