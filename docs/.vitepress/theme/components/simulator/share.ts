@@ -19,6 +19,24 @@ export const SHARE_PARAM = 's'
  *  rather than silently misread as v1. */
 const VERSION = 1
 
+/** A generous ceiling on the `?s=` value itself. The default link is 966 chars and a
+ *  50-node fleet (FleetInput.vue's own generator cap) sits far below this — anything past
+ *  it is already unpasteable, so it is refused before a decompression stream is even
+ *  opened for it. */
+const MAX_VALUE_CHARS = 16384
+
+/** deflate-raw reaches ~1000:1 on repetitive input, so an innocuous-looking `?s=` well
+ *  under MAX_VALUE_CHARS can still inflate to gigabytes on the visitor's main thread. The
+ *  INPUT ceiling above cannot catch this — only the decompressed size can — so inflate()
+ *  reads its stream through a byte budget and stops the moment this is exceeded, instead
+ *  of buffering the whole result with Response.text(). */
+const MAX_INFLATED_BYTES = 1024 * 1024
+
+/** The UI's own fleet generator (FleetInput.vue) clamps at 50 nodes. 200 is a generous
+ *  ceiling next to that, not a target: a link is not the place to grow the fleet past what
+ *  the page itself can ever produce, and FleetInput.vue renders one row per node. */
+const MAX_FLEET_NODES = 200
+
 export interface ShareState {
   policy: string
   fleet: Fleet
@@ -26,7 +44,11 @@ export interface ShareState {
   horizon: Horizon
 }
 
-export type DecodeResult = { state: ShareState } | { error: string }
+/** `code` is what the page acts on (which message to show); `message` is the English
+ *  detail, kept for logging/debugging — it is never shown to a Japanese reader as-is. */
+export type DecodeError = { code: 'damaged' | 'version'; message: string }
+
+export type DecodeResult = { state: ShareState } | { error: DecodeError }
 
 /** Is the Compression Streams API present? Gates the button. SSR-safe: no window access. */
 export function shareSupported(): boolean {
@@ -42,39 +64,55 @@ export async function encodeState(state: ShareState): Promise<string> {
 
 /** Decode `?s=`. NEVER throws — an unreadable link is a value the page renders, not a crash. */
 export async function decodeState(value: string): Promise<DecodeResult> {
-  if (!shareSupported()) return { error: 'this browser cannot read a shared link' }
+  if (!shareSupported()) return damaged('this browser cannot read a shared link')
+  // Reject on LENGTH before opening a decompression stream at all: a value this long is
+  // already unpasteable, so there is nothing to gain by inflating it first.
+  if (value.length > MAX_VALUE_CHARS) return damaged('the link is too long to be a real one')
   let text: string
   try {
     text = await inflate(base64urlDecode(value))
   } catch {
-    return { error: 'the link is damaged' }
+    return damaged()
   }
   let payload: unknown
   try {
     payload = JSON.parse(text)
   } catch {
-    return { error: 'the link is damaged' }
+    return damaged()
   }
   return validate(payload)
 }
 
 /** Parse what a stranger sent. The model must never be handed a half-shaped object and
- *  discover it three components deep, so the shape is checked here, in full. */
+ *  discover it three components deep, so the shape is checked here, in full — EVERY field,
+ *  including the ones that are optional in the model. An optional field left untyped is not
+ *  "checked in full": model.ts's parseGoDuration() does `s.trim()` on whatever it is handed,
+ *  so a number instead of a string in, say, a node's expireAfter used to sail through this
+ *  function and throw three components away, in the horizon watcher — not here. */
 function validate(payload: unknown): DecodeResult {
-  if (!isObject(payload)) return { error: 'the link is damaged' }
-  if (payload.v !== VERSION) return { error: `the link uses an unknown format (v${String(payload.v)})` }
+  if (!isObject(payload)) return damaged()
+  if (payload.v !== VERSION) {
+    return { error: { code: 'version', message: `the link uses an unknown format (v${String(payload.v)})` } }
+  }
 
   const { policy, fleet, env, horizon } = payload
-  if (typeof policy !== 'string') return { error: 'the link is damaged' }
+  if (typeof policy !== 'string') return damaged()
   if (!isObject(fleet) || typeof fleet.expireAfter !== 'string' || !Array.isArray(fleet.nodes)) {
-    return { error: 'the link is damaged' }
+    return damaged()
   }
-  if (!fleet.nodes.every(n => isObject(n) && typeof n.name === 'string' && typeof n.createdAt === 'string')) {
-    return { error: 'the link is damaged' }
+  if (!isOptionalString(fleet.terminationGracePeriod)) return damaged()
+  // A fleet this large cannot have come from the page's own generator (FleetInput.vue caps
+  // it at 50), and letting it through would make FleetInput render one row per node.
+  if (fleet.nodes.length > MAX_FLEET_NODES) return damaged()
+  if (!fleet.nodes.every(n =>
+    isObject(n) && typeof n.name === 'string' && typeof n.createdAt === 'string' &&
+    isOptionalString(n.expireAfter) && isOptionalString(n.terminationGracePeriod))) {
+    return damaged()
   }
-  if (!isObject(env) || !isObject(horizon)) return { error: 'the link is damaged' }
+  if (!isObject(env) || !isObject(horizon)) return damaged()
+  if (!isOptionalString(env.provisioning) || !isOptionalString(env.drain)) return damaged()
   if (typeof horizon.start !== 'string' || typeof horizon.end !== 'string') {
-    return { error: 'the link is damaged' }
+    return damaged()
   }
 
   return {
@@ -87,8 +125,20 @@ function validate(payload: unknown): DecodeResult {
   }
 }
 
+function damaged(message = 'the link is damaged'): { error: DecodeError } {
+  return { error: { code: 'damaged', message } }
+}
+
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** Every optional field in the model (env.provisioning/drain, the fleet- and per-node-level
+ *  expireAfter/terminationGracePeriod overrides) means "absent, or a string" — never a
+ *  number, bool, or object. `undefined` must pass; anything else that is not a string must
+ *  not. */
+function isOptionalString(v: unknown): v is string | undefined {
+  return v === undefined || typeof v === 'string'
 }
 
 async function deflate(text: string): Promise<Uint8Array> {
@@ -96,9 +146,37 @@ async function deflate(text: string): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer())
 }
 
+/** Read the decompressed stream through its own reader with a BYTE BUDGET, rather than
+ *  buffering the whole thing with `Response.text()`. deflate-raw can reach ~1000:1 on
+ *  repetitive input, so a value that passed the character-length check above can still be a
+ *  bomb; the moment the budget is exceeded, the stream is cancelled and reading stops — the
+ *  visitor's tab never holds the full inflated payload in memory. */
 async function inflate(bytes: Uint8Array): Promise<string> {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
-  return new Response(stream).text()
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_INFLATED_BYTES) {
+        await reader.cancel()
+        throw new Error('decompressed payload exceeds the byte budget')
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(out)
 }
 
 /** base64url: no padding, and no character that needs percent-encoding, so the value

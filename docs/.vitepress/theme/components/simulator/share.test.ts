@@ -71,12 +71,96 @@ test('an unreadable payload is a VALUE, not an exception', async () => {
   ]) {
     const got = await decodeState(bad)
     assert.ok('error' in got, `expected an error for ${JSON.stringify(bad).slice(0, 40)}`)
+    assert.equal((got as { error: { code: string } }).error.code, 'damaged')
   }
 })
 
-test('an unknown payload version is refused, not guessed at', async () => {
+test('an unknown payload version is refused, not guessed at, and carries its own code', async () => {
   const got = await decodeState(await deflated(JSON.stringify({ ...DEFAULT_STATE, v: 99 })))
   assert.ok('error' in got)
+  assert.equal((got as { error: { code: string } }).error.code, 'version')
+})
+
+test('a value past the character ceiling is refused before it is ever decompressed', async () => {
+  // The default link is 966 chars and a 50-node fleet (the UI's own generator cap) sits far
+  // below this; anything past it is already unpasteable, so it is rejected on sight rather
+  // than handed to the decompressor.
+  const got = await decodeState('A'.repeat(16385))
+  assert.ok('error' in got)
+  assert.equal((got as { error: { code: string } }).error.code, 'damaged')
+})
+
+test('a decompression bomb is capped by OUTPUT size, not buffered whole', async () => {
+  // deflate-raw reaches ~1000:1 on repetitive input, so a few-KB value — comfortably under
+  // the character ceiling above — can still inflate to gigabytes. The forged payload here is
+  // 5 MB of one repeated character: small enough on the wire to sail past the length check,
+  // but the decoder must still refuse to buffer the inflated result whole.
+  const bomb = await deflated('x'.repeat(5 * 1024 * 1024))
+  assert.ok(bomb.length < 16384, `forged bomb encodes to ${bomb.length} chars, expected under the ceiling`)
+  const got = await decodeState(bomb)
+  assert.ok('error' in got)
+  assert.equal((got as { error: { code: string } }).error.code, 'damaged')
+})
+
+test('a fleet past the 200-node cap is refused', async () => {
+  // FleetInput.vue's own generator clamps at 50; 200 is a generous ceiling next to that, not
+  // a target. A link with 200_000 nodes must not reach FleetInput and render a 200_000-row
+  // table on the visitor's page.
+  const nodes = Array.from({ length: 201 }, (_, i) => ({
+    name: `node-${i + 1}`,
+    createdAt: new Date(Date.UTC(2026, 0, 1) + i * 3_600_000).toISOString(),
+  }))
+  const state = { ...DEFAULT_STATE, fleet: { ...DEFAULT_STATE.fleet, nodes } }
+  const got = await decoded(state)
+  assert.ok('error' in got)
+  assert.equal((got as { error: { code: string } }).error.code, 'damaged')
+})
+
+test('exactly 200 nodes is still accepted', async () => {
+  const nodes = Array.from({ length: 200 }, (_, i) => ({
+    name: `node-${i + 1}`,
+    createdAt: new Date(Date.UTC(2026, 0, 1) + i * 3_600_000).toISOString(),
+  }))
+  const state = { ...DEFAULT_STATE, fleet: { ...DEFAULT_STATE.fleet, nodes } }
+  const got = await decoded(state)
+  assert.deepEqual(got, { state })
+})
+
+test('an optional field that is the wrong TYPE is damaged, not passed through to throw later', async () => {
+  // parseGoDuration() (model.ts) does `s.trim()` on whatever it is handed. validate()'s own
+  // comment claimed the shape was checked "in full", but five optional fields were never
+  // type-checked — a node's expireAfter as a number is the concrete case: it used to sail
+  // through validate() and blow up inside parseGoDuration() from the horizon watcher, not
+  // from decodeState, so the receiver's coverage buttons went silently dead.
+  const state = {
+    ...DEFAULT_STATE,
+    fleet: {
+      ...DEFAULT_STATE.fleet,
+      nodes: [{ ...DEFAULT_STATE.fleet.nodes[0], expireAfter: 123 }],
+    },
+  }
+  const got = await decoded(state as unknown as ShareState)
+  assert.ok('error' in got)
+  assert.equal((got as { error: { code: string } }).error.code, 'damaged')
+})
+
+test('the other four optional fields are type-checked too', async () => {
+  const bad = [
+    { ...DEFAULT_STATE, env: { ...DEFAULT_STATE.env, provisioning: 5 } },
+    { ...DEFAULT_STATE, env: { ...DEFAULT_STATE.env, drain: 5 } },
+    { ...DEFAULT_STATE, fleet: { ...DEFAULT_STATE.fleet, terminationGracePeriod: 5 } },
+    {
+      ...DEFAULT_STATE,
+      fleet: {
+        ...DEFAULT_STATE.fleet,
+        nodes: [{ ...DEFAULT_STATE.fleet.nodes[0], terminationGracePeriod: 5 }],
+      },
+    },
+  ]
+  for (const state of bad) {
+    const got = await decoded(state as unknown as ShareState)
+    assert.ok('error' in got, `expected an error for ${JSON.stringify(state).slice(0, 60)}`)
+  }
 })
 
 /** Encode a raw string the way the codec does, so the tests can forge payloads. */
