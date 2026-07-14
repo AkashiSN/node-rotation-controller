@@ -1,8 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  parseGoDuration, generateNodes, defaultHorizon, buildRequest, horizonForCoverage,
-  DEFAULT_COVERAGE, DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV, DEFAULT_FIRST_CREATED_AT,
+  parseGoDuration, generateNodes, defaultHorizon, defaultPolicyYaml, buildRequest,
+  horizonForCoverage, DEFAULT_COVERAGE, DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV,
+  DEFAULT_FIRST_CREATED_AT,
 } from './model.ts'
 
 test('lifetime coverage is a multiple of the LONGEST effective lifetime, not of the template', () => {
@@ -42,10 +43,25 @@ test('parseGoDuration handles the units Go emits', () => {
 
 test('generateNodes spreads createdAt evenly across the spread', () => {
   const nodes = generateNodes(3, '2026-01-01T00:00:00Z', '168h')
-  assert.deepEqual(nodes.map(n => n.name), ['node-1', 'node-2', 'node-3'])
+  assert.deepEqual(nodes.map(n => n.name), ['node-01', 'node-02', 'node-03'])
   assert.equal(nodes[0].createdAt, '2026-01-01T00:00:00.000Z')
   assert.equal(nodes[1].createdAt, '2026-01-04T12:00:00.000Z')
   assert.equal(nodes[2].createdAt, '2026-01-08T00:00:00.000Z')
+})
+
+test('generated names are FIXED WIDTH, so lexicographic order is creation order', () => {
+  // The property that matters, at every size the UI and a share link can reach: selection
+  // breaks deadline/creation ties on the name, lexicographically. An unpadded generator
+  // ordered node-1, node-10, node-2 — correct controller behaviour, but as the example a
+  // visitor lands on it reads as a bug in the simulator.
+  for (const count of [1, 3, 9, 10, 26, 50, 200]) {
+    const names = generateNodes(count, '2026-01-01T00:00:00Z', '168h').map(n => n.name)
+    assert.deepEqual(names, [...names].sort(),
+      `a fleet of ${count} does not rotate in creation order: ${names.slice(0, 12).join(', ')}`)
+    assert.equal(new Set(names.map(n => n.length)).size, 1, `a fleet of ${count} mixes name widths`)
+  }
+  assert.equal(generateNodes(10, '2026-01-01T00:00:00Z', '0s')[9].name, 'node-10')
+  assert.equal(generateNodes(100, '2026-01-01T00:00:00Z', '0s')[0].name, 'node-001')
 })
 
 test('generateNodes with one node puts it at the first instant', () => {
@@ -135,4 +151,22 @@ test('the default policy template carries both apiVersion and kind', () => {
   // that opens on an error.
   assert.match(DEFAULT_POLICY_YAML, /^apiVersion: noderotation\.io\/v1alpha1$/m)
   assert.match(DEFAULT_POLICY_YAML, /^kind: RotationPolicy$/m)
+})
+
+test('the seed manifest reads as a manifest: no comments', () => {
+  // It is the first thing a visitor reads, and the form rewrites the YAML around it. The
+  // rationale for the schedule lives in model.ts, and the symbols are explained on the page.
+  assert.ok(!DEFAULT_POLICY_YAML.includes('#'), 'the seed manifest must carry no comments')
+})
+
+test('the JAPANESE page seeds Asia/Tokyo; every other locale seeds UTC', () => {
+  // The whole page renders in the POLICY's zone, so a UTC seed makes the Japanese page a
+  // timezone-conversion exercise before it is anything else.
+  assert.match(defaultPolicyYaml('ja'), /^ {4}- timezone: Asia\/Tokyo$/m)
+  assert.match(defaultPolicyYaml('ja-JP'), /^ {4}- timezone: Asia\/Tokyo$/m)
+  assert.equal(defaultPolicyYaml('en-US'), DEFAULT_POLICY_YAML)
+  assert.match(DEFAULT_POLICY_YAML, /^ {4}- timezone: UTC$/m)
+
+  // The zone is the ONLY difference: the seed is one manifest, not two that can drift.
+  assert.equal(defaultPolicyYaml('ja').replace('Asia/Tokyo', 'UTC'), DEFAULT_POLICY_YAML)
 })

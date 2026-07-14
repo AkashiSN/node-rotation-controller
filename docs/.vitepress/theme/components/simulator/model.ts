@@ -172,7 +172,18 @@ export function parseGoDuration(s: string): number | null {
   return s.trim().startsWith('-') ? -ms : ms
 }
 
-/** N nodes named node-1..node-N, their createdAt spread evenly over `spread`
+/** The width the generated names are padded to. Selection breaks deadline/creation ties on
+ *  the node's NAME, lexicographically (internal/selection), so an unpadded generator
+ *  (node-1..node-10) rotates node-1, node-10, node-2, … — the controller's real, correct
+ *  behaviour, but as the EXAMPLE a visitor lands on it reads as a bug in the simulator.
+ *
+ *  Fixed width is what removes the trap: zero-padded to the digit count of the whole fleet,
+ *  so every name in a fleet is the same length and lexicographic order IS creation order, at
+ *  any size. The floor of 2 keeps the default fleet reading as node-01..node-03 rather than
+ *  node-1..node-3, which is the shape a reader must not learn to trust. */
+const nameWidth = (count: number) => Math.max(2, String(Math.max(1, count)).length)
+
+/** N nodes named node-01..node-NN, their createdAt spread evenly over `spread`
  *  (a Go duration; "0s" puts them all at the same instant). */
 export function generateNodes(count: number, firstCreatedAt: string, spread: string): FleetNode[] {
   // firstCreatedAt flows straight from the node-generator UI field; a malformed
@@ -181,8 +192,9 @@ export function generateNodes(count: number, firstCreatedAt: string, spread: str
   const first = Number.isNaN(parsedFirst) ? new Date(DEFAULT_FIRST_CREATED_AT).getTime() : parsedFirst
   const total = parseGoDuration(spread) ?? 0
   const step = count > 1 ? total / (count - 1) : 0
+  const width = nameWidth(count)
   return Array.from({ length: count }, (_, i) => ({
-    name: `node-${i + 1}`,
+    name: `node-${String(i + 1).padStart(width, '0')}`,
     createdAt: new Date(first + i * step).toISOString(),
   }))
 }
@@ -254,10 +266,22 @@ export function buildRequest(fleet: Fleet, env: Env, horizon: Horizon): SimReque
   return { fleet, env: clean, options: horizon }
 }
 
-/** The manifest the page opens on. It is a FULL RotationPolicy — apiVersion and
- *  kind are both required exactly, because a manifest the cluster would not admit
- *  must not produce a timeline. */
-export const DEFAULT_POLICY_YAML = `apiVersion: noderotation.io/v1alpha1
+/** The manifest the page opens on, as a template over the maintenance window's timezone.
+ *  It is a FULL RotationPolicy — apiVersion and kind are both required exactly, because a
+ *  manifest the cluster would not admit must not produce a timeline.
+ *
+ *  It carries NO comments. It is the first thing a visitor reads, and an eight-line comment
+ *  explaining the schedule is not what a real manifest looks like; the form rewrites the YAML
+ *  around it, so it also has to survive edits it has no business surviving. The rationale
+ *  lives here instead, and the page explains the symbols on the page (#261).
+ *
+ *  Why the window runs TWICE a week, not once: with minRotationChances = 2, a single weekly
+ *  window (worst-case period P = 168h) forces K·P = 336h, which only clears the
+ *  AVeryAggressive warning (it needs ageThreshold A >= P) at an expireAfter beyond the Auto
+ *  Mode hard cap (§1.1) — there is no expireAfter that is simultaneously under the cap and
+ *  free of that warning against a single-day window. Adding Wed halves P and keeps A
+ *  comfortably above it at expireAfter = 480h (see DEFAULT_FLEET below). */
+const policyYamlIn = (timezone: string) => `apiVersion: noderotation.io/v1alpha1
 kind: RotationPolicy
 metadata:
   name: weekly
@@ -268,14 +292,7 @@ spec:
   ageThreshold: auto
   minRotationChances: 2
   maintenanceWindows:
-    # Two occurrences a week, not one: with minRotationChances=2, a single
-    # weekly window (worst-case period P = 168h) forces K*P = 336h, which
-    # only clears the AVeryAggressive warning (needs ageThreshold A >= P) at
-    # an expireAfter beyond the Auto Mode hard cap (§1.1) — there is no
-    # expireAfter that is simultaneously under the cap and free of that
-    # warning against a single-day window. Adding Wed halves P and keeps A
-    # comfortably above it at expireAfter = 480h (see DEFAULT_FLEET below).
-    - timezone: UTC
+    - timezone: ${timezone}
       days: [Wed, Sat]
       start: "02:00"
       end: "06:00"
@@ -287,6 +304,21 @@ spec:
     forcefulFallback:
       enabled: false
 `
+
+/** The window's timezone the page seeds, per locale. The whole page — timeline, calendar,
+ *  ruler — renders in the POLICY's zone, so a UTC seed makes the Japanese page a
+ *  conversion exercise before it is anything else. */
+export const DEFAULT_TIMEZONE = 'UTC'
+export const JA_DEFAULT_TIMEZONE = 'Asia/Tokyo'
+
+export const DEFAULT_POLICY_YAML = policyYamlIn(DEFAULT_TIMEZONE)
+
+/** The seed manifest for a VitePress locale. It seeds only — the YAML stays authoritative,
+ *  and a `?s=` link (which carries the policy verbatim) must keep overriding it: a link
+ *  written in UTC still opens in UTC on the Japanese page. */
+export function defaultPolicyYaml(lang: string): string {
+  return policyYamlIn(lang.startsWith('ja') ? JA_DEFAULT_TIMEZONE : DEFAULT_TIMEZONE)
+}
 
 /** A fixed date, not `now`: the page a visitor lands on must be reproducible, and
  *  the smoke test asserts against exactly these defaults. Shared by DEFAULT_FLEET

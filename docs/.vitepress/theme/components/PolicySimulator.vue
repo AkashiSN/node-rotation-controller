@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useData } from 'vitepress'
 import {
-  COVERAGE_CHOICES, DEFAULT_COVERAGE, DEFAULT_POLICY_YAML, DEFAULT_FLEET, DEFAULT_ENV,
-  buildRequest, horizonForCoverage, parseGoDuration,
+  COVERAGE_CHOICES, DEFAULT_COVERAGE, DEFAULT_FLEET, DEFAULT_ENV,
+  buildRequest, defaultPolicyYaml, horizonForCoverage, parseGoDuration,
   type Env, type Fleet, type Horizon, type SimResponse,
 } from './simulator/model.ts'
 import { projectPolicy } from './simulator/policyYaml.ts'
@@ -24,7 +25,12 @@ import DiagnosticsPanel from './simulator/DiagnosticsPanel.vue'
 const t = useLabels()
 const { loading, ready, error: loadError, load, simulate } = useWasm()
 
-const policyYAML = ref(DEFAULT_POLICY_YAML)
+// The SEED only, read once: the locale picks which manifest the page opens on (the Japanese
+// page opens on Asia/Tokyo), and from that instant the YAML is authoritative. A later locale
+// switch is a full page navigation, so there is nothing to react to — and reacting would be
+// wrong anyway: it would throw away the visitor's own edits.
+const { lang } = useData()
+const policyYAML = ref(defaultPolicyYaml(lang.value))
 const fleet = ref<Fleet>(structuredClone(DEFAULT_FLEET))
 const env = ref<Env>({ ...DEFAULT_ENV })
 

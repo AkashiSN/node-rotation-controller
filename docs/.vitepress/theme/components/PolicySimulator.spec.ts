@@ -5,11 +5,18 @@
 // whole of it.
 import { mount } from '@vue/test-utils'
 import { randomBytes } from 'node:crypto'
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { ref } from 'vue'
 
+// The LOCALE is now load-bearing — it picks the seed manifest the page opens on — so the
+// tests have to be able to move it. It goes through vi.hoisted because the mock factory runs
+// before this module's own top-level statements: a plain `const` would still be in its TDZ.
+// A hand-rolled box is enough: the page reads `lang.value` once, at setup.
+const locale = vi.hoisted(() => ({ value: 'en-US' }))
+afterEach(() => { locale.value = 'en-US' })
+
 vi.mock('vitepress', () => ({
-  useData: () => ({ lang: ref('en-US') }),
+  useData: () => ({ lang: locale }),
   withBase: (p: string) => p,
 }))
 
@@ -119,6 +126,40 @@ describe('the display timezone is the POLICY\'s, never the browser\'s', () => {
     expect((w.vm as any).timezone).toBe('UTC')
     // And the page still renders: the policy's own error is the Go decoder's to report.
     expect(w.find('.policy-simulator').exists()).toBe(true)
+  })
+})
+
+describe('the seed manifest follows the LOCALE', () => {
+  test('the Japanese page opens on Asia/Tokyo, so the whole page reads in it', () => {
+    locale.value = 'ja-JP'
+    const w = mountPage()
+    const vm = w.vm as any
+    expect(vm.policyYAML).toContain('timezone: Asia/Tokyo')
+    // Not just the YAML: the timeline, calendar and ruler all render in the policy's zone.
+    expect(vm.timezone).toBe('Asia/Tokyo')
+  })
+
+  test('every other locale still opens on UTC', () => {
+    expect((mountPage().vm as any).policyYAML).toBe(DEFAULT_POLICY_YAML)
+  })
+
+  test('a link written in UTC still opens in UTC on the Japanese page', async () => {
+    // The seed is a SEED. A share link carries the policy verbatim, and a sharer who chose
+    // UTC must not have their run silently re-zoned by the locale of whoever opens it.
+    locale.value = 'ja-JP'
+    const state = {
+      policy: DEFAULT_POLICY_YAML,
+      fleet: { expireAfter: '480h', nodes: [{ name: 'node-01', createdAt: '2026-03-01T00:00:00Z' }] },
+      env: {},
+      horizon: { start: '2026-03-01T00:00:00Z', end: '2026-04-01T00:00:00Z' },
+    }
+    window.history.replaceState({}, '', `/ja/simulator?s=${await encodeState(state)}`)
+    const w = mountPage()
+    const myCalls = latestCalls
+    await vi.waitUntil(() => myCalls.length > 0)
+    const vm = w.vm as any
+    expect(vm.policyYAML).toBe(DEFAULT_POLICY_YAML)
+    expect(vm.timezone).toBe('UTC')
   })
 })
 
