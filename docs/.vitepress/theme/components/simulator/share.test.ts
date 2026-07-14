@@ -5,6 +5,7 @@
 // does with input it did not produce. It must never throw: the page has to survive a bad
 // link, not crash on it.
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
 import { test } from 'node:test'
 
 import { DEFAULT_ENV, DEFAULT_FLEET, DEFAULT_POLICY_YAML, horizonForCoverage } from './model.ts'
@@ -81,11 +82,43 @@ test('an unknown payload version is refused, not guessed at, and carries its own
   assert.equal((got as { error: { code: string } }).error.code, 'version')
 })
 
+test('a payload with no v at all is damaged, not mistaken for "a newer version"', async () => {
+  // Only a v that is a NUMBER STRICTLY GREATER than VERSION describes a genuinely newer link.
+  // A missing v is ordinary corruption (an empty object decodes fine as JSON, so it reaches
+  // validate() at all) — it must not be told "this comes from a newer version of the
+  // simulator", which used to happen because `payload.v !== VERSION` was true for undefined too.
+  const got = await decodeState(await deflated(JSON.stringify({})))
+  assert.ok('error' in got)
+  assert.equal((got as { error: { code: string } }).error.code, 'damaged')
+})
+
 test('a value past the character ceiling is refused before it is ever decompressed', async () => {
   // The default link is 966 chars and a 50-node fleet (the UI's own generator cap) sits far
   // below this; anything past it is already unpasteable, so it is rejected on sight rather
   // than handed to the decompressor.
+  //
+  // 'A'.repeat(16385) is valid base64url but NOT valid deflate, so this alone does not prove
+  // the ceiling fired: with MAX_VALUE_CHARS deleted, inflate() would still throw on this
+  // garbage and decodeState() would still land on 'damaged' — just via the generic message,
+  // not the ceiling's own. Asserting the exact message is what tells the two apart.
   const got = await decodeState('A'.repeat(16385))
+  assert.ok('error' in got)
+  assert.deepEqual((got as { error: { code: string; message: string } }).error, {
+    code: 'damaged',
+    message: 'the link is too long to be a real one',
+  })
+})
+
+test('a genuinely valid, oversized payload is refused by the ceiling alone', async () => {
+  // Unlike the case above, this IS a real deflate of a real, fully-valid state — long enough
+  // (via a padded policy field) that its encoded value exceeds MAX_VALUE_CHARS. If the ceiling
+  // were deleted, this exact payload would decode successfully (a round trip), so a failure
+  // here can only be the length check itself, not inflate(), JSON.parse(), or validate().
+  const policy = DEFAULT_POLICY_YAML + randomBytes(15000).toString('hex')
+  const state = { ...DEFAULT_STATE, policy }
+  const value = await encodeState(state)
+  assert.ok(value.length > 16384, `expected an oversized value, got ${value.length} chars`)
+  const got = await decodeState(value)
   assert.ok('error' in got)
   assert.equal((got as { error: { code: string } }).error.code, 'damaged')
 })

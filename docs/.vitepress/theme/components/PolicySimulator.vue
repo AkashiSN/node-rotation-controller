@@ -80,15 +80,23 @@ function currentState(): ShareState {
 }
 
 async function copyShareLink() {
-  // encodeState() is inside the try too: it only rejects when the Compression Streams API
-  // itself is unavailable (the button is disabled in that case, but a stale render or a
-  // runtime that changes mid-session must still land on a message, not an unhandled
-  // rejection with nothing shown).
+  // Building the link and copying it are split into two tries on purpose: encodeState() can
+  // reject on its own (the button is disabled when the Compression Streams API is missing,
+  // but a stale render or a runtime that changes mid-session must still land on a message,
+  // not an unhandled rejection) — and when IT fails, replaceState below never ran, so the
+  // link is NOT in the address bar. Telling the user to copy it from there would be false.
+  let url: URL
   try {
-    const url = new URL(window.location.href)
+    url = new URL(window.location.href)
     url.searchParams.set(SHARE_PARAM, await encodeState(currentState()))
+  } catch {
+    note(t.value.share.buildFailed)
+    return
+  }
+  try {
     // replaceState, not pushState: Back must still mean "the page I came from", not "my
-    // previous edit".
+    // previous edit". It runs inside this second try too: only once it has run is "the link
+    // is in the address bar" (copyFailed's claim) actually true.
     window.history.replaceState({}, '', url)
     await navigator.clipboard.writeText(url.toString())
     note(t.value.share.copied)

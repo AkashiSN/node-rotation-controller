@@ -91,9 +91,14 @@ export async function decodeState(value: string): Promise<DecodeResult> {
  *  function and throw three components away, in the horizon watcher — not here. */
 function validate(payload: unknown): DecodeResult {
   if (!isObject(payload)) return damaged()
-  if (payload.v !== VERSION) {
-    return { error: { code: 'version', message: `the link uses an unknown format (v${String(payload.v)})` } }
+  // 'version' is reserved for a link this page can PROVE is newer — a v that is a number
+  // strictly greater than what we understand. A missing v, a non-number v, or an OLDER v is
+  // not "newer" at all; calling it that would tell the reader something false, so those fall
+  // through to the same 'damaged' every other malformed shape gets.
+  if (typeof payload.v === 'number' && payload.v > VERSION) {
+    return { error: { code: 'version', message: `the link uses a newer format (v${payload.v})` } }
   }
+  if (payload.v !== VERSION) return damaged()
 
   const { policy, fleet, env, horizon } = payload
   if (typeof policy !== 'string') return damaged()

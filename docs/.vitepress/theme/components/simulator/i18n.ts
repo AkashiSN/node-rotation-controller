@@ -51,6 +51,7 @@ export interface Labels {
     copy: string
     copied: string
     copyFailed: string
+    buildFailed: string
     unsupported: string
     badLink: string
     badLinkVersion: string
@@ -158,6 +159,7 @@ const en: Labels = {
     copy: 'Copy share link',
     copied: 'Copied',
     copyFailed: 'Could not reach the clipboard — the link is in the address bar.',
+    buildFailed: 'Could not build the share link.',
     unsupported: 'This browser cannot build a share link (it lacks the Compression Streams API).',
     badLink: 'Could not read the shared link, so this is the default policy and fleet.',
     badLinkVersion: 'This shared link comes from a newer version of the simulator, so this is the default policy and fleet.',
@@ -272,6 +274,7 @@ const ja: Labels = {
     copy: '共有リンクをコピー',
     copied: 'コピーしました',
     copyFailed: 'クリップボードに書き込めませんでした。アドレスバーのリンクをコピーしてください。',
+    buildFailed: '共有リンクを作れませんでした。',
     unsupported: 'このブラウザーでは共有リンクを作れません（Compression Streams API 非対応）。',
     badLink: '共有リンクを読み取れませんでした。既定のポリシーとノード群を表示しています。',
     badLinkVersion: 'この共有リンクは新しいバージョンのシミュレーターのものです。既定のポリシーとノード群を表示しています。',
