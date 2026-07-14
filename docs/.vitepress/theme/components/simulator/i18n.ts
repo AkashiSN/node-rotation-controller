@@ -47,6 +47,16 @@ export interface Labels {
   loading: string
   loadFailed: string
   retry: string
+  share: {
+    copy: string
+    copied: string
+    copyFailed: string
+    buildFailed: string
+    tooBig: string
+    unsupported: string
+    badLink: string
+    badLinkVersion: string
+  }
   legend: {
     life: string; rotation: string; surgeless: string; ready: string; done: string
     deadline: string; breach: string; window: string; blocked: string
@@ -146,6 +156,16 @@ const en: Labels = {
   loading: 'Loading the simulator (3.4 MB)…',
   loadFailed: 'The simulator failed to load.',
   retry: 'Retry',
+  share: {
+    copy: 'Copy share link',
+    copied: 'Copied',
+    copyFailed: 'Could not reach the clipboard — the link is in the address bar.',
+    buildFailed: 'Could not build the share link.',
+    tooBig: 'This is too large to fit in a share link — try a smaller fleet or policy YAML.',
+    unsupported: 'This browser cannot build a share link (it lacks the Compression Streams API).',
+    badLink: 'Could not read the shared link, so this is the default policy and fleet.',
+    badLinkVersion: 'This shared link comes from a newer version of the simulator, so this is the default policy and fleet.',
+  },
   legend: {
     life: 'node lifetime', rotation: 'rotation start',
     surgeless: 'surge-less (forceful fallback)', ready: 'replacement ready',
@@ -252,6 +272,16 @@ const ja: Labels = {
   loading: 'シミュレーターを読み込み中（3.4 MB）…',
   loadFailed: 'シミュレーターの読み込みに失敗しました。',
   retry: '再試行',
+  share: {
+    copy: '共有リンクをコピー',
+    copied: 'コピーしました',
+    copyFailed: 'クリップボードに書き込めませんでした。アドレスバーのリンクをコピーしてください。',
+    buildFailed: '共有リンクを作れませんでした。',
+    tooBig: 'この内容は共有リンクに収まらないほど大きすぎます。ノード群やポリシー YAML を小さくしてください。',
+    unsupported: 'このブラウザーでは共有リンクを作れません（Compression Streams API 非対応）。',
+    badLink: '共有リンクを読み取れませんでした。既定のポリシーとノード群を表示しています。',
+    badLinkVersion: 'この共有リンクは新しいバージョンのシミュレーターのものです。既定のポリシーとノード群を表示しています。',
+  },
   legend: {
     life: 'ノードの寿命', rotation: 'ローテーション開始',
     surgeless: 'surge なし（forceful fallback）', ready: '代替ノード Ready',

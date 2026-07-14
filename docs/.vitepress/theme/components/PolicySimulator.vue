@@ -9,6 +9,9 @@ import { projectPolicy } from './simulator/policyYaml.ts'
 import { isValidTimezone } from './simulator/timeutil.ts'
 import { useWasm } from './simulator/useWasm.ts'
 import { useLabels } from './simulator/i18n.ts'
+import {
+  SHARE_PARAM, decodeState, encodeState, shareSupported, ShareTooLargeError, type ShareState,
+} from './simulator/share.ts'
 import PolicyInput from './simulator/PolicyInput.vue'
 import FleetInput from './simulator/FleetInput.vue'
 import EnvInput from './simulator/EnvInput.vue'
@@ -62,7 +65,79 @@ function schedule() {
   timer = setTimeout(run, 200)
 }
 
-onMounted(async () => { await load(); run() })
+// A link the page could not read is reported, not thrown: someone whose chat client ate the
+// tail of a URL must still land on a usable simulator.
+const shareError = ref('')
+const shareNote = ref('')
+const canShare = shareSupported()
+let noteTimer: ReturnType<typeof setTimeout> | undefined
+
+function currentState(): ShareState {
+  return {
+    policy: policyYAML.value,
+    fleet: fleet.value,
+    env: env.value,
+    horizon: horizon.value,
+  }
+}
+
+async function copyShareLink() {
+  // Building the link and copying it are split into two tries on purpose: encodeState() can
+  // reject on its own — the button is disabled when the Compression Streams API is missing,
+  // but a stale render or a runtime that changes mid-session must still land on a message,
+  // not an unhandled rejection; and a large-but-valid state (a big fleet or policy YAML) can
+  // encode past the ceiling decodeState() itself enforces, which encodeState() now refuses to
+  // produce at all — and when EITHER fails, replaceState below must never run, so the link is
+  // NOT in the address bar. Telling the user to copy it from there would be false.
+  let url: URL
+  try {
+    url = new URL(window.location.href)
+    url.searchParams.set(SHARE_PARAM, await encodeState(currentState()))
+  } catch (err) {
+    // ShareTooLargeError gets its own, actionable message — "too big" is something a visitor
+    // can fix by trimming the fleet or the YAML; the generic buildFailed message is not.
+    note(err instanceof ShareTooLargeError ? t.value.share.tooBig : t.value.share.buildFailed)
+    return
+  }
+  try {
+    // replaceState, not pushState: Back must still mean "the page I came from", not "my
+    // previous edit". It runs inside this second try too: only once it has run is "the link
+    // is in the address bar" (copyFailed's claim) actually true.
+    window.history.replaceState({}, '', url)
+    await navigator.clipboard.writeText(url.toString())
+    note(t.value.share.copied)
+  } catch {
+    note(t.value.share.copyFailed)
+  }
+}
+
+function note(message: string) {
+  shareNote.value = message
+  clearTimeout(noteTimer)
+  noteTimer = setTimeout(() => (shareNote.value = ''), 4000)
+}
+
+onMounted(async () => {
+  const value = new URLSearchParams(window.location.search).get(SHARE_PARAM)
+  if (value) {
+    const got = await decodeState(value)
+    if ('error' in got) {
+      // 'version' gets its own message: a link from a newer simulator is not "damaged", and
+      // conflating the two would make the version→message distinction decodeState() carries
+      // dead code.
+      shareError.value = got.error.code === 'version' ? t.value.share.badLinkVersion : t.value.share.badLink
+    } else {
+      policyYAML.value = got.state.policy
+      fleet.value = got.state.fleet
+      env.value = got.state.env
+      // PINNED: the sharer chose this span, so the fleet watcher must not move it.
+      horizonPinned.value = true
+      horizon.value = got.state.horizon
+    }
+  }
+  await load()
+  run()
+})
 watch([policyYAML, fleet, env, horizon], schedule, { deep: true })
 
 const result = computed(() => response.value.result)
@@ -101,6 +176,12 @@ const horizonStartMs = computed(() => new Date(horizon.value.start).getTime())
 
 <template>
   <div class="policy-simulator">
+    <!-- Hoisted OUTSIDE the loading/loadError/else split: this is a statement about the
+         URL, not about the wasm module, and a corrupt link plus a failed wasm load can
+         both be true at once. A visitor must be told about the unreadable link even
+         while staring at the load-failed banner. -->
+    <p v-if="shareError" class="sim-warn sim-banner">{{ shareError }}</p>
+
     <p v-if="loading">{{ t.loading }}</p>
     <div v-else-if="loadError" class="sim-fatal sim-banner">
       {{ t.loadFailed }} <code>{{ loadError }}</code>
@@ -123,6 +204,20 @@ const horizonStartMs = computed(() => new Date(horizon.value.start).getTime())
             <strong>{{ d.severity }}</strong> <code>{{ d.code }}</code> {{ d.message }}
           </li>
         </ul>
+      </div>
+
+      <!-- Not gated on `result`: a policy the controller REJECTS is exactly the run someone
+           wants to share to ask "why won't this validate?" — the link carries the QUESTION
+           (policy/fleet/env/horizon), not the answer, so it is shareable whether or not a
+           result exists. This block sits inside `template v-else`, so wasm has already
+           loaded by the time it renders. -->
+      <div class="sim-controls">
+        <button type="button" class="sim-btn" :disabled="!canShare"
+                :title="canShare ? undefined : t.share.unsupported" @click="copyShareLink">
+          {{ t.share.copy }}
+        </button>
+        <span v-if="shareNote" class="sim-share-note" role="status">{{ shareNote }}</span>
+        <span v-else-if="!canShare" class="sim-share-note">{{ t.share.unsupported }}</span>
       </div>
 
       <TimelineChart v-if="result" :response="response" :horizon="horizon" :fleet="fleet"
