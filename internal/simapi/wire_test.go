@@ -335,7 +335,10 @@ func TestWireShapeOfAnOverriddenAgeThreshold(t *testing.T) {
 		t.Fatal("fixture policyYAML no longer carries the `minRotationChances: 2` anchor line; fix this test")
 	}
 	resp := raw(t, yaml, request)
-	result, _ := resp["result"].(map[string]any)
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %v, want an object", resp["result"])
+	}
 	in, ok := result["inputs"].(map[string]any)
 	if !ok {
 		t.Fatalf("result.inputs = %v, want an object", result["inputs"])
@@ -345,5 +348,61 @@ func TestWireShapeOfAnOverriddenAgeThreshold(t *testing.T) {
 	}
 	if result["ageThreshold"] != "240h0m0s" {
 		t.Errorf("ageThreshold = %v, want the override echoed back", result["ageThreshold"])
+	}
+}
+
+// TestWireShapeOfAFallbackTGPAndATwoNodeFleet covers two fields the previous tests left
+// under-constrained (#266 review):
+//
+//   - tgpFallback: schedule.DrainFallback is 1h and the base fixture's own
+//     fleet.terminationGracePeriod is ALSO "1h", so once the fallback is substituted the "tgp"
+//     STRING is identical either way — the boolean flag is the only observable difference. A
+//     test built on the base fixture (as TestWireShapeOfTheDerivationInputs is) cannot exercise
+//     the true case at all, however it asserts the flag; a wrong wiring (or a hardcoded false)
+//     would stay green there and the page would present the controller's fixed fallback bound
+//     as if it were the operator's own terminationGracePeriod.
+//   - nodeCount vs. m: both are 1 in the base fixture, so a swap between the two fields is
+//     invisible unless the fleet is varied (m is pinned to 1 by policy validation and cannot be).
+func TestWireShapeOfAFallbackTGPAndATwoNodeFleet(t *testing.T) {
+	req := strings.Replace(request,
+		`    "terminationGracePeriod": "1h",
+`, "", 1)
+	if req == request {
+		t.Fatal("fixture request no longer carries the terminationGracePeriod line; fix this test")
+	}
+	req = strings.Replace(req,
+		`"nodes": [{"name": "node-a", "createdAt": "2026-01-01T00:00:00Z"}]`,
+		`"nodes": [{"name": "node-a", "createdAt": "2026-01-01T00:00:00Z"}, {"name": "node-b", "createdAt": "2026-01-01T00:00:00Z"}]`, 1)
+	if !strings.Contains(req, "node-b") {
+		t.Fatal("fixture request no longer carries the single-node nodes array; fix this test")
+	}
+
+	resp := raw(t, policyYAML, req)
+	if e, ok := resp["error"]; ok {
+		t.Fatalf("error = %v, want none", e)
+	}
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %v, want an object", resp["result"])
+	}
+	in, ok := result["inputs"].(map[string]any)
+	if !ok {
+		t.Fatalf("result.inputs = %v, want an object", result["inputs"])
+	}
+
+	// The string alone cannot prove the fallback fired (both read "1h0m0s"); the flag is what
+	// distinguishes "the fixture's own tGP" from "the controller's fixed fallback bound".
+	if in["tgpFallback"] != true {
+		t.Errorf("inputs.tgpFallback = %v, want true: terminationGracePeriod is omitted, so schedule.DrainFallback must be substituted", in["tgpFallback"])
+	}
+	if in["tgp"] != "1h0m0s" {
+		t.Errorf("inputs.tgp = %v, want \"1h0m0s\" (schedule.DrainFallback)", in["tgp"])
+	}
+
+	if in["nodeCount"] != 2.0 {
+		t.Errorf("inputs.nodeCount = %v, want 2 (the fleet has two nodes)", in["nodeCount"])
+	}
+	if in["m"] != 1.0 {
+		t.Errorf("inputs.m = %v, want 1 (surge.maxUnavailable, distinct from nodeCount)", in["m"])
 	}
 }
