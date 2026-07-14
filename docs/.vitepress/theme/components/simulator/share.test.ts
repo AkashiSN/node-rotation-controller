@@ -47,10 +47,14 @@ test('a large fleet round trips', async () => {
 })
 
 test('the default state encodes to a link short enough to paste', async () => {
-  // A link that a chat client wraps or truncates is not a link. This is the guard against a
-  // future payload change quietly making them unpasteable.
+  // Measured in a real browser, the default state currently encodes to 966 chars. The full
+  // URL is origin + path (~60 chars) + this value, and the practical floor for tools that
+  // still wrap or truncate long links (chat clients, GitHub comments) is ~2000 chars. The
+  // threshold below is not "a bit above today's number" — pinning it that tight would fail
+  // the test on any innocent tweak to the default policy YAML or fleet. It exists to catch a
+  // payload change that makes links unpasteable, with real headroom for the payload to grow.
   const value = await encodeState(DEFAULT_STATE)
-  assert.ok(value.length < 1000, `encoded to ${value.length} chars`)
+  assert.ok(value.length < 1500, `encoded to ${value.length} chars`)
   assert.match(value, /^[A-Za-z0-9_-]+$/) // base64url: no padding, nothing to percent-encode
 })
 
