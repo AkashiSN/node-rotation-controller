@@ -9,6 +9,10 @@
       "minimum": 1,
       "description": "v1 expects 2 for leader election (spec §5.1)."
     },
+    "priorityClassName": {
+      "type": "string",
+      "description": "PriorityClass for the CONTROLLER Pod; empty means the cluster default priority. Unrelated to placeholder.priorityClass, the surge placeholder's negative-priority class (spec §3.3). PodSpec.priorityClassName is a string, so a bare `true` or `123` is rejected here rather than rendering an invalid Deployment."
+    },
     "image": {
       "type": "object",
       "properties": {

@@ -27,6 +27,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "node-rotation-controller.serviceAccountName" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -40,7 +43,7 @@ spec:
             - --metrics-bind-address=:{{ .Values.metrics.service.port }}
             - --health-probe-bind-address=:8081
             - --placeholder-image={{ .Values.placeholder.image }}
-            - --priority-class={{ include "node-rotation-controller.priorityClassName" . }}
+            - --priority-class={{ include "node-rotation-controller.placeholderPriorityClassName" . }}
             {{- if .Values.logging.development }}
             - --zap-devel=true
             {{- end }}
