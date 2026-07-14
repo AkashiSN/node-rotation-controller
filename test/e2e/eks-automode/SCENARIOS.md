@@ -1320,6 +1320,11 @@ kubectl logs -n node-rotation-system deployment/soak-scraper > "$run/scrape.log"
 kubectl logs -n node-rotation-system deployment/soak-scraper --previous >> "$run/scrape.log"
 ```
 
+Append order does not matter: the analyzer stable-sorts `scrape.log` lines by
+their timestamp before any counter/gauge/gap processing, and a `seq` counter
+that starts over is reported as an explicit scraper-restart event with its
+wall-clock coverage gap.
+
 Then run the offline analyzer against the harvested run directory:
 
 ```bash

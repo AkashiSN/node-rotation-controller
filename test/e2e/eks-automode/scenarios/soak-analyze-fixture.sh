@@ -94,6 +94,43 @@ assert_in "$run/report.md" "case1 criterion 9 census clean (young replacements r
 assert_not_in "$run/report.md" "case1 must not warn about console logs" "0 lines parsed as ledger entries"
 
 # ===========================================================================
+# Case 2 — the runbook's EXACT harvest order: current log first, `--previous`
+#          APPENDED after it (SCENARIOS.md Harvest step)
+# ===========================================================================
+# In file order the older epoch's LOWER counter values follow the newer
+# epoch's higher ones; processed naively that reads as a controller counter
+# reset and double-counts (18 would become 30), and the duplicated seq
+# numbers would mask the scraper restart. The analyzer must chronologically
+# sort by ts first, report the restart explicitly, and keep the wall-clock
+# gap logic intact across it.
+#
+# True chronology (all pod-a, controller counters continuous — NO reset):
+#   previous epoch: seq1@01:00 v10, seq2@01:01 v12, [seq3 missing], seq4@01:03 v14
+#   scraper restarts (downtime 01:03 -> 01:06 = 180s, under the 5m rule)
+#   current epoch:  seq1@01:06 v15, seq2@01:07 v18
+# Correct total: 10+2+2+1+3 = 18 (the final counter value). File-order bug: 30.
+run2="$tmp/case2"; mkdir -p "$run2"
+cat > "$run2/snapshots.jsonl" <<'EOF'
+{"ts":"2026-07-14T01:10:00Z","kind":"nodeclaims","items":[{"metadata":{"name":"nc-young","creationTimestamp":"2026-07-14T01:00:00Z","labels":{"karpenter.sh/nodepool":"nodepool-soak"},"annotations":{}}}]}
+EOF
+: > "$run2/controller.log"
+cat > "$run2/scrape.log" <<'EOF'
+1 2026-07-14T01:06:00Z pod-a noderotation_completed_total{nodepool="nodepool-soak",outcome="success"} 15
+2 2026-07-14T01:07:00Z pod-a noderotation_completed_total{nodepool="nodepool-soak",outcome="success"} 18
+1 2026-07-14T01:00:00Z pod-a noderotation_completed_total{nodepool="nodepool-soak",outcome="success"} 10
+2 2026-07-14T01:01:00Z pod-a noderotation_completed_total{nodepool="nodepool-soak",outcome="success"} 12
+4 2026-07-14T01:03:00Z pod-a noderotation_completed_total{nodepool="nodepool-soak",outcome="success"} 14
+EOF
+
+python3 "$analyze" "$run2" > "$run2/stdout.log" 2> "$run2/stderr.log" \
+  || die "case2: analyzer exited non-zero: $(cat "$run2/stdout.log" "$run2/stderr.log")"
+assert_in "$run2/report.md" "case2 counters NOT double-counted across the appended --previous epoch" "success=18"
+assert_in "$run2/report.md" "case2 scraper restart reported explicitly" "scraper restart at 2026-07-14T01:06:00Z (seq 4 -> 1"
+assert_in "$run2/report.md" "case2 in-epoch wall-clock gap logic unaffected" "seq 3-3 missing"
+assert_in "$run2/report.md" "case2 criterion 5 counts the restart but passes (both gaps under 5m)" \
+  "| 5 scraper seq contiguous | 1 gap(s), 0 over 5m, 1 restart(s), 0 SCRAPE_ERROR | PASS |"
+
+# ===========================================================================
 # Case 3a — REAL --zap-devel console line: zero ledger entries + LOUD warning
 # ===========================================================================
 # The console line's trailing {...} IS valid JSON (so json.loads succeeds) but

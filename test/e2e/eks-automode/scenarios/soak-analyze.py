@@ -212,14 +212,25 @@ def load_ledger(run):
 
 
 def scan_scrape_log(run):
-    """One pass over scrape.log. Returns:
-      events    list of {seq,ts,pod,name,labels,value} for parsed metric lines
-      seq_ts    {seq: ts} for every seq seen (metric or SCRAPE_ERROR line) — used
-                to turn a seq gap into a wall-clock duration
+    """One pass over scrape.log, in CHRONOLOGICAL order. Returns:
+      events    list of {epoch,seq,ts,pod,name,labels,value} for metric lines
+      seq_ts    {(epoch, seq): ts} for every seq seen (metric or SCRAPE_ERROR
+                line) — used to turn a seq gap into a wall-clock duration
+      restarts  list of {ts, prev_seq, new_seq} — one per detected scraper
+                restart (the seq counter went BACKWARDS at a later timestamp;
+                the scraper's seq is a shell variable that restarts at 1)
       error_count  total SCRAPE_ERROR lines (both "no-controller-pod" and
                 "proxy" failure variants; soak-scraper.yaml)
-    """
-    events, seq_ts, error_count = [], {}, 0
+
+    The runbook harvests `kubectl logs` and then APPENDS `--previous` after it
+    (SCENARIOS.md Harvest step), so the OLDER scraper epoch lands AFTER the
+    newer one in file order. Processing in file order would misread the drop
+    back to the old epoch's lower counter values as a controller counter reset
+    (double-counting every completed rotation) and the duplicated seq numbers
+    would mask the restart gap. So all lines are stable-sorted by their ts
+    field first — RFC3339 UTC timestamps sort lexicographically, and the
+    stable sort keeps same-ts lines in their original relative order."""
+    entries = []
     for raw in open(f"{run}/scrape.log"):
         line = raw.rstrip("\n")
         if not line:
@@ -232,8 +243,17 @@ def scan_scrape_log(run):
             seq = int(seq_s)
         except ValueError:
             continue
-        seq_ts.setdefault(seq, ts)
-        rest = rest.strip()
+        entries.append((ts, seq, pod, rest.strip()))
+    entries.sort(key=lambda e: e[0])  # chronological; sort() is stable
+
+    events, seq_ts, restarts, error_count = [], {}, [], 0
+    epoch, last_seq = 0, None
+    for ts, seq, pod, rest in entries:
+        if last_seq is not None and seq < last_seq:
+            epoch += 1
+            restarts.append({"ts": ts, "prev_seq": last_seq, "new_seq": seq})
+        last_seq = seq
+        seq_ts.setdefault((epoch, seq), ts)
         if rest.startswith("SCRAPE_ERROR"):
             error_count += 1
             continue
@@ -241,14 +261,18 @@ def scan_scrape_log(run):
         if parsed is None:
             continue
         name, labels, val = parsed
-        events.append({"seq": seq, "ts": ts, "pod": pod, "name": name, "labels": labels, "value": val})
-    return events, seq_ts, error_count
+        events.append({"epoch": epoch, "seq": seq, "ts": ts, "pod": pod,
+                       "name": name, "labels": labels, "value": val})
+    return events, seq_ts, restarts, error_count
 
 
 def counter_totals(events):
     """{(pod, metric, sorted-label-tuple): total} — per-(pod,series) delta sums
     over the counter-family metrics only, reset-tolerant (v < prev ⇒ new epoch,
-    contributes v rather than a negative delta)."""
+    contributes v rather than a negative delta). Requires events in
+    CHRONOLOGICAL order (scan_scrape_log guarantees it): out-of-order input
+    would make a mere step back in time look like a counter reset and
+    double-count."""
     last, totals = {}, {}
     for e in events:
         if e["name"] not in COUNTER_METRICS:
@@ -277,8 +301,11 @@ def sum_counter(totals, name, label_filters=None):
 
 
 def gauge_per_scrape(events, name, label_filters=None):
-    """{seq: max-value-across-pods} for one gauge series filtered by exact label
-    match. See module docstring for why gauges use max-per-scrape, not deltas."""
+    """{(epoch, seq): max-value-across-pods} for one gauge series filtered by
+    exact label match. Keyed by (epoch, seq), not bare seq: after a scraper
+    restart the seq counter starts over at 1, so bare-seq keys would collapse
+    readings from different scrape rounds into one. See the module docstring
+    for why gauges use max-per-scrape, not deltas."""
     label_filters = label_filters or {}
     out = {}
     for e in events:
@@ -286,31 +313,50 @@ def gauge_per_scrape(events, name, label_filters=None):
             continue
         if any(e["labels"].get(k) != want for k, want in label_filters.items()):
             continue
-        out[e["seq"]] = max(out.get(e["seq"], e["value"]), e["value"])
+        key = (e["epoch"], e["seq"])
+        out[key] = max(out.get(key, e["value"]), e["value"])
     return out
 
 
 def seq_gap_report(seq_ts):
-    """Contiguous missing-seq ranges, each annotated with the wall-clock duration
-    spanned (bounding-ts after − bounding-ts before), so a gap can be judged
-    against spec rev4 §6 criterion 5's "no recorder gap > 5m"."""
-    if not seq_ts:
-        return []
-    seqs = sorted(seq_ts)
-    lo, hi = seqs[0], seqs[-1]
-    present = set(seqs)
-    missing = [n for n in range(lo, hi + 1) if n not in present]
-    ranges = []
-    for n in missing:
-        if ranges and n == ranges[-1][1] + 1:
-            ranges[-1] = (ranges[-1][0], n)
-        else:
-            ranges.append((n, n))
+    """Contiguous missing-seq ranges PER SCRAPER EPOCH, each annotated with the
+    wall-clock duration spanned (bounding-ts after − bounding-ts before), so a
+    gap can be judged against spec rev4 §6 criterion 5's "no recorder gap >
+    5m". A restart boundary is NOT a missing-seq gap (the seq legitimately
+    starts over); restart coverage gaps are computed by restart_gaps()."""
     out = []
-    for a, b in ranges:
-        before, after = seq_ts.get(a - 1), seq_ts.get(b + 1)
-        dur = (parse_ts(after) - parse_ts(before)).total_seconds() if before and after else None
-        out.append({"from": a, "to": b, "before_ts": before, "after_ts": after, "duration_s": dur})
+    for ep in sorted({e for e, _ in seq_ts}):
+        eseq = {s: t for (e, s), t in seq_ts.items() if e == ep}
+        seqs = sorted(eseq)
+        lo, hi = seqs[0], seqs[-1]
+        present = set(seqs)
+        missing = [n for n in range(lo, hi + 1) if n not in present]
+        ranges = []
+        for n in missing:
+            if ranges and n == ranges[-1][1] + 1:
+                ranges[-1] = (ranges[-1][0], n)
+            else:
+                ranges.append((n, n))
+        for a, b in ranges:
+            before, after = eseq.get(a - 1), eseq.get(b + 1)
+            dur = (parse_ts(after) - parse_ts(before)).total_seconds() if before and after else None
+            out.append({"epoch": ep, "from": a, "to": b,
+                        "before_ts": before, "after_ts": after, "duration_s": dur})
+    return out
+
+
+def restart_gaps(seq_ts, restarts):
+    """Wall-clock coverage gap around each scraper restart: last ts of the
+    epoch before it → first ts of the epoch after it. With `--previous`
+    harvested this equals the scraper's actual downtime; it counts against
+    criterion 5's "no recorder gap > 5m" exactly like a missing-seq gap."""
+    out = []
+    for i, r in enumerate(restarts):
+        prev_ep, new_ep = i, i + 1  # restarts[i] opened epoch i+1
+        prev_ts = max((t for (e, _), t in seq_ts.items() if e == prev_ep), default=None)
+        new_ts = min((t for (e, _), t in seq_ts.items() if e == new_ep), default=None)
+        dur = (parse_ts(new_ts) - parse_ts(prev_ts)).total_seconds() if prev_ts and new_ts else None
+        out.append({**r, "before_ts": prev_ts, "after_ts": new_ts, "duration_s": dur})
     return out
 
 
@@ -382,7 +428,7 @@ def main(run):
     rows, missing_claims = build_ledger_rows(ledger, births)
     margins_m = [fmt_min(r["margin_s"]) for r in rows]
 
-    events, seq_ts, scrape_errors = scan_scrape_log(run)
+    events, seq_ts, restarts, scrape_errors = scan_scrape_log(run)
     totals = counter_totals(events)
 
     # Criteria 1-3: counter sums. 1 and 2 are global (all pools) per the pinned
@@ -401,9 +447,13 @@ def main(run):
     short_lead = gauge_per_scrape(events, "noderotation_short_lead_nodes", {"nodepool": MAIN_POOL})
     short_lead_max = max(short_lead.values()) if short_lead else None
 
-    # Criterion 5: scraper seq contiguity + SCRAPE_ERROR count.
+    # Criterion 5: scraper seq contiguity (per epoch) + restart coverage gaps
+    # + SCRAPE_ERROR count. A gap of unknown duration (no bounding timestamp)
+    # is treated as over-5m: it cannot be shown to satisfy the criterion.
     gaps = seq_gap_report(seq_ts)
-    gaps_over_5m = [g for g in gaps if g["duration_s"] is not None and g["duration_s"] > 300]
+    rgaps = restart_gaps(seq_ts, restarts)
+    gaps_over_5m = [g for g in gaps + rgaps
+                    if g["duration_s"] is None or g["duration_s"] > 300]
 
     # Criterion 7a: the six pinned gauges, main pool only, at every scrape where
     # each is present.
@@ -455,11 +505,17 @@ def main(run):
     out.append("")
     out.append(f"success={success:.0f} (main-pool {success_main:.0f}) expired={expired:.0f} "
                 f"failure={failure:.0f} main-pool forceful_fallback={ff_main:.0f}")
-    out.append(f"scraper: SCRAPE_ERROR lines={scrape_errors}, seq gaps={len(gaps)}"
-               + (f" (>5m: {len(gaps_over_5m)})" if gaps else ""))
+    out.append(f"scraper: SCRAPE_ERROR lines={scrape_errors}, seq gaps={len(gaps)}, "
+                f"restarts={len(restarts)}"
+               + (f" (>5m: {len(gaps_over_5m)})" if gaps or rgaps else ""))
     for g in gaps:
         dur = f"{g['duration_s']:.0f}s" if g["duration_s"] is not None else "unknown (no bounding seq)"
-        out.append(f"  - seq {g['from']}-{g['to']} missing, bounded by {g['before_ts']} .. {g['after_ts']} ({dur})")
+        out.append(f"  - epoch {g['epoch']}: seq {g['from']}-{g['to']} missing, "
+                    f"bounded by {g['before_ts']} .. {g['after_ts']} ({dur})")
+    for g in rgaps:
+        dur = f"{g['duration_s']:.0f}s" if g["duration_s"] is not None else "unknown"
+        out.append(f"  - scraper restart at {g['ts']} (seq {g['prev_seq']} -> {g['new_seq']}, "
+                    f"coverage gap {g['before_ts']} .. {g['after_ts']}, {dur})")
     out.append("")
 
     out.append("## Criterion-4 short_lead_nodes (main pool)")
@@ -522,7 +578,8 @@ def main(run):
         f"{verdict(short_lead_max == 0, no_data=short_lead_max is None)} |"
     )
     out.append(f"| 5 scraper seq contiguous | {len(gaps)} gap(s), {len(gaps_over_5m)} over 5m, "
-                f"{scrape_errors} SCRAPE_ERROR | {verdict(len(gaps_over_5m) == 0)} |")
+                f"{len(restarts)} restart(s), {scrape_errors} SCRAPE_ERROR | "
+                f"{verdict(len(gaps_over_5m) == 0)} |")
     out.append(
         f"| 7a six gauges match pinned values (main pool) | "
         f"{len(gauge_mismatches)}/{len(GAUGE_TARGETS)} series mismatched | "
