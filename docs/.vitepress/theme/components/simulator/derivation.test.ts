@@ -43,6 +43,15 @@ test('sub-second components (Go can emit these) pass through untouched', () => {
 test('every symbol carries its formula, this run substituted into it, and its value', () => {
   const rows = buildDerivation(RESULT, LABELS)
   assert.deepEqual(rows.map(r => r.symbol), ['A', 't_rot', 't_rot_est', 'G', 'C'])
+  // The formulas are the specification's own (§1.4/§3.2), verbatim — pinned here so a
+  // corrupted or deleted formula fails a test, not just a reader's trust.
+  assert.deepEqual(rows.map(r => r.formula), [
+    'A = E − (K·P + t_rot)',
+    't_rot = readyTimeout + tGP + buffer',
+    't_rot_est = provisioningEstimate + drainEstimate',
+    'G = floor(((E − t_rot) − A) / P)',
+    'C = m · ceil(D / (t_rot_est + cooldownAfter))',
+  ])
   assert.deepEqual(rows.map(r => r.value), ['310h43m', '1h17m', '15m', '2', '10'])
   assert.deepEqual(rows.map(r => r.substitution), [
     '480h − (2·84h + 1h17m)',
@@ -87,6 +96,13 @@ test('a response with no inputs still renders — the values, and no equations',
   const rows = buildDerivation({ ...RESULT, inputs: undefined }, LABELS)
   assert.deepEqual(rows.map(r => r.value), ['310h43m', '1h17m', '15m', '2', '10'])
   assert.deepEqual(rows.map(r => r.substitution), ['', '', '', '', ''])
-  // The symbolic formulas do not depend on the run, so they stay.
-  assert.deepEqual(rows.map(r => r.formula.startsWith(r.symbol)), [true, true, true, true, true])
+  // The symbolic formulas do not depend on the run, so they stay — the exact same five as
+  // when inputs ARE present.
+  assert.deepEqual(rows.map(r => r.formula), [
+    'A = E − (K·P + t_rot)',
+    't_rot = readyTimeout + tGP + buffer',
+    't_rot_est = provisioningEstimate + drainEstimate',
+    'G = floor(((E − t_rot) − A) / P)',
+    'C = m · ceil(D / (t_rot_est + cooldownAfter))',
+  ])
 })

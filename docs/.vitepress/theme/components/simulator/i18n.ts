@@ -63,8 +63,6 @@ export interface Labels {
     overrideNote: string
     /** Marks a tGP that is the controller's fixed fallback, not the operator's value. */
     fallbackMark: string
-    /** The accessible name of the value column. */
-    value: string
   }
   timeline: string
   horizonInvalid: string
@@ -201,9 +199,8 @@ const en: Labels = {
     specDerivation: '§3.2 (the derivation)',
   },
   derivation: {
-    overrideNote: 'the value given in spec.ageThreshold — `auto` derives E − (K·P + t_rot)',
+    overrideNote: 'the value given in spec.ageThreshold — auto derives E − (K·P + t_rot)',
     fallbackMark: 'fallback',
-    value: 'Value',
   },
   timeline: 'Timeline',
   horizonInvalid: 'The horizon is empty or invalid — start must be strictly before end.',
@@ -348,7 +345,6 @@ const ja: Labels = {
   derivation: {
     overrideNote: 'spec.ageThreshold の指定値です（auto なら E − (K·P + t_rot) から導出されます）',
     fallbackMark: 'フォールバック',
-    value: '値',
   },
   timeline: 'タイムライン',
   horizonInvalid: 'シミュレート期間が空か不正です — 開始は終了より厳密に前である必要があります。',

@@ -33,7 +33,7 @@ const rows = computed(() => buildDerivation(props.result, {
           <code v-if="r.substitution" class="sim-derivation-sub">{{ r.substitution }}</code>
           <span v-else-if="r.note" class="sim-derivation-note">{{ r.note }}</span>
         </dd>
-        <dd class="sim-derivation-value" :aria-label="t.derivation.value">{{ r.value }}</dd>
+        <dd class="sim-derivation-value">{{ r.value }}</dd>
       </div>
     </dl>
 

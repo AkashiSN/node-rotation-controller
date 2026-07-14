@@ -143,6 +143,16 @@ describe('the symbols the strip reports are defined ON the page', () => {
     const rows = w.findAll('.sim-derivation-row')
     expect(rows.map(r => r.find('.sim-symbol-name').text()))
       .toEqual(['A', 't_rot', 't_rot_est', 'G', 'C'])
+    // The symbolic formula element itself — the thing #266 adds — not just its class name in
+    // a selector elsewhere. Deleting <code class="sim-derivation-formula"> or renaming it
+    // must fail here.
+    expect(rows.map(r => r.find('.sim-derivation-formula').text())).toEqual([
+      'A = E − (K·P + t_rot)',
+      't_rot = readyTimeout + tGP + buffer',
+      't_rot_est = provisioningEstimate + drainEstimate',
+      'G = floor(((E − t_rot) − A) / P)',
+      'C = m · ceil(D / (t_rot_est + cooldownAfter))',
+    ])
     expect(rows.map(r => r.find('.sim-derivation-sub').text())).toEqual([
       '480h − (2·84h + 1h17m)',
       '15m + 1h + 2m',
@@ -163,6 +173,13 @@ describe('the symbols the strip reports are defined ON the page', () => {
     expect(rows[0].find('.sim-derivation-sub').exists()).toBe(false)
     expect(rows[0].find('.sim-derivation-note').text()).toContain('spec.ageThreshold')
     expect(rows[0].find('.sim-derivation-value').text()).toBe('240h')
+  })
+
+  test('all five symbols get a definition, not just the two links to the spec', () => {
+    const defs = mount(SymbolReference).findAll('.sim-symbol')
+    expect(defs).toHaveLength(5)
+    expect(defs.map(d => d.find('.sim-symbol-name').text()))
+      .toEqual(['A', 't_rot', 't_rot_est', 'G', 'C'])
   })
 
   test('it links to the specification — and a Japanese reader lands on the JAPANESE chapter', () => {

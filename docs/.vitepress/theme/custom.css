@@ -204,6 +204,10 @@
   font-family: var(--vp-font-family-mono); font-weight: 600; font-size: 1.05rem;
   color: var(--vp-c-text-1); white-space: nowrap; justify-self: end;
 }
+/* Decorative only: the "=" is generated content so the value's own text content stays the
+   bare number — an equation reads correctly (sighted or not), but nothing that copies or
+   asserts on the value's text ever sees the operator. */
+.policy-simulator .sim-derivation-value::before { content: "= "; color: var(--vp-c-text-2); font-weight: 400; }
 /* Narrow: the three tracks collapse to two rows rather than squeezing the equation into a
    column it cannot fit. */
 @media (max-width: 640px) {
