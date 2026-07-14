@@ -32,6 +32,21 @@ affinity:
               operator: In
               values: ["general-purpose", "system"]
 
+# Scenario P (issue #118) adds two more rotated pools, nodepool-soak and
+# nodepool-soak-epi. This allowlist already excludes them by construction (it
+# only ever admits "general-purpose"/"system"), so no change was needed here.
+
+# Give the controller a priority the cluster won't preempt for lower-priority
+# soak/scraper workload during the unattended 12h Scenario P run: issue #270
+# found that a Guaranteed-QoS but priority-0 controller Pod can still be
+# evicted under node pressure, which would show up as a false restartCount>0
+# and break the soak's PASS criterion (restartCount==0 over 12h, SCENARIOS.md).
+# system-cluster-critical is a built-in PriorityClass (merged for this overlay
+# in PR #271). If admission rejects it outside kube-system at install time, fall
+# back to applying a dedicated PriorityClass (value: 100000, see SCENARIOS.md
+# Task 8) and point this at that name instead.
+priorityClassName: system-cluster-critical
+
 # Human-readable logs so the rotation lifecycle is easy to follow.
 logging:
   development: true

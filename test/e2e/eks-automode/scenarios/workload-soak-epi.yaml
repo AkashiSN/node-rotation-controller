@@ -1,0 +1,28 @@
+# Scenario P epilogue workload: single pod; scaled 0→1 on epilogue morning;
+# its node ages frozen.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soak-epi-workload
+  namespace: default
+  labels:
+    app: soak-epi-workload
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: soak-epi-workload
+  template:
+    metadata:
+      labels:
+        app: soak-epi-workload
+    spec:
+      nodeSelector:
+        noderotation-soak-epi/pool: epi
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: "1500m"
+              memory: "512Mi"
