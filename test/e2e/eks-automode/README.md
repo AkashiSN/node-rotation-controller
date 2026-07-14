@@ -11,7 +11,7 @@ It is the **real-cloud companion** to the KWOK harness:
 | Harness | Cost | Covers |
 |---------|------|--------|
 | [`test/e2e/kwok/`](../kwok/) (#92) | free, CI-reproducible | Karpenter v1 contract on virtual nodes |
-| `test/e2e/eks-automode/` (this) (#93) | **real AWS spend** | same-AZ surge + zonal-EBS rebind, `readyTimeout` rollback, NodePool `limits` gating, multi-NodePool confinement, PDB-respecting drain, `do-not-disrupt`, `expired` outcome, `expireAfter` backstop margin (genuine same-AZ capacity-shortage/ICE and a full tight-race soak remain open — #109) |
+| `test/e2e/eks-automode/` (this) (#93) | **real AWS spend** | same-AZ surge + zonal-EBS rebind, `readyTimeout` rollback, NodePool `limits` gating, multi-NodePool confinement, PDB-respecting drain, `do-not-disrupt`, `expired` outcome, `expireAfter` backstop margin, full tight-race soak — covered by Scenario P (see SCENARIOS.md) (genuine same-AZ capacity-shortage/ICE remains open — #109) |
 
 > **This is test-only infrastructure.** It lives entirely under `test/e2e/` and
 > does not touch the controller (`internal/`, `cmd/`). EKS Auto Mode provides
@@ -141,7 +141,7 @@ row says otherwise:
 | §7.2, §3.3 | Same-AZ surge node lets the CSI driver re-attach a zonal EBS volume (zonal-PV rebind) | validated |
 | §3.2, Refs #81 | Surge `readyTimeout` rollback; NodePool `limits` exhaustion gates a rotation | validated — but a **genuine** same-AZ capacity shortage (ICE) was stood in by a short `readyTimeout`; real ICE still open (#109) |
 | Refs #81 | Rollback cleanup: placeholder deleted, candidate unfrozen/uncordoned, `noderotation_completed_total{outcome="failure"\|"expired"}` increments | validated |
-| R6 | `expireAfter` stays a backstop the controller's lead time wins against | validated via a **scaled** multi-rotation soak; a full multi-hour tight-race soak remains deferred (#109) |
+| R6 | `expireAfter` stays a backstop the controller's lead time wins against | validated via a **scaled** multi-rotation soak; the full multi-hour tight-race soak is covered by Scenario P (see SCENARIOS.md) |
 
 Results are recorded in spec
 [§7.2 Validated Assumptions](../../../docs/specification/07-risks.md#72-validated-assumptions);
