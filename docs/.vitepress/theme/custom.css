@@ -179,14 +179,37 @@
 .policy-simulator .sim-table td:first-child input { min-width: 4.5rem; }
 .policy-simulator .sim-table td:nth-child(2) input { min-width: 28ch; }
 
-/* Forecast strip: the numeric answer, as stat tiles rather than a thin row of numbers. */
-.policy-simulator .sim-strip { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.5rem; }
-.policy-simulator .sim-strip > div {
-  border: 1px solid var(--vp-c-divider); border-radius: 8px; background: var(--vp-c-bg-soft);
-  padding: 0.35rem 0.9rem 0.45rem; min-width: 6.5rem;
+/* The forecast strip IS the derivation (#266): symbol | formula over its substitution | value.
+   The value column is right-aligned and shares one track, so the results still read as a
+   column — a reader who wants only the numbers never has to parse an equation. */
+.policy-simulator .sim-derivation {
+  display: grid; gap: 0.35rem; margin: 0 0 0.75rem;
+  border: 1px solid var(--vp-c-divider); border-radius: 8px;
+  background: var(--vp-c-bg-soft); padding: 0.6rem 0.9rem;
 }
-.policy-simulator .sim-strip dt { color: var(--vp-c-text-2); font-size: 0.7rem; font-family: var(--vp-font-family-mono); white-space: nowrap; }
-.policy-simulator .sim-strip dd { margin: 0; font-weight: 600; font-size: 1.1rem; color: var(--vp-c-text-1); }
+.policy-simulator .sim-derivation-row {
+  display: grid; grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+  align-items: baseline; gap: 0.25rem 0.9rem;
+}
+.policy-simulator .sim-derivation-row dd { margin: 0; min-width: 0; }
+.policy-simulator .sim-derivation-formula,
+.policy-simulator .sim-derivation-sub {
+  display: block; font-family: var(--vp-font-family-mono); background: none; padding: 0;
+  overflow-wrap: anywhere;
+}
+.policy-simulator .sim-derivation-formula { color: var(--vp-c-text-2); font-size: 0.75rem; }
+.policy-simulator .sim-derivation-sub { color: var(--vp-c-text-1); font-size: 0.85rem; }
+.policy-simulator .sim-derivation-note { color: var(--vp-c-text-2); font-size: 0.8rem; }
+.policy-simulator .sim-derivation-value {
+  font-family: var(--vp-font-family-mono); font-weight: 600; font-size: 1.05rem;
+  color: var(--vp-c-text-1); white-space: nowrap; justify-self: end;
+}
+/* Narrow: the three tracks collapse to two rows rather than squeezing the equation into a
+   column it cannot fit. */
+@media (max-width: 640px) {
+  .policy-simulator .sim-derivation-row { grid-template-columns: 5.5rem minmax(0, 1fr); }
+  .policy-simulator .sim-derivation-value { grid-column: 2; justify-self: start; }
+}
 
 /* Chart header: title left, legend right, so the key is beside the picture it explains. */
 .policy-simulator .sim-chart-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; }
@@ -256,12 +279,6 @@
 @media (max-width: 640px) { .policy-simulator .sim-symbol { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; } }
 .policy-simulator .sim-symbol dd { margin: 0; }
 .policy-simulator .sim-symbol-name { font-weight: 600; color: var(--vp-c-text-1); }
-/* The formula is the spec's own, and identical in every locale: it is code, and it owns its
-   own line so a long one never wraps into the prose beside it. */
-.policy-simulator .sim-symbol-formula {
-  display: block; font-family: var(--vp-font-family-mono); font-size: 0.9em;
-  color: var(--vp-c-text-1); overflow-x: auto;
-}
 .policy-simulator .sim-symbol-def { display: block; color: var(--vp-c-text-2); line-height: 1.5; margin-top: 0.1rem; }
 
 /* The policy form's groups: window / derivation / surge, the policy's own structure. The

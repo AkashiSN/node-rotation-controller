@@ -1,11 +1,20 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { type SimResult } from './model.ts'
+import { buildDerivation } from './derivation.ts'
 import { useLabels } from './i18n.ts'
 import FindingList from './FindingList.vue'
 import SymbolReference from './SymbolReference.vue'
 
-defineProps<{ result: SimResult }>()
+const props = defineProps<{ result: SimResult }>()
 const t = useLabels()
+
+// The rows are DATA (derivation.ts): the component renders them and computes nothing. The
+// value on each row is the wasm module's own — see derivation.ts for why that matters.
+const rows = computed(() => buildDerivation(props.result, {
+  overrideNote: t.value.derivation.overrideNote,
+  fallbackMark: t.value.derivation.fallbackMark,
+}))
 </script>
 
 <template>
@@ -13,12 +22,19 @@ const t = useLabels()
     <h3>{{ t.forecast }}</h3>
     <p class="sim-hint">{{ t.forecastHint }}</p>
 
-    <dl class="sim-strip">
-      <div><dt>A (ageThreshold)</dt><dd>{{ result.ageThreshold }}</dd></div>
-      <div><dt>t_rot</dt><dd>{{ result.tRot }}</dd></div>
-      <div><dt>t_rot_est</dt><dd>{{ result.tRotEstimate }}</dd></div>
-      <div><dt>G</dt><dd>{{ result.g }}</dd></div>
-      <div><dt>C</dt><dd>{{ result.c }}</dd></div>
+    <!-- The derivation, not only its result: the inputs a reader would otherwise have to
+         scroll to find — and P, D and a fallback tGP, which are written nowhere in the
+         manifest at all — appear inside the formula that used them (#266). -->
+    <dl class="sim-derivation">
+      <div v-for="r in rows" :key="r.symbol" class="sim-derivation-row">
+        <dt><code class="sim-symbol-name">{{ r.symbol }}</code></dt>
+        <dd>
+          <code class="sim-derivation-formula">{{ r.formula }}</code>
+          <code v-if="r.substitution" class="sim-derivation-sub">{{ r.substitution }}</code>
+          <span v-else-if="r.note" class="sim-derivation-note">{{ r.note }}</span>
+        </dd>
+        <dd class="sim-derivation-value" :aria-label="t.derivation.value">{{ r.value }}</dd>
+      </div>
     </dl>
 
     <!-- Beside the numbers, not on another page: the strip is where a reader first meets

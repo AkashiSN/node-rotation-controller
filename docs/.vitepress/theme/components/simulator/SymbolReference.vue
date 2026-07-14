@@ -1,11 +1,9 @@
 <script setup lang="ts">
-// The symbols the forecast strip reports — A, t_rot, t_rot_est, G, C — with the formula each
-// is derived from.
+// The symbols the forecast strip reports — A, t_rot, t_rot_est, G, C — with what each MEANS.
 //
-// They appeared on the page as bare <dt>s with no definition anywhere, so the strip answered
-// a question the visitor had no way to ask (#261). This is a POINTER, not a second source of
-// truth: the formulas are restated because a reader needs them where the numbers are, and
-// every entry links back to the specification, which remains the one place they are defined.
+// The strip itself carries the formulas now (#266) — this file's job is the meanings the
+// strip has no room for, plus a POINTER back to the specification, which remains the one
+// place both the symbols and their derivation are defined.
 import { computed } from 'vue'
 import { useData, withBase } from 'vitepress'
 import { useLabels } from './i18n.ts'
@@ -23,14 +21,12 @@ const symbolsHref = computed(() =>
 const derivationHref = computed(() =>
   withBase(`${specBase.value}/03-design${ja.value ? '#32-候補選定' : '#32-candidate-selection'}`))
 
-// The formulas are CODE, not prose: they are identical in every locale, and they are the
-// spec's own (§1.4, §3.2). Only the definition beside them is translated.
 const rows = computed(() => [
-  { symbol: 'A', formula: 'A = E − (K·P + t_rot)', def: t.value.symbols.defs.a },
-  { symbol: 't_rot', formula: 't_rot = readyTimeout + tGP + buffer', def: t.value.symbols.defs.tRot },
-  { symbol: 't_rot_est', formula: 't_rot_est = provisioningEstimate + drainEstimate', def: t.value.symbols.defs.tRotEst },
-  { symbol: 'G', formula: 'G = floor(((E − t_rot) − A) / P)', def: t.value.symbols.defs.g },
-  { symbol: 'C', formula: 'C = m · ceil(D / (t_rot_est + cooldownAfter))', def: t.value.symbols.defs.c },
+  { symbol: 'A', def: t.value.symbols.defs.a },
+  { symbol: 't_rot', def: t.value.symbols.defs.tRot },
+  { symbol: 't_rot_est', def: t.value.symbols.defs.tRotEst },
+  { symbol: 'G', def: t.value.symbols.defs.g },
+  { symbol: 'C', def: t.value.symbols.defs.c },
 ])
 </script>
 
@@ -42,7 +38,6 @@ const rows = computed(() => [
       <div v-for="r in rows" :key="r.symbol" class="sim-symbol">
         <dt><code class="sim-symbol-name">{{ r.symbol }}</code></dt>
         <dd>
-          <code class="sim-symbol-formula">{{ r.formula }}</code>
           <span class="sim-symbol-def">{{ r.def }}</span>
         </dd>
       </div>
