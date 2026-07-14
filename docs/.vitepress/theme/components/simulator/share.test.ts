@@ -9,7 +9,9 @@ import { randomBytes } from 'node:crypto'
 import { test } from 'node:test'
 
 import { DEFAULT_ENV, DEFAULT_FLEET, DEFAULT_POLICY_YAML, horizonForCoverage } from './model.ts'
-import { decodeState, encodeState, shareSupported, type ShareState } from './share.ts'
+import {
+  decodeState, encodeState, MAX_VALUE_CHARS, shareSupported, ShareTooLargeError, type ShareState,
+} from './share.ts'
 
 const DEFAULT_STATE: ShareState = {
   policy: DEFAULT_POLICY_YAML,
@@ -114,13 +116,48 @@ test('a genuinely valid, oversized payload is refused by the ceiling alone', asy
   // (via a padded policy field) that its encoded value exceeds MAX_VALUE_CHARS. If the ceiling
   // were deleted, this exact payload would decode successfully (a round trip), so a failure
   // here can only be the length check itself, not inflate(), JSON.parse(), or validate().
+  //
+  // encodeState() now refuses to produce this value itself (see the encoder-side tests
+  // below), so it is forged directly here, the same way encodeState builds it internally —
+  // that keeps this test isolated to decodeState's own length check.
   const policy = DEFAULT_POLICY_YAML + randomBytes(15000).toString('hex')
   const state = { ...DEFAULT_STATE, policy }
-  const value = await encodeState(state)
+  const value = await deflated(JSON.stringify({ v: 1, ...state }))
   assert.ok(value.length > 16384, `expected an oversized value, got ${value.length} chars`)
   const got = await decodeState(value)
   assert.ok('error' in got)
   assert.equal((got as { error: { code: string } }).error.code, 'damaged')
+})
+
+test('encodeState refuses a state whose own encoded value would exceed decodeState\'s ceiling', async () => {
+  // The producer must not be able to mint a link the consumer refuses on arrival. This is the
+  // reviewer's exact reproduction: nothing here is malformed — it is a fully valid state, just
+  // grown past MAX_VALUE_CHARS by a large (but legitimate) policy YAML.
+  const policy = DEFAULT_POLICY_YAML + randomBytes(15000).toString('hex')
+  const state = { ...DEFAULT_STATE, policy }
+  // Prove the state really is oversized independent of encodeState's own check: forge the
+  // value the same way encodeState builds it internally ({v: VERSION, ...state}, deflated,
+  // base64url), and confirm ITS length crosses MAX_VALUE_CHARS — imported here rather than
+  // re-typed as a literal, so a regression that moves the encoder's and decoder's ceilings
+  // apart (e.g. bumping only one of the two copies) fails this assertion.
+  const forged = await deflated(JSON.stringify({ v: 1, ...state }))
+  assert.ok(forged.length > MAX_VALUE_CHARS, `expected an oversized value, got ${forged.length} chars`)
+  await assert.rejects(() => encodeState(state), ShareTooLargeError)
+})
+
+test('a state that lands at or under the ceiling still encodes, and round trips through decodeState', async () => {
+  // The other half of "same constant": the boundary itself must stay usable. If encodeState's
+  // check were off by even a sign, a state decodeState would happily accept could be rejected
+  // by the producer for no reason at all.
+  //
+  // deflate-raw on non-repetitive hex input is close to size-preserving, so trimming the
+  // padding well below the oversized case above reliably lands under the ceiling.
+  const policy = DEFAULT_POLICY_YAML + randomBytes(10000).toString('hex')
+  const state = { ...DEFAULT_STATE, policy }
+  const value = await encodeState(state)
+  assert.ok(value.length <= MAX_VALUE_CHARS, `expected a value at or under the ceiling, got ${value.length} chars`)
+  const got = await decodeState(value)
+  assert.deepEqual(got, { state })
 })
 
 test('a decompression bomb is capped by OUTPUT size, not buffered whole', async () => {

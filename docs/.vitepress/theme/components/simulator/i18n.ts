@@ -52,6 +52,7 @@ export interface Labels {
     copied: string
     copyFailed: string
     buildFailed: string
+    tooBig: string
     unsupported: string
     badLink: string
     badLinkVersion: string
@@ -160,6 +161,7 @@ const en: Labels = {
     copied: 'Copied',
     copyFailed: 'Could not reach the clipboard — the link is in the address bar.',
     buildFailed: 'Could not build the share link.',
+    tooBig: 'This is too large to fit in a share link — try a smaller fleet or policy YAML.',
     unsupported: 'This browser cannot build a share link (it lacks the Compression Streams API).',
     badLink: 'Could not read the shared link, so this is the default policy and fleet.',
     badLinkVersion: 'This shared link comes from a newer version of the simulator, so this is the default policy and fleet.',
@@ -275,6 +277,7 @@ const ja: Labels = {
     copied: 'コピーしました',
     copyFailed: 'クリップボードに書き込めませんでした。アドレスバーのリンクをコピーしてください。',
     buildFailed: '共有リンクを作れませんでした。',
+    tooBig: 'この内容は共有リンクに収まらないほど大きすぎます。ノード群やポリシー YAML を小さくしてください。',
     unsupported: 'このブラウザーでは共有リンクを作れません（Compression Streams API 非対応）。',
     badLink: '共有リンクを読み取れませんでした。既定のポリシーとノード群を表示しています。',
     badLinkVersion: 'この共有リンクは新しいバージョンのシミュレーターのものです。既定のポリシーとノード群を表示しています。',

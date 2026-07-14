@@ -4,6 +4,7 @@
 // a coverage choice and a hand-typed instant could disagree with no way back. These pin the
 // whole of it.
 import { mount } from '@vue/test-utils'
+import { randomBytes } from 'node:crypto'
 import { describe, expect, test, vi } from 'vitest'
 import { ref } from 'vue'
 
@@ -197,6 +198,31 @@ describe('a run is shareable as a link', () => {
     const value = new URL(written[0]).searchParams.get('s')!
     const back = await decodeState(value)
     expect('state' in back && back.state.policy).toBe(DEFAULT_POLICY_YAML)
+  })
+
+  test('an oversized state fails to build a link, and never touches the clipboard or the address bar', async () => {
+    // The reviewer's exact reproduction: a large-but-fully-valid policy YAML (nothing a
+    // cluster would reject) grows the state past encodeState's own ceiling. The button must
+    // not be allowed to claim success — no replaceState, no clipboard write, no "Copied".
+    visit('')
+    const written: string[] = []
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (v: string) => { written.push(v) } },
+    })
+    const w = mountPage()
+    await flush()
+    const vm = w.vm as any
+    vm.policyYAML = DEFAULT_POLICY_YAML + randomBytes(15000).toString('hex')
+    await w.vm.$nextTick()
+    const searchBefore = window.location.search
+
+    await shareButton(w).trigger('click')
+    await flush()
+
+    expect(written).toHaveLength(0)
+    expect(window.location.search).toBe(searchBefore)
+    expect(w.text()).toContain('too large to fit in a share link')
   })
 
   test('an unknown link VERSION gets its own message, distinct from "damaged"', async () => {

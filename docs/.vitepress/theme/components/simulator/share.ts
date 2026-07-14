@@ -19,11 +19,13 @@ export const SHARE_PARAM = 's'
  *  rather than silently misread as v1. */
 const VERSION = 1
 
-/** A generous ceiling on the `?s=` value itself. The default link is 966 chars and a
- *  50-node fleet (FleetInput.vue's own generator cap) sits far below this — anything past
- *  it is already unpasteable, so it is refused before a decompression stream is even
- *  opened for it. */
-const MAX_VALUE_CHARS = 16384
+/** A generous ceiling on the `?s=` value itself, shared by BOTH ends of the codec.
+ *  decodeState() refuses anything past it before a decompression stream is even opened; the
+ *  default link is 966 chars and a 50-node fleet (FleetInput.vue's own generator cap) sits
+ *  far below it, so anything past it is already unpasteable. encodeState() enforces the
+ *  SAME constant on its own output — a producer that could exceed the consumer's ceiling
+ *  would mint links the page that made them refuses to open. */
+export const MAX_VALUE_CHARS = 16384
 
 /** deflate-raw reaches ~1000:1 on repetitive input, so an innocuous-looking `?s=` well
  *  under MAX_VALUE_CHARS can still inflate to gigabytes on the visitor's main thread. The
@@ -50,16 +52,31 @@ export type DecodeError = { code: 'damaged' | 'version'; message: string }
 
 export type DecodeResult = { state: ShareState } | { error: DecodeError }
 
+/** Thrown by encodeState() when the encoded value would exceed MAX_VALUE_CHARS — a distinct
+ *  type, not a generic Error, so a caller can show a specific "too big" message rather than
+ *  the generic "could not build" one without resorting to matching English error text. */
+export class ShareTooLargeError extends Error {}
+
 /** Is the Compression Streams API present? Gates the button. SSR-safe: no window access. */
 export function shareSupported(): boolean {
   return typeof CompressionStream === 'function' && typeof DecompressionStream === 'function'
 }
 
-/** Encode to the value of `?s=`. Rejects only where the codec itself is unavailable. */
+/** Encode to the value of `?s=`. `encodeState` is allowed to throw — unlike decodeState, it
+ *  is never handed a stranger's input, only the page's own current state — but it must never
+ *  succeed at producing a link decodeState itself would refuse. Two failure modes: the codec
+ *  is unavailable, or the encoded value would exceed MAX_VALUE_CHARS (a large-but-otherwise-
+ *  valid policy YAML or fleet can grow the state past what a URL can carry). */
 export async function encodeState(state: ShareState): Promise<string> {
   if (!shareSupported()) throw new Error('this browser cannot compress the link')
   const json = JSON.stringify({ v: VERSION, ...state })
-  return base64urlEncode(await deflate(json))
+  const value = base64urlEncode(await deflate(json))
+  // Same ceiling, same constant, as decodeState's own length check below — a link the
+  // producer will hand out must be a link the consumer will accept.
+  if (value.length > MAX_VALUE_CHARS) {
+    throw new ShareTooLargeError(`encoded state is ${value.length} chars, over the ${MAX_VALUE_CHARS}-char ceiling`)
+  }
+  return value
 }
 
 /** Decode `?s=`. NEVER throws — an unreadable link is a value the page renders, not a crash. */

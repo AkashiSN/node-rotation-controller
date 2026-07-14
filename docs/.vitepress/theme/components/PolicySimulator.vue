@@ -9,7 +9,9 @@ import { projectPolicy } from './simulator/policyYaml.ts'
 import { isValidTimezone } from './simulator/timeutil.ts'
 import { useWasm } from './simulator/useWasm.ts'
 import { useLabels } from './simulator/i18n.ts'
-import { SHARE_PARAM, decodeState, encodeState, shareSupported, type ShareState } from './simulator/share.ts'
+import {
+  SHARE_PARAM, decodeState, encodeState, shareSupported, ShareTooLargeError, type ShareState,
+} from './simulator/share.ts'
 import PolicyInput from './simulator/PolicyInput.vue'
 import FleetInput from './simulator/FleetInput.vue'
 import EnvInput from './simulator/EnvInput.vue'
@@ -81,16 +83,20 @@ function currentState(): ShareState {
 
 async function copyShareLink() {
   // Building the link and copying it are split into two tries on purpose: encodeState() can
-  // reject on its own (the button is disabled when the Compression Streams API is missing,
+  // reject on its own — the button is disabled when the Compression Streams API is missing,
   // but a stale render or a runtime that changes mid-session must still land on a message,
-  // not an unhandled rejection) — and when IT fails, replaceState below never ran, so the
-  // link is NOT in the address bar. Telling the user to copy it from there would be false.
+  // not an unhandled rejection; and a large-but-valid state (a big fleet or policy YAML) can
+  // encode past the ceiling decodeState() itself enforces, which encodeState() now refuses to
+  // produce at all — and when EITHER fails, replaceState below must never run, so the link is
+  // NOT in the address bar. Telling the user to copy it from there would be false.
   let url: URL
   try {
     url = new URL(window.location.href)
     url.searchParams.set(SHARE_PARAM, await encodeState(currentState()))
-  } catch {
-    note(t.value.share.buildFailed)
+  } catch (err) {
+    // ShareTooLargeError gets its own, actionable message — "too big" is something a visitor
+    // can fix by trimming the fleet or the YAML; the generic buildFailed message is not.
+    note(err instanceof ShareTooLargeError ? t.value.share.tooBig : t.value.share.buildFailed)
     return
   }
   try {
