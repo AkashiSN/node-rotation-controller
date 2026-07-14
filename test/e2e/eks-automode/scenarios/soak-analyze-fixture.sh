@@ -90,7 +90,7 @@ assert_in "$run/report.md" "case1 criterion 1 expired PASS" "| 1 expired==0 | 0 
 assert_in "$run/report.md" "case1 success survives the reset (pod-a 14 + pod-b 3)" "success=17"
 assert_in "$run/report.md" "case1 seq gap reported" "seq 3-3 missing"
 assert_in "$run/report.md" "case1 criterion 8 margins PASS" "| 8 all margins>0 | min 0.5m | PASS |"
-assert_in "$run/report.md" "case1 criterion 9 census clean (young replacements right-censored)" "| 9 end census clean | 0 stale, 0 failed | PASS |"
+assert_in "$run/report.md" "case1 criterion 9 census clean (young replacements right-censored)" "| 9 end census (claims: stale/failed) | 0 stale, 0 failed | PASS |"
 assert_not_in "$run/report.md" "case1 must not warn about console logs" "0 lines parsed as ledger entries"
 
 # ===========================================================================

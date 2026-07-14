@@ -24,11 +24,13 @@ starts a new epoch and contributes its own value rather than a negative delta
 principle move without a restart"). Absent series are a 0 baseline.
 
 Gauges (the criterion-4 and 7a series) are the opposite: they are read as
-instantaneous per-scrape values, never delta-summed. Only the leading replica
-(replicaCount=2, leader election) actively Sets most rotation-state gauges; a
-standby's registry reports the Go zero-value or omits the series, so this
-script takes the MAX across pods at each scrape round to recover the true
-value regardless of which replica currently leads.
+instantaneous per-scrape values, never delta-summed. The Scenario P overlay
+(scenarios/controller-values.yaml) runs replicaCount: 1, so a scrape round
+normally sees exactly one pod; the per-pod handling and the MAX-across-pods
+per scrape round are defensive, for the off-nominal case where more than one
+controller pod exists (e.g. a rollout overlap) — only the leader actively
+Sets the rotation-state gauges, a standby's registry reports the Go
+zero-value or omits the series, and MAX recovers the leader's value.
 """
 import json
 import re
@@ -590,8 +592,13 @@ def main(run):
     else:
         out.append("| 8 all margins>0 | no rotations | FAIL |")
     census_ok = cen["census_ts"] is not None and not cen["old_no_inflight"] and not cen["failed"]
+    # "claims:" scopes the row honestly: the spec's criterion 9 also covers
+    # stale anchors and orphan placeholders, which this analyzer does not
+    # evaluate — those need the NodePool-annotation and placeholder-ledger
+    # evidence reviewed alongside this report.
     out.append(
-        f"| 9 end census clean | {len(cen['old_no_inflight'])} stale, {len(cen['failed'])} failed | "
+        f"| 9 end census (claims: stale/failed) | {len(cen['old_no_inflight'])} stale, "
+        f"{len(cen['failed'])} failed | "
         f"{verdict(census_ok, no_data=cen['census_ts'] is None)} |"
     )
 
