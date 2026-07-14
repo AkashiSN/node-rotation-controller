@@ -53,6 +53,7 @@ export interface Labels {
     copyFailed: string
     unsupported: string
     badLink: string
+    badLinkVersion: string
   }
   legend: {
     life: string; rotation: string; surgeless: string; ready: string; done: string
@@ -159,6 +160,7 @@ const en: Labels = {
     copyFailed: 'Could not reach the clipboard — the link is in the address bar.',
     unsupported: 'This browser cannot build a share link (it lacks the Compression Streams API).',
     badLink: 'Could not read the shared link, so this is the default policy and fleet.',
+    badLinkVersion: 'This shared link comes from a newer version of the simulator, so this is the default policy and fleet.',
   },
   legend: {
     life: 'node lifetime', rotation: 'rotation start',
@@ -272,6 +274,7 @@ const ja: Labels = {
     copyFailed: 'クリップボードに書き込めませんでした。アドレスバーのリンクをコピーしてください。',
     unsupported: 'このブラウザーでは共有リンクを作れません（Compression Streams API 非対応）。',
     badLink: '共有リンクを読み取れませんでした。既定のポリシーとノード群を表示しています。',
+    badLinkVersion: 'この共有リンクは新しいバージョンのシミュレーターのものです。既定のポリシーとノード群を表示しています。',
   },
   legend: {
     life: 'ノードの寿命', rotation: 'ローテーション開始',

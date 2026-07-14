@@ -80,12 +80,16 @@ function currentState(): ShareState {
 }
 
 async function copyShareLink() {
-  const url = new URL(window.location.href)
-  url.searchParams.set(SHARE_PARAM, await encodeState(currentState()))
-  // replaceState, not pushState: Back must still mean "the page I came from", not "my
-  // previous edit".
-  window.history.replaceState({}, '', url)
+  // encodeState() is inside the try too: it only rejects when the Compression Streams API
+  // itself is unavailable (the button is disabled in that case, but a stale render or a
+  // runtime that changes mid-session must still land on a message, not an unhandled
+  // rejection with nothing shown).
   try {
+    const url = new URL(window.location.href)
+    url.searchParams.set(SHARE_PARAM, await encodeState(currentState()))
+    // replaceState, not pushState: Back must still mean "the page I came from", not "my
+    // previous edit".
+    window.history.replaceState({}, '', url)
     await navigator.clipboard.writeText(url.toString())
     note(t.value.share.copied)
   } catch {
@@ -104,7 +108,10 @@ onMounted(async () => {
   if (value) {
     const got = await decodeState(value)
     if ('error' in got) {
-      shareError.value = t.value.share.badLink
+      // 'version' gets its own message: a link from a newer simulator is not "damaged", and
+      // conflating the two would make the version→message distinction decodeState() carries
+      // dead code.
+      shareError.value = got.error.code === 'version' ? t.value.share.badLinkVersion : t.value.share.badLink
     } else {
       policyYAML.value = got.state.policy
       fleet.value = got.state.fleet
@@ -185,7 +192,12 @@ const horizonStartMs = computed(() => new Date(horizon.value.start).getTime())
         </ul>
       </div>
 
-      <div v-if="result" class="sim-controls">
+      <!-- Not gated on `result`: a policy the controller REJECTS is exactly the run someone
+           wants to share to ask "why won't this validate?" — the link carries the QUESTION
+           (policy/fleet/env/horizon), not the answer, so it is shareable whether or not a
+           result exists. This block sits inside `template v-else`, so wasm has already
+           loaded by the time it renders. -->
+      <div class="sim-controls">
         <button type="button" class="sim-btn" :disabled="!canShare"
                 :title="canShare ? undefined : t.share.unsupported" @click="copyShareLink">
           {{ t.share.copy }}

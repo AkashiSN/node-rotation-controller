@@ -34,6 +34,13 @@ vi.mock('./simulator/useWasm.ts', () => ({
       load: async () => {},
       simulate: (policy: string, request: any) => {
         calls.push({ policy, request })
+        // A fleet whose first node is named this way stands in for a policy the controller
+        // REJECTS: a response with no `result` at all, the same shape simulate() returns for
+        // input it cannot run. One test below needs exactly this to exist without reaching
+        // into the wasm module for real.
+        if (request.fleet.nodes[0]?.name === 'reject-me') {
+          return { error: 'the controller rejected this policy', events: [], generations: [], rotations: [], windows: [], partial: false }
+        }
         return { result: RESULT, events: [], generations: [], rotations: [], windows: [], partial: false }
       },
     }
@@ -175,15 +182,60 @@ describe('a run is shareable as a link', () => {
     })
     const w = mountPage()
     await flush()
+    // The constraint under test is replaceState, never pushState — and asserting only the
+    // URL's final shape cannot tell the two apart, since both would leave the same
+    // window.location.search behind. History LENGTH is what distinguishes them.
+    const historyLengthBefore = window.history.length
     await shareButton(w).trigger('click')
     await flush()
 
     expect(written).toHaveLength(1)
     expect(written[0]).toContain('/ja/simulator?s=')
     expect(window.location.search).toBe(new URL(written[0]).search)  // replaceState, same URL
+    expect(window.history.length).toBe(historyLengthBefore)          // pushState would grow this
     // And the link round trips back to what the page is showing.
     const value = new URL(written[0]).searchParams.get('s')!
     const back = await decodeState(value)
     expect('state' in back && back.state.policy).toBe(DEFAULT_POLICY_YAML)
   })
+
+  test('an unknown link VERSION gets its own message, distinct from "damaged"', async () => {
+    // decodeState() distinguishes the two error codes; this is the other half of that
+    // contract — the page must actually SHOW the distinction, not collapse both into the
+    // same "damaged" banner.
+    const value = await deflated(JSON.stringify({
+      v: 99,
+      policy: DEFAULT_POLICY_YAML,
+      fleet: { expireAfter: '480h', nodes: [] },
+      env: {},
+      horizon: { start: '2026-01-01T00:00:00Z', end: '2026-02-01T00:00:00Z' },
+    }))
+    visit(`?s=${value}`)
+    const w = mountPage()
+    await flush()
+    expect(w.text()).toContain('newer version of the simulator')
+    expect(w.text()).not.toContain('Could not read the shared link')
+  })
+
+  test('the share button is available even when the run has NO result — a rejected policy is exactly what someone wants to share', async () => {
+    const state = {
+      policy: DEFAULT_POLICY_YAML,
+      fleet: { expireAfter: '720h', nodes: [{ name: 'reject-me', createdAt: '2026-03-01T00:00:00Z' }] },
+      env: {},
+      horizon: { start: '2026-03-01T00:00:00Z', end: '2026-04-01T00:00:00Z' },
+    }
+    visit(`?s=${await encodeState(state)}`)
+    const w = mountPage()
+    await flush()
+    expect((w.vm as any).result).toBeUndefined()  // the mocked simulate() rejected this fleet
+    expect(shareButton(w)).toBeTruthy()
+  })
 })
+
+/** Encode a raw string the way the codec does, so this suite's version test can forge a
+ *  payload decodeState() itself would never construct. */
+async function deflated(text: string): Promise<string> {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('deflate-raw'))
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer())
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
