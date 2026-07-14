@@ -502,6 +502,7 @@ you are on and read every row above it: if any of them changed the schema, the
 
 | Release | `RotationPolicy` schema change | Action when upgrading into it |
 | --- | --- | --- |
+| `v0.6.1` | None (chart-only: the controller Deployment gained an optional `priorityClassName`) | None |
 | `v0.6.0` | `surge.failurePause`, `surge.drainEstimate`, `surge.provisioningEstimate` added (all additive and optional; each is resolved by the controller when unset, so none carries a schema default) | Apply `crds/` first |
 | `v0.5.0` | `surge.forcefulFallback` added (additive; defaults to `enabled: false`) | Apply `crds/` first |
 | `v0.4.0` | None | None |

@@ -1,7 +1,7 @@
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.6.0_released_(pre--1.0)-blue.svg)](docs/ja/specification/)
+[![Status](https://img.shields.io/badge/status-v0.6.1_released_(pre--1.0)-blue.svg)](docs/ja/specification/)
 
 Karpenter 配下のノードを、設定可能なメンテナンスウィンドウ内で **make-before-break（surge）** 型に先回り置換し、Karpenter の Forceful な `expireAfter` 発火を実質起こさないようにする Kubernetes コントローラ。
 
@@ -9,9 +9,11 @@ EKS Auto Mode をはじめ、ノードの Expiration が Forceful で Disruption
 
 ## ステータス
 
-**v0.6.0 — v1 surge MVP、リリース済み（pre-1.0）。** v1 の make-before-break ローテーションステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。**opt-in のウィンドウ有界 surge-less forceful fallback**（`surge.forcefulFallback`、既定 off。ADR-0001）も同様である: 候補が自身の `expireAfter` 期限までに graceful な surge を完了できないとき、コントローラは制御できない時刻に Forceful な expiration が起きるのを待たず、その `NodeClaim` をウィンドウ内で削除する（経路は Karpenter の voluntary な、PDB を尊重するものと同じ）。候補は **deadline の早い順** に並べられ、運用者が付けた `karpenter.sh/do-not-disrupt` アノテーションを持つノードは候補選定から除外される。
+**v0.6.1 — v1 surge MVP、リリース済み（pre-1.0）。** v1 の make-before-break ローテーションステートマシン（仕様 §5.2）、`ageThreshold` / 候補導出（§3.2）、surge placeholder（§3.3）、メトリクスと Warning Events（§4.2）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）が実装済みで、ユニットテストと envtest スモークテストが CI で動いている。**opt-in のウィンドウ有界 surge-less forceful fallback**（`surge.forcefulFallback`、既定 off。ADR-0001）も同様である: 候補が自身の `expireAfter` 期限までに graceful な surge を完了できないとき、コントローラは制御できない時刻に Forceful な expiration が起きるのを待たず、その `NodeClaim` をウィンドウ内で削除する（経路は Karpenter の voluntary な、PDB を尊重するものと同じ）。候補は **deadline の早い順** に並べられ、運用者が付けた `karpenter.sh/do-not-disrupt` アノテーションを持つノードは候補選定から除外される。
 
 v0.6.0 のテーマは **スループット予測** — ノードが 1 台も動き出す前に「そのウィンドウは fleet を回しきれる幅があるか」を答えるチェックである。予測はいま、健全なローテーションが実際に要する時間からモデル化される: `surge.provisioningEstimate`（候補の作成 → 新ノードが Ready）＋ `surge.drainEstimate`（PDB を尊重する drain）＋ `cooldownAfter` であり、強制 kill の期限から導出するのをやめた（ADR-0003）。その入力はメトリクスとして export されるので、予測は起動時ログ 1 回きりではなく観測可能になった。`surge.failurePause` は **失敗した** 試行のあとのポーズを `cooldownAfter` から分離する（ADR-0004）: 成功したローテーション間の settle ポーズを `0` まで下げて drain の直列化を PDB に委ねても、systematic な失敗のもとでの候補の巡回コストは有界のままにできる。さらにドキュメントサイトが [**ブラウザ上のポリシーシミュレーター**](https://akashisn.info/node-rotation-controller/ja/simulator) をホストするようになった: コントローラ自身の schedule / selection コードを WebAssembly にコンパイルし（CI が乖離を防いでいる）、ページ上で編集したポリシーに対して実行する。
+
+v0.6.1 は chart のみの追補である: コントローラの Deployment に optional なトップレベル `priorityClassName` を設定できるようになり、共有プールでプールを回すコンポーネント自身を既定優先度で動かさずに済む。これはコントローラ自身の優先度であり、surge placeholder の負優先度クラス（仕様 §3.3）とは無関係である。コントローラの挙動・CRD スキーマ・アノテーション・メトリクスの変更はない。
 
 コアの surge 経路は EKS Auto Mode 上でフルローテーション回帰スイートを通して検証済みであり、同期したバッチに対するトリックなしの forceful fallback 実行も含まれる。v1.0 に向けて残る項目は、同一 AZ の実際の容量不足（ICE）によるロールバックと、数時間規模の tight-race soak である（[ロードマップ](docs/ja/specification/06-release.md#62-ロードマップ)を参照）。
 

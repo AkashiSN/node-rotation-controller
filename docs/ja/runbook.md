@@ -473,6 +473,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 
 | リリース | `RotationPolicy` スキーマの変更 | このリリースへ上げるときの作業 |
 | --- | --- | --- |
+| `v0.6.1` | なし（chart のみ: コントローラの Deployment に optional な `priorityClassName` を追加） | なし |
 | `v0.6.0` | `surge.failurePause`、`surge.drainEstimate`、`surge.provisioningEstimate` を追加（いずれも追加のみで optional。未設定時はコントローラが解決するため、スキーマ既定値は持たない） | 先に `crds/` を適用する |
 | `v0.5.0` | `surge.forcefulFallback` を追加（追加のみ、既定は `enabled: false`） | 先に `crds/` を適用する |
 | `v0.4.0` | なし | なし |
