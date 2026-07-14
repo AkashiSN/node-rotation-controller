@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
-  MIN_VIEW_MS, SEMANTIC, centreOn, chooseStep, clampView, fitTo, nextTarget, panBy,
-  prevTarget, pxOf, reconcileView, ticksOf, zoomBy,
+  INSTANT_VIEW_MS, MIN_VIEW_MS, SEMANTIC, centreOn, chooseStep, clampView, fitInstant, fitTo,
+  nextTarget, panBy, prevTarget, pxOf, reconcileView, ticksOf, zoomBy,
 } from './zoom.ts'
 import { DAY_MS, HOUR_MS, MINUTE_MS } from './timeutil.ts'
 
@@ -153,4 +153,21 @@ test('centreOn keeps the zoom level: stepping between rotations does not also re
   const centred = centreOn(view, 5 * DAY_MS, horizon)
   assert.equal(centred.endMs - centred.startMs, DAY_MS)
   assert.equal(centred.startMs, 5 * DAY_MS - DAY_MS / 2)
+})
+
+test('fitInstant is CENTRED on the instant — the old landing view was 40% from the left', () => {
+  const horizon = { startMs: 0, endMs: 10 * DAY_MS }
+  const at = 5 * DAY_MS
+  const view = fitInstant(at, horizon)
+  const before = at - view.startMs
+  const after = view.endMs - at
+  assert.equal(before, after, 'the instant sits in the middle of the view, not off to one side')
+  assert.ok(view.endMs - view.startMs >= INSTANT_VIEW_MS, 'and a whole rotation fits in it')
+})
+
+test('fitInstant at the horizon\'s edge stays INSIDE the horizon rather than centring outside it', () => {
+  const horizon = { startMs: 0, endMs: 10 * DAY_MS }
+  const view = fitInstant(0, horizon)
+  assert.equal(view.startMs, 0)
+  assert.ok(view.endMs > 0 && view.endMs <= 10 * DAY_MS)
 })

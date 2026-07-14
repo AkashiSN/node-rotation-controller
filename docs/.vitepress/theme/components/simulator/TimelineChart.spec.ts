@@ -146,21 +146,65 @@ describe('the view is not the horizon', () => {
     expect(w.vm.view).toEqual({ startMs: ms(HORIZON.start), endMs: ms(HORIZON.end) })
   })
 
-  test('"next rotation" zooms to the rotation\'s own scale, and disables at the last one', async () => {
+  test('"next rotation" fits the OCCASION — the window occurrence, both boundaries on screen', async () => {
     const w = mountChart()
     await button(w, 'Next rotation').trigger('click')
 
     const view = w.vm.view
-    const rotation = ms('2026-01-14T02:00:00Z')
-    expect(view.startMs).toBeLessThan(rotation)
-    expect(view.endMs).toBeGreaterThan(rotation)
-    // The whole horizon is 40 days; the rotation takes 15 minutes. Landing on the rotation
-    // means landing on ITS scale — the scale collision is the entire reason for the redesign.
-    expect(view.endMs - view.startMs).toBeLessThan(6 * 3_600_000)
+    const windowStart = ms('2026-01-14T02:00:00Z')
+    const windowEnd = ms('2026-01-14T06:00:00Z')
+    // BOTH boundaries are on screen. The old landing view (at − 30m … at + 60m) was 2h33m —
+    // narrower than the 4h window it sat inside — so neither of them was, and the run read as
+    // crowded against the right edge.
+    expect(view.startMs).toBeLessThan(windowStart)
+    expect(view.endMs).toBeGreaterThan(windowEnd)
+    // Still the rotation's scale, not the horizon's: hours, not the 40-day run.
+    expect(view.endMs - view.startMs).toBeLessThan(12 * 3_600_000)
 
-    // There is only one rotation in the run: there is nothing to go to next.
+    // There is only one occasion in the run: there is nothing to go to next.
     expect(button(w, 'Next rotation').attributes('disabled')).toBeDefined()
     expect(button(w, 'Previous rotation').attributes('disabled')).toBeDefined()
+  })
+
+  test('a busy window is ONE click, not one per node: every rotation in it lands on screen', async () => {
+    // Four nodes rotating serially inside one occurrence, 25m apart — the default policy's
+    // own shape at ten nodes. Stepping by rotation start moved the view by 25 minutes a
+    // click (a jitter, not a jump) and cost four clicks to leave the window.
+    const starts = [
+      '2026-01-14T02:00:00Z', '2026-01-14T02:25:00Z',
+      '2026-01-14T02:50:00Z', '2026-01-14T03:15:00Z',
+    ]
+    const w = mountChart({
+      ...RESPONSE,
+      rotations: starts.map((start, i) => ({
+        slot: i % 2, fromGen: 0, toGen: 1, mode: 'surge' as const, start,
+      })),
+    })
+    await button(w, 'Next rotation').trigger('click')
+
+    const view = w.vm.view
+    for (const start of starts) {
+      expect(ms(start)).toBeGreaterThanOrEqual(view.startMs)
+      expect(ms(start)).toBeLessThanOrEqual(view.endMs)
+    }
+    // …and there is nothing left to step to inside the occurrence, because it is all in view.
+    expect(button(w, 'Next rotation').attributes('disabled')).toBeDefined()
+  })
+
+  test('a schedule with no occurrence to fit falls back to the instant — CENTRED', async () => {
+    // A continuously-open union (here: a window as wide as the run) has no occurrence
+    // narrower than the horizon, so there is nothing to fit. The rotation itself becomes the
+    // target, in the middle of the view rather than 40% from the left.
+    const w = mountChart({
+      ...RESPONSE,
+      windows: [{ start: HORIZON.start, end: HORIZON.end }],
+    })
+    await button(w, 'Next rotation').trigger('click')
+
+    const view = w.vm.view
+    const at = ms('2026-01-14T02:00:00Z')
+    expect(at - view.startMs).toBe(view.endMs - at)
+    expect(view.endMs - view.startMs).toBeLessThan(6 * 3_600_000)
   })
 
   test('semantic zoom: the TGP cap bracket appears only once it is wide enough to read', async () => {
@@ -180,7 +224,18 @@ describe('the view is not the horizon', () => {
     // be a label pointing at nothing.
     expect(w.findAll('.sim-overlap')).toHaveLength(0)
 
+    // The occasion view is the WINDOW (4h), and a 5-minute overlap inside it is ~10px — still
+    // below the threshold at which an annotation carrying text is legible. This is the price
+    // of fitting the occurrence rather than one rotation start, and it is paid deliberately:
+    // the occasion answers "when did this window rotate, and did it fit", and one zoom step
+    // answers "what happened inside one rotation".
     await button(w, 'Next rotation').trigger('click')
+    expect(w.findAll('.sim-overlap')).toHaveLength(0)
+
+    // One zoom into the rotation's own scale — anchored ON the rotation, the way a wheel
+    // gesture over it is — and it is named.
+    w.vm.zoom(0.1, ms('2026-01-14T02:00:00Z'))
+    await w.vm.$nextTick()
     const overlap = w.findAll('.sim-overlap')
     expect(overlap.length).toBe(1)
     expect(overlap[0].attributes('aria-label')).toMatch(/make-before-break/)
