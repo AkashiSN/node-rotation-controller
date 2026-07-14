@@ -26,6 +26,20 @@ test('the Compression Streams API is what the codec needs, and this runtime has 
   assert.equal(shareSupported(), true)
 })
 
+test('the ceiling leaves real headroom under the host\'s actual request-line limit', () => {
+  // Measured directly against the live site: a `?s=` value of ~8119 chars still returned
+  // HTTP 200, but ~8188 chars came back HTTP 414 URI Too Long — the classic ~8190-byte HTTP
+  // request-line limit shared by nginx, Apache, and GitHub Pages. 512 is a generous allowance
+  // for everything besides the value itself — origin + path, which add ~55 chars on this host
+  // today and more on a custom domain. This is not a loose sanity check: it exists so that a
+  // future "just raise MAX_VALUE_CHARS" change fails HERE, in a test, instead of shipping a
+  // link the host bounces with a bare 414 before the page ever runs.
+  assert.ok(
+    MAX_VALUE_CHARS + 512 < 8190,
+    `MAX_VALUE_CHARS (${MAX_VALUE_CHARS}) leaves no headroom under the ~8190-byte request-line limit`,
+  )
+})
+
 test('a round trip returns the state that went in', async () => {
   const got = await decoded(DEFAULT_STATE)
   assert.deepEqual(got, { state: DEFAULT_STATE })
@@ -99,11 +113,12 @@ test('a value past the character ceiling is refused before it is ever decompress
   // below this; anything past it is already unpasteable, so it is rejected on sight rather
   // than handed to the decompressor.
   //
-  // 'A'.repeat(16385) is valid base64url but NOT valid deflate, so this alone does not prove
-  // the ceiling fired: with MAX_VALUE_CHARS deleted, inflate() would still throw on this
-  // garbage and decodeState() would still land on 'damaged' — just via the generic message,
-  // not the ceiling's own. Asserting the exact message is what tells the two apart.
-  const got = await decodeState('A'.repeat(16385))
+  // 'A'.repeat(MAX_VALUE_CHARS + 1) is valid base64url but NOT valid deflate, so this alone
+  // does not prove the ceiling fired: with MAX_VALUE_CHARS deleted, inflate() would still
+  // throw on this garbage and decodeState() would still land on 'damaged' — just via the
+  // generic message, not the ceiling's own. Asserting the exact message is what tells the two
+  // apart.
+  const got = await decodeState('A'.repeat(MAX_VALUE_CHARS + 1))
   assert.ok('error' in got)
   assert.deepEqual((got as { error: { code: string; message: string } }).error, {
     code: 'damaged',
@@ -123,7 +138,7 @@ test('a genuinely valid, oversized payload is refused by the ceiling alone', asy
   const policy = DEFAULT_POLICY_YAML + randomBytes(15000).toString('hex')
   const state = { ...DEFAULT_STATE, policy }
   const value = await deflated(JSON.stringify({ v: 1, ...state }))
-  assert.ok(value.length > 16384, `expected an oversized value, got ${value.length} chars`)
+  assert.ok(value.length > MAX_VALUE_CHARS, `expected an oversized value, got ${value.length} chars`)
   const got = await decodeState(value)
   assert.ok('error' in got)
   assert.equal((got as { error: { code: string } }).error.code, 'damaged')
@@ -152,7 +167,7 @@ test('a state that lands at or under the ceiling still encodes, and round trips 
   //
   // deflate-raw on non-repetitive hex input is close to size-preserving, so trimming the
   // padding well below the oversized case above reliably lands under the ceiling.
-  const policy = DEFAULT_POLICY_YAML + randomBytes(10000).toString('hex')
+  const policy = DEFAULT_POLICY_YAML + randomBytes(3000).toString('hex')
   const state = { ...DEFAULT_STATE, policy }
   const value = await encodeState(state)
   assert.ok(value.length <= MAX_VALUE_CHARS, `expected a value at or under the ceiling, got ${value.length} chars`)
@@ -166,7 +181,7 @@ test('a decompression bomb is capped by OUTPUT size, not buffered whole', async 
   // 5 MB of one repeated character: small enough on the wire to sail past the length check,
   // but the decoder must still refuse to buffer the inflated result whole.
   const bomb = await deflated('x'.repeat(5 * 1024 * 1024))
-  assert.ok(bomb.length < 16384, `forged bomb encodes to ${bomb.length} chars, expected under the ceiling`)
+  assert.ok(bomb.length < MAX_VALUE_CHARS, `forged bomb encodes to ${bomb.length} chars, expected under the ceiling`)
   const got = await decodeState(bomb)
   assert.ok('error' in got)
   assert.equal((got as { error: { code: string } }).error.code, 'damaged')
