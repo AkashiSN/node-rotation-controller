@@ -53,6 +53,27 @@ export interface Finding {
 
 export type Diagnostic = Finding
 
+/** What SimResult was derived FROM (internal/simapi.Inputs). The page substitutes these
+ *  into the formulas; it never recomputes the results. P (the worst-case window period), D
+ *  (one occurrence's length) and a fallback tGP appear nowhere in the manifest, so they
+ *  cannot be read off the YAML — they come from the run that produced the result. */
+export interface SimInputs {
+  e: string
+  tgp: string
+  /** The tgp above is the controller's fixed fallback, not the operator's value. */
+  tgpFallback: boolean
+  p: string
+  windowLen: string
+  buffer: string
+  readyTimeout: string
+  cooldownAfter: string
+  k: number
+  m: number
+  nodeCount: number
+  /** A was GIVEN, not derived: A = E − (K·P + t_rot) does not hold for this run. */
+  ageThresholdOverride: boolean
+}
+
 export interface SimResult {
   ageThreshold: string
   tRot: string
@@ -61,6 +82,7 @@ export interface SimResult {
   provisioningEstimate: string
   g: number
   c: number
+  inputs?: SimInputs
   findings?: Finding[]
 }
 
