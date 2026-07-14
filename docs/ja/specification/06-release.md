@@ -30,6 +30,7 @@
 | v0.3（MVP, v1 surge）| Reconcile + surge + drain + metrics + Helm chart。クラスタスコープの `RotationPolicy` CRD（§5.4）が ConfigMap を置き換える |
 | v0.4 | chart が `rotationPolicies` のエントリごとに 1 つの `RotationPolicy` をレンダリングする。単一のインストールで NodePool ごとに異なるウィンドウ・`ageThreshold`・surge を与えられる |
 | v0.5 | opt-in のウィンドウ有界 surge-less forceful fallback（§3.3、ADR-0001）、deadline の早い順での候補順序付け（§3.2）、運用者が付けた `karpenter.sh/do-not-disrupt` による候補選定からの除外（§3.2）、同期したバッチに対する `ThroughputBurstShortfall` 検出（§3.2）、公開ドキュメントサイト |
+| v0.6 | レイヤ 2 のスループット予測が、ローテーション時間を強制 kill の期限から導出するのをやめ、`provisioningEstimate + drainEstimate + cooldownAfter` としてモデル化する（§3.2、ADR-0003）。その入力（`C`、`t_rot` の推定値、`t_rot` の上界）をメトリクスとして export する（§4.2）。`surge.failurePause` が失敗後の試行間ポーズを `cooldownAfter` から分離し、`cooldownAfter` は `0` を取れるようになる（§5.2、ADR-0004）。ドキュメントサイト上のブラウザ用ポリシーシミュレーター — コントローラ自身の純粋な schedule / selection コアを wasm にコンパイルして実行し、その純粋性を CI が守る |
 | v1.0 | `RotationPolicy` CRD（`v1`）安定、production runbook の文書化、実 EKS Auto Mode クラスタでの soak テスト済み。§7.2 のうち 2 項目が未解決のまま残る: 同一 AZ の実際の容量不足（ICE）によるロールバックと、数時間規模の tight-race な `expireAfter` soak |
 
 イメージの **pre-pull** はどのマイルストーンにも紐づいていない。無効化された設定

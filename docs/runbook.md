@@ -502,6 +502,7 @@ you are on and read every row above it: if any of them changed the schema, the
 
 | Release | `RotationPolicy` schema change | Action when upgrading into it |
 | --- | --- | --- |
+| `v0.6.0` | `surge.failurePause`, `surge.drainEstimate`, `surge.provisioningEstimate` added (all additive and optional; each is resolved by the controller when unset, so none carries a schema default) | Apply `crds/` first |
 | `v0.5.0` | `surge.forcefulFallback` added (additive; defaults to `enabled: false`) | Apply `crds/` first |
 | `v0.4.0` | None | None |
 | `v0.3.0` | `RotationPolicy` (`noderotation.io/v1alpha1`) introduced | First release — `helm install` creates the CRD from `crds/` |
@@ -512,9 +513,17 @@ older CRD, and the controller defaults it to off. What applying the new schema
 buys you is the ability to set the field and have it **persist** — before that,
 per the paragraph above, it is either rejected or dropped.
 
+One `v0.6.0` change is behavioral rather than schema-level, and no CRD apply
+covers it: `cooldownAfter` no longer doubles as the pause after a *failed*
+attempt (ADR-0004). That pause is now `surge.failurePause`, and a policy that
+leaves it unset gets `max(10m, cooldownAfter)`. If you had lowered
+`cooldownAfter` below `10m` to speed up rotations, the post-failure pause it also
+shortened goes back up to `10m` on upgrade; set `surge.failurePause` explicitly to
+keep the old value.
+
 **Chart values-schema changes can also break an upgrade.** Distinct from the CRD
 above, the chart's `values.schema.json` validates your Helm values at
-`helm install`/`helm upgrade` time. The chart now **seals** the
+`helm install`/`helm upgrade` time. Since chart `0.6.0` it **seals** the
 `rotationPolicies[].spec` subtree (`additionalProperties: false`, issue #219): an
 unrecognized key under `spec` — including under `surge`, `matchNodeRequirements`,
 `forcefulFallback`, `prePull`, each `maintenanceWindows` entry, and each

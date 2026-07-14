@@ -473,6 +473,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 
 | リリース | `RotationPolicy` スキーマの変更 | このリリースへ上げるときの作業 |
 | --- | --- | --- |
+| `v0.6.0` | `surge.failurePause`、`surge.drainEstimate`、`surge.provisioningEstimate` を追加（いずれも追加のみで optional。未設定時はコントローラが解決するため、スキーマ既定値は持たない） | 先に `crds/` を適用する |
 | `v0.5.0` | `surge.forcefulFallback` を追加（追加のみ、既定は `enabled: false`） | 先に `crds/` を適用する |
 | `v0.4.0` | なし | なし |
 | `v0.3.0` | `RotationPolicy`（`noderotation.io/v1alpha1`）の初出 | 最初のリリース — `helm install` が `crds/` から CRD を作成する |
@@ -483,9 +484,17 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 そのフィールドを設定して **永続させられる** ことである — 適用前は、上記のとおり
 拒否されるか黙って落とされるかのいずれかになる。
 
+`v0.6.0` の変更のうち 1 つはスキーマではなく挙動の変更であり、CRD の適用では
+カバーされない: `cooldownAfter` はもはや *失敗した* 試行のあとのポーズを兼ねない
+（ADR-0004）。そのポーズは `surge.failurePause` になり、未設定のポリシーでは
+`max(10m, cooldownAfter)` に解決される。ローテーションを速めるために
+`cooldownAfter` を `10m` 未満に下げていた場合、それに引きずられて短くなっていた
+失敗後のポーズはアップグレードで `10m` に戻る。従来の値を保ちたければ
+`surge.failurePause` を明示的に設定すること。
+
 **chart の values スキーマ変更もアップグレードを壊しうる。** 上記の CRD とは別に、
 chart の `values.schema.json` は `helm install`/`helm upgrade` 時に Helm の values を
-検証する。chart は `rotationPolicies[].spec` サブツリーを **シール** するようになった
+検証する。chart `0.6.0` 以降、`rotationPolicies[].spec` サブツリーは **シール** される
 （`additionalProperties: false`、issue #219）: `spec` 配下の未知のキー — `surge`、
 `matchNodeRequirements`、`forcefulFallback`、`prePull`、各 `maintenanceWindows` エントリ、
 各 `nodePoolSelector.matchExpressions` エントリの配下を含む — は、黙って落とされる
