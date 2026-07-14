@@ -3,7 +3,7 @@
 // are covered here rather than through a DOM.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDerivation, tidyDuration } from './derivation.ts'
+import { buildDerivation, FORMULA, tidyDuration } from './derivation.ts'
 import type { SimResult } from './model.ts'
 
 const LABELS = {
@@ -17,9 +17,14 @@ const RESULT: SimResult = {
   inputs: {
     e: '480h0m0s', tgp: '1h0m0s', tgpFallback: false, p: '84h0m0s', windowLen: '4h0m0s',
     buffer: '2m0s', readyTimeout: '15m0s', cooldownAfter: '10m0s',
-    k: 2, m: 1, nodeCount: 3, ageThresholdOverride: false,
+    k: 2, m: 1, ageThresholdOverride: false,
   },
 }
+
+// The one list every "which formula" assertion below reads from — pinned ONCE, from the same
+// FORMULA constant buildDerivation itself uses, so a corrupted or deleted formula fails a
+// test rather than the test silently pinning two copies that happen to still agree.
+const FORMULAS = [FORMULA.a, FORMULA.tRot, FORMULA.tRotEst, FORMULA.g, FORMULA.c]
 
 test('a Go duration reads as the operator wrote it, without the zero units', () => {
   assert.equal(tidyDuration('480h0m0s'), '480h')
@@ -43,15 +48,10 @@ test('sub-second components (Go can emit these) pass through untouched', () => {
 test('every symbol carries its formula, this run substituted into it, and its value', () => {
   const rows = buildDerivation(RESULT, LABELS)
   assert.deepEqual(rows.map(r => r.symbol), ['A', 't_rot', 't_rot_est', 'G', 'C'])
-  // The formulas are the specification's own (§1.4/§3.2), verbatim — pinned here so a
-  // corrupted or deleted formula fails a test, not just a reader's trust.
-  assert.deepEqual(rows.map(r => r.formula), [
-    'A = E − (K·P + t_rot)',
-    't_rot = readyTimeout + tGP + buffer',
-    't_rot_est = provisioningEstimate + drainEstimate',
-    'G = floor(((E − t_rot) − A) / P)',
-    'C = m · ceil(D / (t_rot_est + cooldownAfter))',
-  ])
+  // The formulas are the specification's own (§1.4/§3.2), verbatim — pinned here against the
+  // ONE FORMULA constant, so a corrupted or deleted formula fails a test, not just a reader's
+  // trust.
+  assert.deepEqual(rows.map(r => r.formula), FORMULAS)
   assert.deepEqual(rows.map(r => r.value), ['310h43m', '1h17m', '15m', '2', '10'])
   assert.deepEqual(rows.map(r => r.substitution), [
     '480h − (2·84h + 1h17m)',
@@ -97,12 +97,6 @@ test('a response with no inputs still renders — the values, and no equations',
   assert.deepEqual(rows.map(r => r.value), ['310h43m', '1h17m', '15m', '2', '10'])
   assert.deepEqual(rows.map(r => r.substitution), ['', '', '', '', ''])
   // The symbolic formulas do not depend on the run, so they stay — the exact same five as
-  // when inputs ARE present.
-  assert.deepEqual(rows.map(r => r.formula), [
-    'A = E − (K·P + t_rot)',
-    't_rot = readyTimeout + tGP + buffer',
-    't_rot_est = provisioningEstimate + drainEstimate',
-    'G = floor(((E − t_rot) − A) / P)',
-    'C = m · ceil(D / (t_rot_est + cooldownAfter))',
-  ])
+  // when inputs ARE present, read from the same FORMULAS list.
+  assert.deepEqual(rows.map(r => r.formula), FORMULAS)
 })

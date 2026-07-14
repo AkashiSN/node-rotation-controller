@@ -192,7 +192,6 @@ type Inputs struct {
 	Cooldown      string `json:"cooldownAfter"` // surge.cooldownAfter, resolved
 	K             int    `json:"k"`             // minRotationChances
 	M             int    `json:"m"`             // surge.maxUnavailable
-	NodeCount     int    `json:"nodeCount"`     // N
 	// AgeThresholdOverride marks an A that was GIVEN, not derived: A = E − (K·P + t_rot) does
 	// not hold for it, and a page that printed that equation anyway would be lying.
 	AgeThresholdOverride bool `json:"ageThresholdOverride"`
@@ -486,7 +485,6 @@ func toResult(r schedule.Result, in schedule.Inputs) *Result {
 			Cooldown:             in.Cooldown.String(),
 			K:                    in.K,
 			M:                    in.MaxUnavailable,
-			NodeCount:            in.NodeCount,
 			AgeThresholdOverride: in.Override != nil,
 		},
 	}

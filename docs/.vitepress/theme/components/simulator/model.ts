@@ -69,7 +69,6 @@ export interface SimInputs {
   cooldownAfter: string
   k: number
   m: number
-  nodeCount: number
   /** A was GIVEN, not derived: A = E − (K·P + t_rot) does not hold for this run. */
   ageThresholdOverride: boolean
 }

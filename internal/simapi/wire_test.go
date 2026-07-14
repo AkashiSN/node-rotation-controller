@@ -305,7 +305,7 @@ func TestWireShapeOfTheDerivationInputs(t *testing.T) {
 	want := map[string]any{
 		"e": "720h0m0s", "tgp": "1h0m0s", "p": "168h0m0s", "windowLen": "4h0m0s",
 		"buffer": "2m0s", "readyTimeout": "15m0s", "cooldownAfter": "10m0s",
-		"k": 2.0, "m": 1.0, "nodeCount": 1.0,
+		"k": 2.0, "m": 1.0,
 	}
 	for k, v := range want {
 		if in[k] != v {
@@ -351,7 +351,7 @@ func TestWireShapeOfAnOverriddenAgeThreshold(t *testing.T) {
 	}
 }
 
-// TestWireShapeOfAFallbackTGPAndATwoNodeFleet covers two fields the previous tests left
+// TestWireShapeOfAFallbackTGPAndATwoNodeFleet covers a field the previous tests left
 // under-constrained (#266 review):
 //
 //   - tgpFallback: schedule.DrainFallback is 1h and the base fixture's own
@@ -361,8 +361,11 @@ func TestWireShapeOfAnOverriddenAgeThreshold(t *testing.T) {
 //     the true case at all, however it asserts the flag; a wrong wiring (or a hardcoded false)
 //     would stay green there and the page would present the controller's fixed fallback bound
 //     as if it were the operator's own terminationGracePeriod.
-//   - nodeCount vs. m: both are 1 in the base fixture, so a swap between the two fields is
-//     invisible unless the fleet is varied (m is pinned to 1 by policy validation and cannot be).
+//
+// The fleet stays two nodes: it pins that m (surge.maxUnavailable) stays 1 regardless of
+// fleet size, rather than a wiring that silently tracks the node count instead. inputs.nodeCount
+// itself is gone from the wire (#266 review: N feeds no displayed formula and had no other
+// reader), so there is nothing left here to assert about the fleet's size directly.
 func TestWireShapeOfAFallbackTGPAndATwoNodeFleet(t *testing.T) {
 	req := strings.Replace(request,
 		`    "terminationGracePeriod": "1h",
@@ -399,10 +402,7 @@ func TestWireShapeOfAFallbackTGPAndATwoNodeFleet(t *testing.T) {
 		t.Errorf("inputs.tgp = %v, want \"1h0m0s\" (schedule.DrainFallback)", in["tgp"])
 	}
 
-	if in["nodeCount"] != 2.0 {
-		t.Errorf("inputs.nodeCount = %v, want 2 (the fleet has two nodes)", in["nodeCount"])
-	}
 	if in["m"] != 1.0 {
-		t.Errorf("inputs.m = %v, want 1 (surge.maxUnavailable, distinct from nodeCount)", in["m"])
+		t.Errorf("inputs.m = %v, want 1 (surge.maxUnavailable), independent of the fleet's node count", in["m"])
 	}
 }

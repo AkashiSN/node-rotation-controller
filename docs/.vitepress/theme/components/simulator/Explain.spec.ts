@@ -26,7 +26,7 @@ const RESULT = {
   inputs: {
     e: '480h0m0s', tgp: '1h0m0s', tgpFallback: false, p: '84h0m0s', windowLen: '4h0m0s',
     buffer: '2m0s', readyTimeout: '15m0s', cooldownAfter: '10m0s',
-    k: 2, m: 1, nodeCount: 3, ageThresholdOverride: false,
+    k: 2, m: 1, ageThresholdOverride: false,
   },
 }
 

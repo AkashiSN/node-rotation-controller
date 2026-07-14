@@ -57,6 +57,18 @@ export function tidyDuration(s: string): string {
   return negative ? `-${tidy}` : tidy
 }
 
+/** The five symbolic formulas the controller derives (the spec's own, §1.4/§3.2) — hoisted
+ *  into ONE copy so the no-inputs branch, the with-inputs branch below, and the test that
+ *  pins them all read from the same source. Two spellings of the same formula is exactly the
+ *  "two sources that can disagree" failure this file's header comment exists to prevent. */
+export const FORMULA = {
+  a: 'A = E − (K·P + t_rot)',
+  tRot: 't_rot = readyTimeout + tGP + buffer',
+  tRotEst: 't_rot_est = provisioningEstimate + drainEstimate',
+  g: 'G = floor(((E − t_rot) − A) / P)',
+  c: 'C = m · ceil(D / (t_rot_est + cooldownAfter))',
+} as const
+
 /** The five rows, in the order the controller derives them. */
 export function buildDerivation(result: SimResult, labels: DerivationLabels): DerivationRow[] {
   const inputs = result.inputs
@@ -70,11 +82,11 @@ export function buildDerivation(result: SimResult, labels: DerivationLabels): De
   // still hold — they are the spec's — but nothing may be substituted into them.
   if (!inputs) {
     return [
-      row('A', 'A = E − (K·P + t_rot)', '', '', a),
-      row('t_rot', 't_rot = readyTimeout + tGP + buffer', '', '', tRot),
-      row('t_rot_est', 't_rot_est = provisioningEstimate + drainEstimate', '', '', tRotEst),
-      row('G', 'G = floor(((E − t_rot) − A) / P)', '', '', String(result.g)),
-      row('C', 'C = m · ceil(D / (t_rot_est + cooldownAfter))', '', '', String(result.c)),
+      row('A', FORMULA.a, '', '', a),
+      row('t_rot', FORMULA.tRot, '', '', tRot),
+      row('t_rot_est', FORMULA.tRotEst, '', '', tRotEst),
+      row('G', FORMULA.g, '', '', String(result.g)),
+      row('C', FORMULA.c, '', '', String(result.c)),
     ]
   }
 
@@ -94,17 +106,13 @@ export function buildDerivation(result: SimResult, labels: DerivationLabels): De
     inputs.ageThresholdOverride
       // An explicit ageThreshold is ECHOED BACK, not derived. Printing
       // "A = E − (K·P + t_rot)" with this run's numbers would be an equation that is false.
-      ? row('A', 'A = E − (K·P + t_rot)', '', labels.overrideNote, a)
-      : row('A', 'A = E − (K·P + t_rot)', `${e} − (${inputs.k}·${p} + ${tRot})`, '', a),
-    row('t_rot', 't_rot = readyTimeout + tGP + buffer',
-      `${readyTimeout} + ${tgp} + ${buffer}`, '', tRot),
-    row('t_rot_est', 't_rot_est = provisioningEstimate + drainEstimate',
-      `${prov} + ${drain}`, '', tRotEst),
+      ? row('A', FORMULA.a, '', labels.overrideNote, a)
+      : row('A', FORMULA.a, `${e} − (${inputs.k}·${p} + ${tRot})`, '', a),
+    row('t_rot', FORMULA.tRot, `${readyTimeout} + ${tgp} + ${buffer}`, '', tRot),
+    row('t_rot_est', FORMULA.tRotEst, `${prov} + ${drain}`, '', tRotEst),
     // G is derived against the A the run ACTUALLY used — the override included.
-    row('G', 'G = floor(((E − t_rot) − A) / P)',
-      `floor(((${e} − ${tRot}) − ${a}) / ${p})`, '', String(result.g)),
-    row('C', 'C = m · ceil(D / (t_rot_est + cooldownAfter))',
-      `${inputs.m} · ceil(${d} / (${tRotEst} + ${cooldown}))`, '', String(result.c)),
+    row('G', FORMULA.g, `floor(((${e} − ${tRot}) − ${a}) / ${p})`, '', String(result.g)),
+    row('C', FORMULA.c, `${inputs.m} · ceil(${d} / (${tRotEst} + ${cooldown}))`, '', String(result.c)),
   ]
 }
 
