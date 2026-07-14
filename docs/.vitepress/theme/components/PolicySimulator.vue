@@ -155,6 +155,12 @@ const horizonStartMs = computed(() => new Date(horizon.value.start).getTime())
 
 <template>
   <div class="policy-simulator">
+    <!-- Hoisted OUTSIDE the loading/loadError/else split: this is a statement about the
+         URL, not about the wasm module, and a corrupt link plus a failed wasm load can
+         both be true at once. A visitor must be told about the unreadable link even
+         while staring at the load-failed banner. -->
+    <p v-if="shareError" class="sim-warn sim-banner">{{ shareError }}</p>
+
     <p v-if="loading">{{ t.loading }}</p>
     <div v-else-if="loadError" class="sim-fatal sim-banner">
       {{ t.loadFailed }} <code>{{ loadError }}</code>
@@ -178,8 +184,6 @@ const horizonStartMs = computed(() => new Date(horizon.value.start).getTime())
           </li>
         </ul>
       </div>
-
-      <p v-if="shareError" class="sim-warn sim-banner">{{ shareError }}</p>
 
       <div v-if="result" class="sim-controls">
         <button type="button" class="sim-btn" :disabled="!canShare"

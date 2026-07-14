@@ -14,18 +14,30 @@ vi.mock('vitepress', () => ({
 
 // The wasm module is 3.4 MB and is not the unit under test: what matters here is which
 // horizon the page ASKS it for.
-const calls: { policy: string; request: any }[] = []
+//
+// useWasm() runs once per mount, synchronously, during that component's own setup — so
+// give each call a PRIVATE calls array, captured into `latestCalls`, rather than one
+// array shared by every mount in the file. A shared array is not just cosmetically
+// noisy: a PRIOR test's component can still have a debounced schedule() timer pending
+// on the real clock (nothing in the page cancels it on unmount), and that stray call
+// can land, in real time, in the middle of a LATER test's own mount+flush — at exactly
+// the index that test would otherwise mistake for its own first call.
+let latestCalls: { policy: string; request: any }[] = []
 vi.mock('./simulator/useWasm.ts', () => ({
-  useWasm: () => ({
-    loading: ref(false),
-    ready: ref(true),
-    error: ref(''),
-    load: async () => {},
-    simulate: (policy: string, request: any) => {
-      calls.push({ policy, request })
-      return { result: RESULT, events: [], generations: [], rotations: [], windows: [], partial: false }
-    },
-  }),
+  useWasm: () => {
+    const calls: { policy: string; request: any }[] = []
+    latestCalls = calls
+    return {
+      loading: ref(false),
+      ready: ref(true),
+      error: ref(''),
+      load: async () => {},
+      simulate: (policy: string, request: any) => {
+        calls.push({ policy, request })
+        return { result: RESULT, events: [], generations: [], rotations: [], windows: [], partial: false }
+      },
+    }
+  },
 }))
 
 const RESULT = {
@@ -121,6 +133,10 @@ describe('a run is shareable as a link', () => {
     }
     visit(`?s=${await encodeState(state)}`)
     const w = mountPage()
+    // mountPage() just ran this component's setup synchronously, so latestCalls is now
+    // THIS mount's own private array — not the one any earlier test's component still
+    // writes into.
+    const myCalls = latestCalls
     await flush()
     const vm = w.vm as any
     expect(vm.policyYAML).toBe(state.policy)
@@ -128,6 +144,14 @@ describe('a run is shareable as a link', () => {
     expect(vm.env.provisioning).toBe('7m')
     expect(vm.horizon).toEqual(state.horizon)
     expect(vm.horizonPinned).toBe(true)
+
+    // The decode must land BEFORE the first simulate() call, not just before the settled
+    // state: if the decode ever slipped to after run(), the page would flash the DEFAULT
+    // policy and fleet to the wasm module (and, briefly, on screen) before jumping to the
+    // shared state — the very flash the onMounted comment says must not happen.
+    const firstCall = myCalls[0]
+    expect(firstCall.policy).toBe(state.policy)
+    expect(firstCall.request.fleet.nodes[0].name).toBe('shared-1')
   })
 
   test('a damaged link is NOT a broken page: the defaults render, and the page says why', async () => {
