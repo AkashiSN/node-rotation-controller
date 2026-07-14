@@ -56,6 +56,14 @@ export interface Labels {
     specSymbols: string
     specDerivation: string
   }
+  /** The derivation rows. The formulas, symbols and values are CODE and identical in every
+   *  locale; only these two strings are prose. */
+  derivation: {
+    /** The A row when spec.ageThreshold was given rather than derived. */
+    overrideNote: string
+    /** Marks a tGP that is the controller's fixed fallback, not the operator's value. */
+    fallbackMark: string
+  }
   timeline: string
   horizonInvalid: string
   diagnostics: string
@@ -179,7 +187,7 @@ const en: Labels = {
   severity: { warn: 'Warning', fatal: 'Fatal' },
   symbols: {
     title: 'What A, t_rot, t_rot_est, G and C mean',
-    hint: 'Each symbol above, with the formula the controller derives it from. E is the node\'s expireAfter, P the worst-case period between window occurrences, D one occurrence\'s length, tGP its terminationGracePeriod, and buffer a fixed 2m the controller reserves for its own detection lag.',
+    hint: 'What each symbol above means. E is the node\'s expireAfter, P the worst-case period between window occurrences, D one occurrence\'s length, tGP its terminationGracePeriod, and buffer the fixed slack the controller reserves for its own detection lag — see its value in the t_rot row above.',
     defs: {
       a: 'The age at which a node becomes a candidate. Derived to sit below expireAfter by construction, so the backstop stays a backstop.',
       tRot: 'The upper bound on ONE node\'s rotation — the surge wait plus a force-completed drain. A deadline bound, not what a healthy rotation takes.',
@@ -189,6 +197,10 @@ const en: Labels = {
     },
     specSymbols: 'Specification §1.4 (the symbols)',
     specDerivation: '§3.2 (the derivation)',
+  },
+  derivation: {
+    overrideNote: 'the value given in spec.ageThreshold — auto derives E − (K·P + t_rot)',
+    fallbackMark: 'fallback',
   },
   timeline: 'Timeline',
   horizonInvalid: 'The horizon is empty or invalid — start must be strictly before end.',
@@ -319,7 +331,7 @@ const ja: Labels = {
   severity: { warn: '警告', fatal: '致命的' },
   symbols: {
     title: 'A・t_rot・t_rot_est・G・C とは',
-    hint: '上の各記号と、コントローラーがそれを導出する式です。E はノードの expireAfter、P は窓の出現間隔の最悪値、D は 1 回の窓の長さ、tGP は terminationGracePeriod、buffer はコントローラー自身の検知遅れのために確保する固定値 2m です。',
+    hint: '上の各記号の意味です。E はノードの expireAfter、P は窓の出現間隔の最悪値、D は 1 回の窓の長さ、tGP は terminationGracePeriod、buffer はコントローラー自身の検知遅れのために確保する固定の猶予時間です。実際の値は上の t_rot の行で確認できます。',
     defs: {
       a: 'ノードが候補になる年齢。構成上つねに expireAfter より手前に来るように導出されるため、バックストップはバックストップのままでいられます。',
       tRot: 'ノード 1 台のローテーション時間の上界 — surge の待ちと、強制完了されるドレインの合計。期限側の「上界」であって、健全なローテーションの所要時間ではありません。',
@@ -329,6 +341,10 @@ const ja: Labels = {
     },
     specSymbols: '仕様 §1.4（記号一覧）',
     specDerivation: '§3.2（導出）',
+  },
+  derivation: {
+    overrideNote: 'spec.ageThreshold の指定値です（auto なら E − (K·P + t_rot) から導出されます）',
+    fallbackMark: 'フォールバック',
   },
   timeline: 'タイムライン',
   horizonInvalid: 'シミュレート期間が空か不正です — 開始は終了より厳密に前である必要があります。',

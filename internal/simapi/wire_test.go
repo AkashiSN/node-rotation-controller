@@ -284,3 +284,125 @@ func TestWireCarriesNoTimelineForUnrunnableInput(t *testing.T) {
 	}
 	wantAbsent(t, resp, "generations", "rotations", "windows", "simulatedThrough", "result", "events")
 }
+
+// TestWireShapeOfTheDerivationInputs: the page shows the derivation, not only its result
+// (#266), and it must not re-derive the inputs for itself — P (the worst-case window period)
+// and the tGP fallback appear NOWHERE in the manifest. They ride on the wire, from the very
+// schedule.Inputs that produced the result.
+func TestWireShapeOfTheDerivationInputs(t *testing.T) {
+	resp := raw(t, policyYAML, request)
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %v, want an object", resp["result"])
+	}
+	in, ok := result["inputs"].(map[string]any)
+	if !ok {
+		t.Fatalf("result.inputs = %v, want an object", result["inputs"])
+	}
+	// The fixture: expireAfter 720h, tGP 1h, K = 2, a weekly Saturday 02:00-06:00 window (a
+	// single occurrence per week, so P = 7d = 168h, D = 4h), m = 1 (v1 default), one node,
+	// ageThreshold unset (=> "auto").
+	want := map[string]any{
+		"e": "720h0m0s", "tgp": "1h0m0s", "p": "168h0m0s", "windowLen": "4h0m0s",
+		"buffer": "2m0s", "readyTimeout": "15m0s", "cooldownAfter": "10m0s",
+		"k": 2.0, "m": 1.0,
+	}
+	for k, v := range want {
+		if in[k] != v {
+			t.Errorf("inputs[%q] = %v, want %v", k, in[k], v)
+		}
+	}
+	// Both flags are false HERE, and false is their zero value — so they must be absent from
+	// the wire only if that is what the tags say. They are not omitempty: a page that cannot
+	// tell "false" from "the field does not exist" would present the fallback tGP as the
+	// operator's own value.
+	if in["tgpFallback"] != false {
+		t.Errorf("inputs.tgpFallback = %v, want false (the fixture sets terminationGracePeriod)", in["tgpFallback"])
+	}
+	if in["ageThresholdOverride"] != false {
+		t.Errorf("inputs.ageThresholdOverride = %v, want false (the fixture leaves ageThreshold unset, defaulting to auto)", in["ageThresholdOverride"])
+	}
+}
+
+// TestWireShapeOfAnOverriddenAgeThreshold: an explicit ageThreshold is NOT derived — it is
+// echoed back — so the page must be able to refuse to print an equation that does not hold.
+func TestWireShapeOfAnOverriddenAgeThreshold(t *testing.T) {
+	// policyYAML never sets ageThreshold (it defaults to "auto"), so there is no "auto" line to
+	// swap out; splice an explicit override in next to minRotationChances instead.
+	yaml := strings.Replace(policyYAML,
+		"  minRotationChances: 2\n", "  minRotationChances: 2\n  ageThreshold: 240h\n", 1)
+	if yaml == policyYAML {
+		t.Fatal("fixture policyYAML no longer carries the `minRotationChances: 2` anchor line; fix this test")
+	}
+	resp := raw(t, yaml, request)
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %v, want an object", resp["result"])
+	}
+	in, ok := result["inputs"].(map[string]any)
+	if !ok {
+		t.Fatalf("result.inputs = %v, want an object", result["inputs"])
+	}
+	if in["ageThresholdOverride"] != true {
+		t.Errorf("inputs.ageThresholdOverride = %v, want true", in["ageThresholdOverride"])
+	}
+	if result["ageThreshold"] != "240h0m0s" {
+		t.Errorf("ageThreshold = %v, want the override echoed back", result["ageThreshold"])
+	}
+}
+
+// TestWireShapeOfAFallbackTGPAndATwoNodeFleet covers a field the previous tests left
+// under-constrained (#266 review):
+//
+//   - tgpFallback: schedule.DrainFallback is 1h and the base fixture's own
+//     fleet.terminationGracePeriod is ALSO "1h", so once the fallback is substituted the "tgp"
+//     STRING is identical either way — the boolean flag is the only observable difference. A
+//     test built on the base fixture (as TestWireShapeOfTheDerivationInputs is) cannot exercise
+//     the true case at all, however it asserts the flag; a wrong wiring (or a hardcoded false)
+//     would stay green there and the page would present the controller's fixed fallback bound
+//     as if it were the operator's own terminationGracePeriod.
+//
+// The fleet stays two nodes: it pins that m (surge.maxUnavailable) stays 1 regardless of
+// fleet size, rather than a wiring that silently tracks the node count instead. inputs.nodeCount
+// itself is gone from the wire (#266 review: N feeds no displayed formula and had no other
+// reader), so there is nothing left here to assert about the fleet's size directly.
+func TestWireShapeOfAFallbackTGPAndATwoNodeFleet(t *testing.T) {
+	req := strings.Replace(request,
+		`    "terminationGracePeriod": "1h",
+`, "", 1)
+	if req == request {
+		t.Fatal("fixture request no longer carries the terminationGracePeriod line; fix this test")
+	}
+	req = strings.Replace(req,
+		`"nodes": [{"name": "node-a", "createdAt": "2026-01-01T00:00:00Z"}]`,
+		`"nodes": [{"name": "node-a", "createdAt": "2026-01-01T00:00:00Z"}, {"name": "node-b", "createdAt": "2026-01-01T00:00:00Z"}]`, 1)
+	if !strings.Contains(req, "node-b") {
+		t.Fatal("fixture request no longer carries the single-node nodes array; fix this test")
+	}
+
+	resp := raw(t, policyYAML, req)
+	if e, ok := resp["error"]; ok {
+		t.Fatalf("error = %v, want none", e)
+	}
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %v, want an object", resp["result"])
+	}
+	in, ok := result["inputs"].(map[string]any)
+	if !ok {
+		t.Fatalf("result.inputs = %v, want an object", result["inputs"])
+	}
+
+	// The string alone cannot prove the fallback fired (both read "1h0m0s"); the flag is what
+	// distinguishes "the fixture's own tGP" from "the controller's fixed fallback bound".
+	if in["tgpFallback"] != true {
+		t.Errorf("inputs.tgpFallback = %v, want true: terminationGracePeriod is omitted, so schedule.DrainFallback must be substituted", in["tgpFallback"])
+	}
+	if in["tgp"] != "1h0m0s" {
+		t.Errorf("inputs.tgp = %v, want \"1h0m0s\" (schedule.DrainFallback)", in["tgp"])
+	}
+
+	if in["m"] != 1.0 {
+		t.Errorf("inputs.m = %v, want 1 (surge.maxUnavailable), independent of the fleet's node count", in["m"])
+	}
+}

@@ -21,8 +21,13 @@ import ResultHeader from './ResultHeader.vue'
 import SymbolReference from './SymbolReference.vue'
 
 const RESULT = {
-  ageThreshold: '286h43m0s', tRot: '1h17m0s', tRotEstimate: '15m0s',
+  ageThreshold: '310h43m0s', tRot: '1h17m0s', tRotEstimate: '15m0s',
   drainEstimate: '10m0s', provisioningEstimate: '5m0s', g: 2, c: 10,
+  inputs: {
+    e: '480h0m0s', tgp: '1h0m0s', tgpFallback: false, p: '84h0m0s', windowLen: '4h0m0s',
+    buffer: '2m0s', readyTimeout: '15m0s', cooldownAfter: '10m0s',
+    k: 2, m: 1, ageThresholdOverride: false,
+  },
 }
 
 describe('the policy form reads as a form', () => {
@@ -133,21 +138,48 @@ describe('a finding is a signal, not a sentence', () => {
 })
 
 describe('the symbols the strip reports are defined ON the page', () => {
-  test('each symbol carries its formula, and the strip still reports the same five', () => {
+  test('the strip IS the derivation: formula, this run substituted into it, and the value', () => {
     const w = mount(ResultHeader, { props: { result: RESULT } })
-    expect(w.findAll('.sim-strip dt').map(d => d.text()))
-      .toEqual(['A (ageThreshold)', 't_rot', 't_rot_est', 'G', 'C'])
-
-    const symbols = w.findAll('.sim-symbol')
-    expect(symbols.map(s => s.find('dt').text())).toEqual(['A', 't_rot', 't_rot_est', 'G', 'C'])
-    // The formulas are the spec's own (§1.4, §3.2) and identical in every locale.
-    expect(symbols.map(s => s.find('.sim-symbol-formula').text())).toEqual([
+    const rows = w.findAll('.sim-derivation-row')
+    expect(rows.map(r => r.find('.sim-symbol-name').text()))
+      .toEqual(['A', 't_rot', 't_rot_est', 'G', 'C'])
+    // The symbolic formula element itself — the thing #266 adds — not just its class name in
+    // a selector elsewhere. Deleting <code class="sim-derivation-formula"> or renaming it
+    // must fail here.
+    expect(rows.map(r => r.find('.sim-derivation-formula').text())).toEqual([
       'A = E − (K·P + t_rot)',
       't_rot = readyTimeout + tGP + buffer',
       't_rot_est = provisioningEstimate + drainEstimate',
       'G = floor(((E − t_rot) − A) / P)',
       'C = m · ceil(D / (t_rot_est + cooldownAfter))',
     ])
+    expect(rows.map(r => r.find('.sim-derivation-sub').text())).toEqual([
+      '480h − (2·84h + 1h17m)',
+      '15m + 1h + 2m',
+      '5m + 10m',
+      'floor(((480h − 1h17m) − 310h43m) / 84h)',
+      '1 · ceil(4h / (15m + 10m))',
+    ])
+    expect(rows.map(r => r.find('.sim-derivation-value').text()))
+      .toEqual(['310h43m', '1h17m', '15m', '2', '10'])
+  })
+
+  test('an overridden ageThreshold shows a note where the equation would be', () => {
+    const overridden = {
+      ...RESULT, ageThreshold: '240h0m0s',
+      inputs: { ...RESULT.inputs, ageThresholdOverride: true },
+    }
+    const rows = mount(ResultHeader, { props: { result: overridden } }).findAll('.sim-derivation-row')
+    expect(rows[0].find('.sim-derivation-sub').exists()).toBe(false)
+    expect(rows[0].find('.sim-derivation-note').text()).toContain('spec.ageThreshold')
+    expect(rows[0].find('.sim-derivation-value').text()).toBe('240h')
+  })
+
+  test('all five symbols get a definition, not just the two links to the spec', () => {
+    const defs = mount(SymbolReference).findAll('.sim-symbol')
+    expect(defs).toHaveLength(5)
+    expect(defs.map(d => d.find('.sim-symbol-name').text()))
+      .toEqual(['A', 't_rot', 't_rot_est', 'G', 'C'])
   })
 
   test('it links to the specification — and a Japanese reader lands on the JAPANESE chapter', () => {
