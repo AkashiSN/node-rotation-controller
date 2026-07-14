@@ -56,6 +56,25 @@ test('semantic thresholds: an element is drawn only once it is wide enough to me
   assert.ok(pxOf(10 * MINUTE_MS, zoomed, WIDTH) > SEMANTIC.capBracketPx)
 })
 
+test('a window band earns its EDGES only once they would be edges rather than the band', () => {
+  // The page's own default: a 4-hour window on a six-week horizon. It is 3.4px wide — over
+  // the band threshold, so it is a rectangle and not a tick, but two full-strength strokes
+  // 3.4px apart are not a boundary, they are a bright bar. A dozen of them across the run
+  // are exactly the glare a soft fill exists to avoid (#260), so at this width the band is
+  // drawn as ONE stripe.
+  const horizon = { startMs: 0, endMs: 42 * DAY_MS }
+  const atHorizon = pxOf(4 * HOUR_MS, horizon, WIDTH)
+  assert.ok(atHorizon > SEMANTIC.windowBandPx, 'wide enough to be a band')
+  assert.ok(atHorizon < SEMANTIC.windowEdgePx, 'but far too narrow to carry two edges')
+
+  // Zoomed to a day, the same window is 150px: now an edge is an edge, and the fill can go
+  // back to being quiet.
+  assert.ok(pxOf(4 * HOUR_MS, { startMs: 0, endMs: DAY_MS }, WIDTH) > SEMANTIC.windowEdgePx)
+
+  // The ladder is ordered — a band can never be too thin to draw yet wide enough for edges.
+  assert.ok(SEMANTIC.windowBandPx < SEMANTIC.windowEdgePx)
+})
+
 // The units are real: a view is never narrower than the simulator's one-minute cadence, so
 // a fixture in bare milliseconds would be testing the clamp, not the logic.
 const H = HOUR_MS

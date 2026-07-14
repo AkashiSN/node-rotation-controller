@@ -85,6 +85,9 @@ export interface Labels {
     zoomIn: string
     zoomOut: string
     viewHint: string
+    /** The minimap: what the strip is, and what its gestures do. */
+    minimap: string
+    minimapHint: string
     view: string
     simulatedThrough: string
     /** The horizon control. */
@@ -193,7 +196,9 @@ const en: Labels = {
     reset: 'Whole horizon',
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',
-    viewHint: 'Zoom changes the VIEW only — the simulated horizon does not move. Wheel to zoom, drag to pan; arrow keys pan, +/− zoom, 0 resets.',
+    viewHint: 'Zoom changes the VIEW only — the simulated horizon does not move. On the chart: wheel to zoom, drag to pan; arrow keys pan, +/− zoom, 0 resets.',
+    minimap: 'The whole run; the bright band is what the chart is showing',
+    minimapHint: 'Drag the band to move the view, its edges to resize it; the wheel scrolls without changing the zoom.',
     view: 'View',
     simulatedThrough: 'simulated through',
     coverage: 'Lifetime coverage',
@@ -309,7 +314,9 @@ const ja: Labels = {
     reset: '期間全体',
     zoomIn: '拡大',
     zoomOut: '縮小',
-    viewHint: 'ズームは「表示範囲」だけを変えます（シミュレート期間は動きません）。ホイールで拡大縮小、ドラッグで移動。矢印キーで移動、+/− で拡大縮小、0 でリセット。',
+    viewHint: 'ズームは「表示範囲」だけを変えます（シミュレート期間は動きません）。チャート上ではホイールで拡大縮小、ドラッグで移動。矢印キーで移動、+/− で拡大縮小、0 でリセット。',
+    minimap: '実行全体。明るい帯がチャートに表示されている範囲です',
+    minimapHint: '帯をドラッグすると表示位置が動き、端をドラッグすると表示幅が変わります。ホイールは拡大率を変えずにスクロールします。',
     view: '表示範囲',
     simulatedThrough: 'シミュレート済み',
     coverage: '寿命カバレッジ',

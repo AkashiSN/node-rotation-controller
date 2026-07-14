@@ -62,6 +62,16 @@ export const SEMANTIC = {
   /** Below this a maintenance-window band degrades to a thin tick — never a hairline
    *  rectangle that a reader would mistake for a border. */
   windowBandPx: 3,
+  /** Below this a window band is drawn as ONE stripe, not as a fill between two edges.
+   *
+   *  The edges exist to make a wide band legible without a loud fill (#260). On a band a few
+   *  pixels wide they stop being edges: two full-strength strokes 4px apart are a bright bar,
+   *  and a whole horizon's worth of them is exactly the glare the soft fill was avoiding. So
+   *  a narrow band carries its contrast in a stronger fill instead, as a single mark. Its
+   *  clipped-by-horizon dashes go with the edges — at this width a 3-3 dash is not legible as
+   *  one, and the tick below `windowBandPx` already drops that distinction for the same
+   *  reason. */
+  windowEdgePx: 12,
 } as const
 
 export const spanOf = (v: Span): number => Math.max(1, v.endMs - v.startMs)
