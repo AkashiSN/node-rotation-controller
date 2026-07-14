@@ -40,14 +40,21 @@ export interface DerivationRow {
  *  String surgery, not arithmetic: it splits the string into its (value, unit) components and
  *  drops the trailing ones whose value is 0 — it never touches a digit, so it cannot change
  *  the value it is handed. At least one component always survives, so "0s" stays "0s" rather
- *  than collapsing to "". */
+ *  than collapsing to "". A negative duration carries exactly ONE leading "-" for the whole
+ *  value (Go's own `time.Duration.String()` convention, e.g. "-1h17m0s") — never one per
+ *  component. Peel it off, tidy the magnitude, then put it back: a fatal negative A (the
+ *  ANonPositive case the strip exists to surface) must never round-trip through here looking
+ *  positive. */
 export function tidyDuration(s: string): string {
   if (!s) return '—'
-  const parts = [...s.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g)]
+  const negative = s.startsWith('-')
+  const magnitude = negative ? s.slice(1) : s
+  const parts = [...magnitude.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g)]
   if (parts.length === 0) return s
   let end = parts.length
   while (end > 1 && parseFloat(parts[end - 1][1]) === 0) end--
-  return parts.slice(0, end).map(([full]) => full).join('')
+  const tidy = parts.slice(0, end).map(([full]) => full).join('')
+  return negative ? `-${tidy}` : tidy
 }
 
 /** The five rows, in the order the controller derives them. */

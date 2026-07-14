@@ -29,6 +29,17 @@ test('a Go duration reads as the operator wrote it, without the zero units', () 
   assert.equal(tidyDuration(''), '—')          // absent, not zero
 })
 
+test('a NEGATIVE duration keeps its sign — a fatal A must not read as positive', () => {
+  // schedule.Derive's ANonPositive case: A = E − (K·P + t_rot) went negative. The strip is
+  // shown precisely to surface this; losing the "-" would make a fatal config look plausible.
+  assert.equal(tidyDuration('-1h17m0s'), '-1h17m')
+})
+
+test('sub-second components (Go can emit these) pass through untouched', () => {
+  assert.equal(tidyDuration('500ms'), '500ms')
+  assert.equal(tidyDuration('1.5s'), '1.5s')
+})
+
 test('every symbol carries its formula, this run substituted into it, and its value', () => {
   const rows = buildDerivation(RESULT, LABELS)
   assert.deepEqual(rows.map(r => r.symbol), ['A', 't_rot', 't_rot_est', 'G', 'C'])
@@ -63,6 +74,13 @@ test('a tGP the operator never wrote is MARKED as the fallback', () => {
     LABELS,
   )
   assert.equal(rows[1].substitution, '15m + 1h (fallback) + 2m')
+})
+
+test('a FATAL negative ageThreshold renders as negative, never laundered positive', () => {
+  // The wire still carries this run (ANonPositive is a Fatal finding, not a dropped response):
+  // the strip's job is to show the operator exactly the value that tripped the guard.
+  const rows = buildDerivation({ ...RESULT, ageThreshold: '-1h17m0s' }, LABELS)
+  assert.equal(rows[0].value, '-1h17m')
 })
 
 test('a response with no inputs still renders — the values, and no equations', () => {
