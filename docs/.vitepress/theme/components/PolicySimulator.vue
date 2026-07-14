@@ -12,6 +12,7 @@ import { useLabels } from './simulator/i18n.ts'
 import {
   SHARE_PARAM, decodeState, encodeState, shareSupported, ShareTooLargeError, type ShareState,
 } from './simulator/share.ts'
+import FindingList from './simulator/FindingList.vue'
 import PolicyInput from './simulator/PolicyInput.vue'
 import FleetInput from './simulator/FleetInput.vue'
 import EnvInput from './simulator/EnvInput.vue'
@@ -180,10 +181,10 @@ const horizonStartMs = computed(() => new Date(horizon.value.start).getTime())
          URL, not about the wasm module, and a corrupt link plus a failed wasm load can
          both be true at once. A visitor must be told about the unreadable link even
          while staring at the load-failed banner. -->
-    <p v-if="shareError" class="sim-warn sim-banner">{{ shareError }}</p>
+    <p v-if="shareError" class="sim-banner sim-banner-warn">{{ shareError }}</p>
 
     <p v-if="loading">{{ t.loading }}</p>
-    <div v-else-if="loadError" class="sim-fatal sim-banner">
+    <div v-else-if="loadError" class="sim-banner sim-banner-fatal">
       {{ t.loadFailed }} <code>{{ loadError }}</code>
       <button type="button" @click="load().then(run)">{{ t.retry }}</button>
     </div>
@@ -191,34 +192,36 @@ const horizonStartMs = computed(() => new Date(horizon.value.start).getTime())
     <template v-else>
       <!-- The controller's own error, verbatim: an unparseable policy, or one the
            cluster would reject. The page still renders, and says why. -->
-      <p v-if="response.error" class="sim-fatal sim-banner"><code>{{ response.error }}</code></p>
+      <p v-if="response.error" class="sim-banner sim-banner-fatal"><code>{{ response.error }}</code></p>
 
       <ResultHeader v-if="result" :result="result" />
 
       <!-- Why the timeline below may be empty or short — read before the picture, not
            after it. The messages are the controller's own, rendered verbatim. -->
-      <div v-if="response.partial" class="sim-fatal sim-banner">
+      <div v-if="response.partial" class="sim-banner sim-banner-fatal">
         <p>{{ t.partial }}</p>
-        <ul v-if="fatals.length" class="sim-findings">
-          <li v-for="(d, i) in fatals" :key="i" class="sim-fatal">
-            <strong>{{ d.severity }}</strong> <code>{{ d.code }}</code> {{ d.message }}
-          </li>
-        </ul>
+        <FindingList v-if="fatals.length" :findings="fatals" />
       </div>
 
-      <!-- Not gated on `result`: a policy the controller REJECTS is exactly the run someone
+      <!-- The share control is about the LINK; everything above is about the RUN. They sat
+           in one undifferentiated row, so "Copied" read as part of the button and a warning
+           above it read as part of the share block (#261). The control gets its own region,
+           and its note its own line inside that region — a status about the link can then
+           never be mistaken for a statement about the simulation.
+
+           Not gated on `result`: a policy the controller REJECTS is exactly the run someone
            wants to share to ask "why won't this validate?" — the link carries the QUESTION
            (policy/fleet/env/horizon), not the answer, so it is shareable whether or not a
            result exists. This block sits inside `template v-else`, so wasm has already
            loaded by the time it renders. -->
-      <div class="sim-controls">
+      <section class="sim-share" :aria-label="t.share.copy">
         <button type="button" class="sim-btn" :disabled="!canShare"
                 :title="canShare ? undefined : t.share.unsupported" @click="copyShareLink">
           {{ t.share.copy }}
         </button>
-        <span v-if="shareNote" class="sim-share-note" role="status">{{ shareNote }}</span>
-        <span v-else-if="!canShare" class="sim-share-note">{{ t.share.unsupported }}</span>
-      </div>
+        <p v-if="shareNote" class="sim-share-note" role="status">{{ shareNote }}</p>
+        <p v-else-if="!canShare" class="sim-share-note">{{ t.share.unsupported }}</p>
+      </section>
 
       <TimelineChart v-if="result" :response="response" :horizon="horizon" :fleet="fleet"
                      :timezone="timezone" />

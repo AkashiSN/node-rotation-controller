@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { type SimResult } from './model.ts'
 import { useLabels } from './i18n.ts'
+import FindingList from './FindingList.vue'
+import SymbolReference from './SymbolReference.vue'
 
 defineProps<{ result: SimResult }>()
 const t = useLabels()
@@ -19,11 +21,11 @@ const t = useLabels()
       <div><dt>C</dt><dd>{{ result.c }}</dd></div>
     </dl>
 
+    <!-- Beside the numbers, not on another page: the strip is where a reader first meets
+         these symbols, so it is where their definitions have to be reachable. -->
+    <SymbolReference />
+
     <!-- The controller's own English messages, verbatim in both locales. -->
-    <ul v-if="result.findings?.length" class="sim-findings">
-      <li v-for="(f, i) in result.findings" :key="i" :class="`sim-${f.severity}`">
-        <strong>{{ f.severity }}</strong> <code>{{ f.code }}</code> {{ f.message }}
-      </li>
-    </ul>
+    <FindingList v-if="result.findings?.length" :findings="result.findings" />
   </section>
 </template>

@@ -190,12 +190,97 @@
 
 /* Chart header: title left, legend right, so the key is beside the picture it explains. */
 .policy-simulator .sim-chart-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; }
-.policy-simulator .sim-findings { list-style: none; padding: 0; margin: 0.25rem 0; font-size: 0.85em; }
+/* A finding is a SIGNAL, not a sentence that happens to start with a severity word. The
+   message stays the controller's own, verbatim; everything around it is what makes a warn
+   you can ignore distinguishable, at a glance, from one that invalidates the run (#261).
+   Severity is carried by the glyph (which has an accessible name) AND the colour AND the
+   left rule — never by colour alone. */
+.policy-simulator .sim-findings { list-style: none; padding: 0; margin: 0.5rem 0 0; display: grid; gap: 0.35rem; font-size: 0.85em; }
+.policy-simulator .sim-finding {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: start;
+  gap: 0.5rem; border: 1px solid; border-left-width: 3px; border-radius: 6px; padding: 0.4rem 0.6rem;
+}
+.policy-simulator .sim-finding-warn { border-color: var(--vp-c-warning-2); background: var(--vp-c-warning-soft); }
+.policy-simulator .sim-finding-fatal { border-color: var(--vp-c-danger-2); background: var(--vp-c-danger-soft); }
+.policy-simulator .sim-sev {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 1.1rem; height: 1.1rem; margin-top: 0.1rem; border-radius: 50%;
+  font-size: 0.72rem; font-weight: 700; line-height: 1; color: var(--vp-c-bg);
+}
+.policy-simulator .sim-finding-warn .sim-sev { background: var(--vp-c-warning-1); }
+.policy-simulator .sim-finding-fatal .sim-sev { background: var(--vp-c-danger-1); }
+/* The code is an IDENTIFIER — something to search the spec for — so it reads as one. */
+.policy-simulator .sim-finding-code {
+  font-family: var(--vp-font-family-mono); font-size: 0.85em; white-space: nowrap;
+  border: 1px solid var(--vp-c-divider); border-radius: 4px; padding: 0.05rem 0.35rem;
+  background: var(--vp-c-bg); color: var(--vp-c-text-1);
+}
+.policy-simulator .sim-finding-msg { color: var(--vp-c-text-1); line-height: 1.5; }
+@media (max-width: 640px) {
+  /* The chip and the message stack rather than squeezing the message into a sliver. */
+  .policy-simulator .sim-finding { grid-template-columns: auto minmax(0, 1fr); }
+  .policy-simulator .sim-finding-code { justify-self: start; }
+  .policy-simulator .sim-finding-msg { grid-column: 2; }
+}
+
 .policy-simulator .sim-warn { color: var(--vp-c-warning-1); }
 .policy-simulator .sim-fatal { color: var(--vp-c-danger-1); }
-.policy-simulator .sim-banner {
-  border: 1px solid var(--vp-c-danger-2); border-radius: 6px; padding: 0.5rem 0.75rem; background: var(--vp-c-danger-soft);
+/* A banner states the severity of the WHOLE run, so it has to be able to say "warning"
+   without borrowing the fatal colour — the single danger-coloured banner made an unreadable
+   share link look like a broken simulation. */
+.policy-simulator .sim-banner { border: 1px solid; border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+.policy-simulator .sim-banner-warn { border-color: var(--vp-c-warning-2); background: var(--vp-c-warning-soft); }
+.policy-simulator .sim-banner-fatal { border-color: var(--vp-c-danger-2); background: var(--vp-c-danger-soft); }
+
+/* The share control is about the LINK, not about the run: its own region, with a divider
+   above it, and the note on its own line — so "Copied" cannot read as part of the button
+   and a warning above it cannot read as part of the share block (#261). */
+.policy-simulator .sim-share {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0.35rem;
+  margin: 1rem 0; padding-top: 0.9rem; border-top: 1px solid var(--vp-c-divider);
 }
+.policy-simulator .sim-share .sim-share-note { margin: 0; }
+
+/* The symbol reference: the definitions of A / t_rot / t_rot_est / G / C, next to the
+   numbers that report them. Collapsed by default — the strip is the answer, this is the
+   footnote — and it links to the specification, which stays the single source of truth. */
+.policy-simulator .sim-symbols {
+  border: 1px solid var(--vp-c-divider); border-radius: 8px; padding: 0.5rem 0.75rem;
+  background: var(--vp-c-bg-soft); font-size: 0.85em;
+}
+.policy-simulator .sim-symbols summary { cursor: pointer; color: var(--vp-c-text-2); font-weight: 500; }
+.policy-simulator .sim-symbols summary:hover { color: var(--vp-c-brand-1); }
+.policy-simulator .sim-symbols > .sim-hint:first-of-type { margin-top: 0.5rem; }
+.policy-simulator .sim-symbol-list { margin: 0 0 0.5rem; display: grid; gap: 0.4rem; }
+.policy-simulator .sim-symbol { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 0.5rem; align-items: baseline; }
+@media (max-width: 640px) { .policy-simulator .sim-symbol { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; } }
+.policy-simulator .sim-symbol dd { margin: 0; }
+.policy-simulator .sim-symbol-name { font-weight: 600; color: var(--vp-c-text-1); }
+/* The formula is the spec's own, and identical in every locale: it is code, and it owns its
+   own line so a long one never wraps into the prose beside it. */
+.policy-simulator .sim-symbol-formula {
+  display: block; font-family: var(--vp-font-family-mono); font-size: 0.9em;
+  color: var(--vp-c-text-1); overflow-x: auto;
+}
+.policy-simulator .sim-symbol-def { display: block; color: var(--vp-c-text-2); line-height: 1.5; margin-top: 0.1rem; }
+
+/* The policy form's groups: window / derivation / surge, the policy's own structure. The
+   legend is the heading — a real <legend> on a real <fieldset>, so the grouping survives a
+   screen reader as well as a glance. */
+.policy-simulator .sim-policy-form { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+.policy-simulator .sim-group { border: 0; padding: 0; margin: 0 0 0.8rem; min-inline-size: 0; }
+.policy-simulator .sim-group + .sim-group { border-top: 1px solid var(--vp-c-divider); padding-top: 0.7rem; }
+.policy-simulator .sim-group > legend {
+  padding: 0; margin-bottom: 0.45rem; font-size: 0.72rem; font-weight: 600;
+  letter-spacing: 0.03em; text-transform: uppercase; color: var(--vp-c-text-2);
+}
+/* A label that reads like its value is a label a reader has to parse. Field names sit above
+   their inputs, quieter and smaller, but with weight — so the eye separates "what this is"
+   from "what it says" without a colon or a border to help it. */
+.policy-simulator .sim-form label, .policy-simulator .sim-days > span { font-weight: 500; }
+.policy-simulator .sim-form label > input, .policy-simulator .sim-form label > select { font-weight: 400; }
+/* …but not the weekday checkboxes: those ARE values, not names. */
+.policy-simulator .sim-days-grid label { font-weight: 400; }
 /* The chart is the product: it never shrinks below the width where its row labels
    are legible. Below that it scrolls horizontally inside its OWN container — the
    page body never gains a horizontal scrollbar because of it. */

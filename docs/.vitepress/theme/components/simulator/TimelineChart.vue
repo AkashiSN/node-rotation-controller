@@ -326,7 +326,7 @@ defineExpose({ view, reset, zoom })
 
     <template v-else>
       <!-- The response contradicting itself is not something to paint over. -->
-      <p v-if="tl.anomalies.length" class="sim-warn sim-banner">
+      <p v-if="tl.anomalies.length" class="sim-warn sim-banner sim-banner-warn">
         {{ t.chart.anomalies }}
         <span v-for="(a, i) in tl.anomalies" :key="i"><code>{{ a }}</code> </span>
       </p>

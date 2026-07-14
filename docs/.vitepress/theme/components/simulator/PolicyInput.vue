@@ -88,52 +88,77 @@ function onMinRotationChancesChange(raw: string) {
 
     <div class="sim-policy-grid">
       <div>
-        <fieldset :disabled="broken" class="sim-form">
-          <label>{{ t.timezone }}
-            <select :value="form.timezone" @change="edit('timezone', ($event.target as HTMLSelectElement).value)">
-              <option v-for="tz in timezones" :key="tz" :value="tz">{{ tz }}</option>
-            </select>
-          </label>
-          <div class="sim-days">
-            <span>{{ t.days }}</span>
-            <div class="sim-days-grid">
-              <label v-for="d in WEEKDAYS" :key="d">
-                <input type="checkbox" :checked="dayChecked(d)"
-                       @change="toggleDay(d, ($event.target as HTMLInputElement).checked)" />
-                {{ d }}
+        <!-- Eleven controls in one flat row read as a pile, not as a form. They are grouped
+             the way the POLICY itself is — window / derivation / surge — so a reader who has
+             met the spec's three layers recognises them here, and one who has not can still
+             see that these fields answer three different questions (#261).
+
+             Nested fieldsets: the OUTER one carries `disabled`, so a YAML the browser parser
+             rejects greys out every group at once, while each inner one is a real group with
+             a real <legend> rather than a heading that merely looks like one. -->
+        <fieldset :disabled="broken" class="sim-policy-form">
+          <fieldset class="sim-group">
+            <legend>{{ t.policyGroups.window }}</legend>
+            <div class="sim-form">
+              <label>{{ t.timezone }}
+                <select :value="form.timezone" @change="edit('timezone', ($event.target as HTMLSelectElement).value)">
+                  <option v-for="tz in timezones" :key="tz" :value="tz">{{ tz }}</option>
+                </select>
+              </label>
+              <div class="sim-days">
+                <span>{{ t.days }}</span>
+                <div class="sim-days-grid">
+                  <label v-for="d in WEEKDAYS" :key="d">
+                    <input type="checkbox" :checked="dayChecked(d)"
+                           @change="toggleDay(d, ($event.target as HTMLInputElement).checked)" />
+                    {{ d }}
+                  </label>
+                </div>
+              </div>
+              <label>{{ t.windowStart }}
+                <input type="time" :value="form.start" @change="edit('start', ($event.target as HTMLInputElement).value)" />
+              </label>
+              <label>{{ t.windowEnd }}
+                <input type="time" :value="form.end" @change="edit('end', ($event.target as HTMLInputElement).value)" />
               </label>
             </div>
-          </div>
-          <label>{{ t.windowStart }}
-            <input type="time" :value="form.start" @change="edit('start', ($event.target as HTMLInputElement).value)" />
-          </label>
-          <label>{{ t.windowEnd }}
-            <input type="time" :value="form.end" @change="edit('end', ($event.target as HTMLInputElement).value)" />
-          </label>
-          <label>{{ t.minRotationChances }}
-            <input type="number" min="1" :value="form.minRotationChances ?? 2"
-                   @change="onMinRotationChancesChange(($event.target as HTMLInputElement).value)" />
-          </label>
-          <label>{{ t.ageThreshold }}
-            <input :value="form.ageThreshold" @change="edit('ageThreshold', ($event.target as HTMLInputElement).value)" />
-          </label>
-          <label>provisioningEstimate
-            <input :value="form.provisioningEstimate" @change="edit('provisioningEstimate', ($event.target as HTMLInputElement).value)" />
-          </label>
-          <label>drainEstimate
-            <input :value="form.drainEstimate" @change="edit('drainEstimate', ($event.target as HTMLInputElement).value)" />
-          </label>
-          <label>{{ t.cooldownAfter }}
-            <input :value="form.cooldownAfter" @change="edit('cooldownAfter', ($event.target as HTMLInputElement).value)" />
-          </label>
-          <label>{{ t.readyTimeout }}
-            <input :value="form.readyTimeout" @change="edit('readyTimeout', ($event.target as HTMLInputElement).value)" />
-          </label>
-          <label class="sim-check">
-            <input type="checkbox" :checked="form.forcefulFallback"
-                   @change="edit('forcefulFallback', ($event.target as HTMLInputElement).checked)" />
-            {{ t.forcefulFallback }}
-          </label>
+          </fieldset>
+
+          <fieldset class="sim-group">
+            <legend>{{ t.policyGroups.derivation }}</legend>
+            <div class="sim-form">
+              <label>{{ t.minRotationChances }}
+                <input type="number" min="1" :value="form.minRotationChances ?? 2"
+                       @change="onMinRotationChancesChange(($event.target as HTMLInputElement).value)" />
+              </label>
+              <label>{{ t.ageThreshold }}
+                <input :value="form.ageThreshold" @change="edit('ageThreshold', ($event.target as HTMLInputElement).value)" />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="sim-group">
+            <legend>{{ t.policyGroups.surge }}</legend>
+            <div class="sim-form">
+              <label>{{ t.provisioningEstimate }}
+                <input :value="form.provisioningEstimate" @change="edit('provisioningEstimate', ($event.target as HTMLInputElement).value)" />
+              </label>
+              <label>{{ t.drainEstimate }}
+                <input :value="form.drainEstimate" @change="edit('drainEstimate', ($event.target as HTMLInputElement).value)" />
+              </label>
+              <label>{{ t.readyTimeout }}
+                <input :value="form.readyTimeout" @change="edit('readyTimeout', ($event.target as HTMLInputElement).value)" />
+              </label>
+              <label>{{ t.cooldownAfter }}
+                <input :value="form.cooldownAfter" @change="edit('cooldownAfter', ($event.target as HTMLInputElement).value)" />
+              </label>
+              <label class="sim-check">
+                <input type="checkbox" :checked="form.forcefulFallback"
+                       @change="edit('forcefulFallback', ($event.target as HTMLInputElement).checked)" />
+                {{ t.forcefulFallback }}
+              </label>
+            </div>
+          </fieldset>
         </fieldset>
 
         <p v-if="form.extraWindows > 0" class="sim-hint">{{ t.extraWindows(form.extraWindows) }}</p>

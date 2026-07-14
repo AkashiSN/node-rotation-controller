@@ -38,7 +38,24 @@ export interface Labels {
   ageThreshold: string
   cooldownAfter: string
   readyTimeout: string
+  provisioningEstimate: string
+  drainEstimate: string
   forcefulFallback: string
+  /** The policy form's sections, mirroring the policy's own structure. */
+  policyGroups: { window: string; derivation: string; surge: string }
+  /** A finding's severity, as an accessible name for the glyph that carries it. The
+   *  MESSAGE stays the controller's own, verbatim — only the severity word is ours. */
+  severity: Record<'warn' | 'fatal', string>
+  /** The symbol reference: what A, t_rot, t_rot_est, G and C mean. The formulas are code and
+   *  are the same in every locale; only the prose is translated, and the specification stays
+   *  the single source of truth for both. */
+  symbols: {
+    title: string
+    hint: string
+    defs: Record<'a' | 'tRot' | 'tRotEst' | 'g' | 'c', string>
+    specSymbols: string
+    specDerivation: string
+  }
   timeline: string
   horizonInvalid: string
   diagnostics: string
@@ -150,7 +167,28 @@ const en: Labels = {
   ageThreshold: 'ageThreshold',
   cooldownAfter: 'cooldownAfter',
   readyTimeout: 'readyTimeout',
+  provisioningEstimate: 'provisioningEstimate',
+  drainEstimate: 'drainEstimate',
   forcefulFallback: 'Forceful fallback',
+  policyGroups: {
+    window: 'Maintenance window — when rotation may START',
+    derivation: 'Derivation — how early a node is picked',
+    surge: 'Surge — how one rotation runs',
+  },
+  severity: { warn: 'Warning', fatal: 'Fatal' },
+  symbols: {
+    title: 'What A, t_rot, t_rot_est, G and C mean',
+    hint: 'Each symbol above, with the formula the controller derives it from. E is the node\'s expireAfter, P the worst-case period between window occurrences, D one occurrence\'s length, tGP its terminationGracePeriod, and buffer a fixed 2m the controller reserves for its own detection lag.',
+    defs: {
+      a: 'The age at which a node becomes a candidate. Derived to sit below expireAfter by construction, so the backstop stays a backstop.',
+      tRot: 'The upper bound on ONE node\'s rotation — the surge wait plus a force-completed drain. A deadline bound, not what a healthy rotation takes.',
+      tRotEst: 'The expected service time of a healthy rotation. No deadline term and no buffer: it is the throughput denominator, not a bound.',
+      g: 'The rotation chances the schedule actually guarantees before expireAfter fires. G = K under auto-derivation; an explicit ageThreshold override recomputes it.',
+      c: 'How many rotations ONE window occurrence can start (m = surge.maxUnavailable, fixed at 1 in v1). Rotations are serial and separated by cooldownAfter.',
+    },
+    specSymbols: 'Specification §1.4 (the symbols)',
+    specDerivation: '§3.2 (the derivation)',
+  },
   timeline: 'Timeline',
   horizonInvalid: 'The horizon is empty or invalid — start must be strictly before end.',
   diagnostics: 'Diagnostics',
@@ -268,7 +306,28 @@ const ja: Labels = {
   ageThreshold: 'ageThreshold',
   cooldownAfter: 'cooldownAfter',
   readyTimeout: 'readyTimeout',
+  provisioningEstimate: 'provisioningEstimate',
+  drainEstimate: 'drainEstimate',
   forcefulFallback: 'Forceful fallback',
+  policyGroups: {
+    window: 'メンテナンス窓 — ローテーションを「開始してよい」時間帯',
+    derivation: '導出 — ノードをどれだけ早く選ぶか',
+    surge: 'surge — 1 回のローテーションの動き方',
+  },
+  severity: { warn: '警告', fatal: '致命的' },
+  symbols: {
+    title: 'A・t_rot・t_rot_est・G・C とは',
+    hint: '上の各記号と、コントローラーがそれを導出する式です。E はノードの expireAfter、P は窓の出現間隔の最悪値、D は 1 回の窓の長さ、tGP は terminationGracePeriod、buffer はコントローラー自身の検知遅れのために確保する固定値 2m です。',
+    defs: {
+      a: 'ノードが候補になる年齢。構成上つねに expireAfter より手前に来るように導出されるため、バックストップはバックストップのままでいられます。',
+      tRot: 'ノード 1 台のローテーション時間の上界 — surge の待ちと、強制完了されるドレインの合計。期限側の「上界」であって、健全なローテーションの所要時間ではありません。',
+      tRotEst: '健全なローテーション 1 回の想定所要時間。期限の項も buffer も含みません（上界ではなく、スループットの分母だからです）。',
+      g: 'expireAfter が発火する前にスケジュールが実際に保証するローテーション機会の回数。auto 導出では G = K、ageThreshold を明示指定すると再計算されます。',
+      c: '1 回の窓で開始できるローテーション数（m = surge.maxUnavailable、v1 では 1 固定）。ローテーションは直列で、間隔は cooldownAfter です。',
+    },
+    specSymbols: '仕様 §1.4（記号一覧）',
+    specDerivation: '§3.2（導出）',
+  },
   timeline: 'タイムライン',
   horizonInvalid: 'シミュレート期間が空か不正です — 開始は終了より厳密に前である必要があります。',
   diagnostics: '診断',
