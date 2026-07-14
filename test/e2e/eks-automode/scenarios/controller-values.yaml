@@ -47,9 +47,17 @@ affinity:
 # Task 8) and point this at that name instead.
 priorityClassName: system-cluster-critical
 
-# Human-readable logs so the rotation lifecycle is easy to follow.
+# Production JSON logs, NOT the --zap-devel console format: the Scenario P
+# offline analyzer (scenarios/soak-analyze.py) parses the "rotation complete"
+# lines out of the harvested controller.log as the per-rotation ledger, and only
+# the JSON encoder carries the "msg"/"ts" fields it keys on — the console
+# encoder emits "<ts>\tINFO\trotation complete\t{...kv only...}", whose trailing
+# JSON object parses but holds neither, so every rotation would be silently
+# skipped. "rotation complete" and the other lifecycle lines are Info-level, so
+# nothing is lost at the JSON encoder's default Info level, and the runbook's
+# log greps are substring-based and match either format.
 logging:
-  development: true
+  development: false
 
 # The controller resolves each NodePool's governing RotationPolicy at reconcile
 # time (issue #119). The live policy for the scenarios is

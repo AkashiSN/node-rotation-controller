@@ -171,9 +171,19 @@ def load_ledger(run):
     """Parse zap JSON lines out of the --prefix'ed controller.log; one row per
     "rotation complete" line. raw.find("{") skips both the kubectl --prefix tag
     (e.g. "[pod/x] 2026-...Z ") and the recorder's own "== <ts> (re)start: ..."
-    headers, neither of which contains a brace before the JSON payload starts."""
-    rows, bad = [], 0
+    headers, neither of which contains a brace before the JSON payload starts.
+
+    Returns (rows, bad-ts-count, mentions): mentions counts every raw line
+    containing the text "rotation complete" regardless of parseability, so the
+    caller can fail LOUD when the file clearly holds rotations the parser could
+    not attribute — the signature of zap CONSOLE format (--zap-devel /
+    logging.development: true), where the line is "<ts>\\tINFO\\trotation
+    complete\\t{...kv...}": the trailing {...} parses as JSON but carries no
+    "msg"/"ts" key, so a silent-empty ledger would false-FAIL criterion 8."""
+    rows, bad, mentions = [], 0, 0
     for raw in open(f"{run}/controller.log"):
+        if "rotation complete" in raw:
+            mentions += 1
         i = raw.find("{")
         if i < 0:
             continue
@@ -198,7 +208,7 @@ def load_ledger(run):
                 "total": j.get(LEDGER_KEYS["total"], ""),
             }
         )
-    return rows, bad
+    return rows, bad, mentions
 
 
 def scan_scrape_log(run):
@@ -357,7 +367,18 @@ def fmt_min(seconds):
 
 def main(run):
     births = load_claim_births(run)
-    ledger, ledger_bad = load_ledger(run)
+    ledger, ledger_bad, ledger_mentions = load_ledger(run)
+    ledger_warning = None
+    if ledger_mentions > 0 and not ledger:
+        ledger_warning = (
+            f"WARNING: controller.log mentions 'rotation complete' {ledger_mentions} time(s) "
+            "but 0 lines parsed as ledger entries. The log is most likely zap CONSOLE format "
+            "(--zap-devel / chart value logging.development: true), whose trailing {...kv...} "
+            "object has no \"msg\"/\"ts\" keys. The analyzer requires JSON logs — the Scenario P "
+            "overlay (scenarios/controller-values.yaml) sets logging.development: false; "
+            "re-check what the run was actually installed with."
+        )
+        print(ledger_warning, file=sys.stderr)
     rows, missing_claims = build_ledger_rows(ledger, births)
     margins_m = [fmt_min(r["margin_s"]) for r in rows]
 
@@ -402,6 +423,9 @@ def main(run):
     out = []
     out.append("# Scenario P analysis (issue #118)")
     out.append("")
+    if ledger_warning:
+        out.append(f"> **{ledger_warning}**")
+        out.append("")
     out.append("## Per-rotation ledger")
     out.append("")
     out.append(f"rotations (ledger): {len(rows)}  (unmatched claims: {missing_claims or 'none'}, "
@@ -464,8 +488,8 @@ def main(run):
                     f"(ageThreshold A={GAUGE_TARGETS['noderotation_age_threshold_seconds']:.0f}s)")
         if cen["old_no_inflight"]:
             out.append("flagged — older than A with no in-flight rotation:")
-            for name, pool, age in cen["old_no_inflight"]:
-                out.append(f"  - {name} (pool={pool}, age={age:.0f}s)")
+            for name, pool, age, state in cen["old_no_inflight"]:
+                out.append(f"  - {name} (pool={pool}, age={age:.0f}s, state={state})")
         else:
             out.append("no claim older than A lacks an in-flight rotation")
         if cen["failed"]:

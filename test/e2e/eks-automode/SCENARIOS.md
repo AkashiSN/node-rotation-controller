@@ -1074,10 +1074,14 @@ Run this on its own dedicated cluster (a fresh `terraform apply`, [§3.2](#32-in
 install step, with `nrc-poc` and any other scenario left untouched) so the 12h
 run isn't sharing capacity or a controller pod with anything else. Install the
 controller from the same `scenarios/controller-values.yaml` overlay [§3.2](#32-install-the-controller)
-uses — it already carries the off-pool affinity, `replicaCount: 1`, and
+uses — it already carries the off-pool affinity, `replicaCount: 1`,
 `priorityClassName: system-cluster-critical` (the latter closes #270's
 priority-0 preemption hole, load-bearing for the unattended 12h
-`restartCount==0` criterion):
+`restartCount==0` criterion), and production **JSON logging**
+(`logging.development: false`) so the `rotation complete` lines in
+`$run/controller.log` stay machine-parseable evidence — `soak-analyze.py`
+builds the per-rotation ledger from their `msg`/`ts` JSON fields, which the
+`--zap-devel` console format does not carry:
 
 ```bash
 helm install node-rotation-controller ../../../charts/node-rotation-controller \
