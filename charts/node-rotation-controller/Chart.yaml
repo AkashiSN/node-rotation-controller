@@ -6,8 +6,8 @@ description: |
 type: application
 # Pre-1.0: chart and app versions move together until the v1 config schema
 # and surface stabilize (spec §6.1).
-version: 0.5.0
-appVersion: "0.5.0"
+version: 0.6.0
+appVersion: "0.6.0"
 # Karpenter v1 (karpenter.sh/v1) requires a recent control plane.
 kubeVersion: ">=1.29.0-0"
 home: https://github.com/AkashiSN/node-rotation-controller
