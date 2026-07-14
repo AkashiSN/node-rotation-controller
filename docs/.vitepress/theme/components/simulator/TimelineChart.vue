@@ -88,7 +88,14 @@ const windows = computed(() => tl.value.windows
     x1: x(w.startMs),
     x2: x(w.endMs),
     thin: !wide(w.startMs, w.endMs, SEMANTIC.windowBandPx),
-    clipped: w.startClipped || w.endClipped,
+    // Too narrow for its edges to BE edges: one stripe, carrying its own contrast.
+    narrow: !wide(w.startMs, w.endMs, SEMANTIC.windowEdgePx),
+    // A boundary the HORIZON cut into is an artifact, not a transition the schedule made.
+    // Each edge carries its own verdict: a window clipped on the left and closed on the
+    // right has one of each, and drawing both the same would state something false about
+    // the one that is real.
+    startClipped: w.startClipped,
+    endClipped: w.endClipped,
     title: `${t.value.legend.window}: ${formatInstant(w.startMs, props.timezone)} → ${formatInstant(w.endMs, props.timezone)}`,
   })))
 
@@ -308,8 +315,10 @@ defineExpose({ view, reset, zoom })
         <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><line class="sim-deadline" x1="10" y1="1" x2="10" y2="13" /></svg>{{ t.chart.deadline }}</span>
         <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><g class="sim-breach"><line x1="6" y1="3" x2="14" y2="11" /><line x1="6" y1="11" x2="14" y2="3" /></g></svg>{{ t.legend.breach }}</span>
         <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><rect class="sim-overlap-band" x="1" y="2" width="18" height="10" /></svg>{{ t.chart.overlap }}</span>
-        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><rect class="sim-eligible" x="1" y="2" width="18" height="10" /></svg>{{ t.chart.eligibleAfter }}</span>
-        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><rect class="sim-window" x="1" y="2" width="18" height="10" /></svg>{{ t.legend.window }}</span>
+        <!-- Each key is drawn with the same marks as the thing it explains — fill AND edge,
+             since the edge is now what makes the region legible. -->
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><rect class="sim-eligible" x="1" y="2" width="18" height="10" /><line class="sim-eligible-edge" x1="1" y1="2" x2="1" y2="12" /></svg>{{ t.chart.eligibleAfter }}</span>
+        <span class="sim-key"><svg viewBox="0 0 20 14" class="sim-glyph"><rect class="sim-window" x="1" y="2" width="18" height="10" /><line class="sim-window-edge" x1="1" y1="2" x2="1" y2="12" /><line class="sim-window-edge" x1="19" y1="2" x2="19" y2="12" /></svg>{{ t.legend.window }}</span>
       </div>
     </div>
 
@@ -334,8 +343,8 @@ defineExpose({ view, reset, zoom })
       <p class="sim-hint">{{ t.chart.viewHint }}</p>
       <p class="sim-view-label"><strong>{{ t.chart.view }}:</strong> <code>{{ viewLabel }}</code> <span class="sim-tz">({{ timezone }})</span></p>
 
-      <MinimapStrip :horizon="horizonSpan" :view="view" :targets="targets"
-                    :windows="tl.windows" @update:view="v => (view = clampView(v, horizonSpan))" />
+      <MinimapStrip :horizon="horizonSpan" :view="view" :targets="targets" :windows="tl.windows"
+                    :timezone="timezone" @update:view="v => (view = clampView(v, horizonSpan))" />
 
       <div class="sim-chart-scroll">
         <svg ref="svg" class="sim-svg" :viewBox="`0 0 ${W} ${height}`" tabindex="0"
@@ -366,12 +375,26 @@ defineExpose({ view, reset, zoom })
                   :x2="x(tick.ms)" :y2="height - 24" class="sim-gridline" />
 
             <!-- maintenance windows: below 3px a band degrades to a TICK, never a hairline
-                 rectangle a reader would mistake for a border -->
+                 rectangle a reader would mistake for a border.
+                 The band's FILL only says "something is here" — it is a background, and a
+                 background that shouts fights the bars drawn on it. Its vertical EDGES
+                 carry the contrast (a fill over the dark theme cannot clear 3:1 at any
+                 alpha a background may honestly use; a stroke clears it easily — #260).
+                 The horizontal edges are the plot's, not the window's, and are never
+                 drawn: the schedule set no such boundary. -->
             <g v-for="(w, i) in windows" :key="`w${i}`">
               <title>{{ w.title }}</title>
-              <rect v-if="!w.thin" :x="w.x1" :y="AXIS_H - 8" :width="Math.max(1, w.x2 - w.x1)"
-                    :height="rows.length * ROW_H + 4"
-                    :class="['sim-window', { 'sim-window-clipped': w.clipped }]" />
+              <template v-if="!w.thin">
+                <rect :x="w.x1" :y="AXIS_H - 8" :width="Math.max(1, w.x2 - w.x1)"
+                      :height="rows.length * ROW_H + 4"
+                      :class="['sim-window', { 'sim-window-narrow': w.narrow }]" />
+                <template v-if="!w.narrow">
+                  <line :x1="w.x1" :y1="AXIS_H - 8" :x2="w.x1" :y2="AXIS_H + rows.length * ROW_H - 4"
+                        :class="['sim-window-edge', { 'sim-window-edge-clipped': w.startClipped }]" />
+                  <line :x1="w.x2" :y1="AXIS_H - 8" :x2="w.x2" :y2="AXIS_H + rows.length * ROW_H - 4"
+                        :class="['sim-window-edge', { 'sim-window-edge-clipped': w.endClipped }]" />
+                </template>
+              </template>
               <line v-else :x1="w.x1" :y1="AXIS_H - 8" :x2="w.x1" :y2="AXIS_H + rows.length * ROW_H - 4"
                     class="sim-window-tick" />
             </g>
@@ -382,11 +405,18 @@ defineExpose({ view, reset, zoom })
 
             <g v-for="row in drawn" :key="row.slot" class="sim-row">
               <g v-for="g in row.generations" :key="g.key">
-                <!-- eligible AFTER: a region, from the boundary to the deadline -->
-                <rect v-if="g.eligibleX1 !== null" :x="g.eligibleX1" :y="row.y + 8"
-                      :width="Math.max(1, g.eligibleX2! - g.eligibleX1)" :height="BAR_H + 16"
-                      class="sim-eligible" tabindex="0" role="graphics-symbol"
-                      :aria-label="g.eligibleTitle"><title>{{ g.eligibleTitle }}</title></rect>
+                <!-- eligible AFTER: a region, from the boundary to the deadline. Its left
+                     edge is drawn DASHED and its right edge not at all: "after" is a strict
+                     inequality — the boundary instant is not itself eligible — and the
+                     region's right end is the deadline, which has its own glyph. -->
+                <template v-if="g.eligibleX1 !== null">
+                  <rect :x="g.eligibleX1" :y="row.y + 8"
+                        :width="Math.max(1, g.eligibleX2! - g.eligibleX1)" :height="BAR_H + 16"
+                        class="sim-eligible" tabindex="0" role="graphics-symbol"
+                        :aria-label="g.eligibleTitle"><title>{{ g.eligibleTitle }}</title></rect>
+                  <line :x1="g.eligibleX1" :y1="row.y + 8" :x2="g.eligibleX1"
+                        :y2="row.y + 8 + BAR_H + 16" class="sim-eligible-edge" />
+                </template>
 
                 <!-- the generation's own segments -->
                 <g v-for="(s, i) in g.segments" :key="i">

@@ -7,6 +7,29 @@
   --vp-font-family-base: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --vp-font-family-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
+  /* Simulator palette (issue #260). SOFT FILL, CRISP BOUNDARY.
+     These exist because the chart used to reach for --vp-c-brand-soft for every region it
+     drew, and on the dark theme that is rgba(60,188,172,.15) — 1.30:1 against the page for
+     the window band, 1.13:1 for "eligible after" (which multiplied another opacity: 0.5 on
+     top of it). WCAG 1.4.11 asks 3:1 of a non-text element that means something, and NO
+     fill alpha gets there: a=0.35 reaches 2.0:1 and is already loud enough to fight the
+     bars drawn over it. So the fill only says "something is here" and the STROKE carries
+     the contrast — the same teal at full strength is 7.3:1 on dark, 3.7:1 on light.
+
+     HUE BY ROLE. Teal is the NODE's rotation (provisioning, make-before-break, eligible).
+     The maintenance window is a SCHEDULE fact — not a property of any node — so it leaves
+     the teal family for the figure palette's violet, and takes the window calendar with it:
+     the same thing must not be two colours. */
+  --sim-window-fill: rgba(122, 108, 196, 0.13);
+  --sim-window-line: #7a6cc4;
+  --sim-eligible-fill: rgba(23, 149, 138, 0.14);
+  --sim-eligible-line: #17958a;
+  /* The brush is outlined in a high-contrast NEUTRAL, so it reads over the window bands and
+     the rotation ticks whatever colour they are. The curtain is the page's own background:
+     what is off screen recedes toward it. */
+  --sim-brush-line: #101820;
+  --sim-curtain: rgba(255, 255, 255, 0.62);
+
   /* Figure palette — light (from ff-timeline.html / coverage-matrix.html :root) */
   --fig-bg: #f4f7f9; --fig-surface: #ffffff; --fig-surface-2: #eef2f5;
   --fig-text: #101820; --fig-muted: #5a6773; --fig-faint: #8493a0;
@@ -22,6 +45,14 @@
 .dark {
   --vp-c-brand-1: #3cbcac; --vp-c-brand-2: #49a7bd; --vp-c-brand-3: #49a7bd;
   --vp-c-brand-soft: rgba(60,188,172,0.15);
+  /* Simulator palette — dark. Fills a shade heavier than light (an unlit surface needs
+     more of the colour to register at all); strokes at 5.9:1 (violet) and 7.3:1 (teal). */
+  --sim-window-fill: rgba(154, 140, 224, 0.20);
+  --sim-window-line: #9a8ce0;
+  --sim-eligible-fill: rgba(60, 188, 172, 0.16);
+  --sim-eligible-line: #3cbcac;
+  --sim-brush-line: #e7eef4;
+  --sim-curtain: rgba(12, 18, 24, 0.62);
   /* Figure palette — dark (from the prefers-color-scheme:dark blocks) */
   --fig-bg: #0c1218; --fig-surface: #121b24; --fig-surface-2: #0f171f;
   --fig-text: #e7eef4; --fig-muted: #93a1ad; --fig-faint: #6c7b88;
@@ -172,12 +203,21 @@
 .policy-simulator .sim-svg { display: block; width: 100%; min-width: 860px; height: auto; touch-action: none; cursor: grab; }
 .policy-simulator .sim-svg:active { cursor: grabbing; }
 .policy-simulator .sim-svg:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 2px; }
-.policy-simulator .sim-window { fill: var(--vp-c-brand-soft); }
-/* A window occurrence the HORIZON cut into, not one the schedule closed: dashed, so the
-   artifact is never read as a policy boundary. */
-.policy-simulator .sim-window-clipped { stroke: var(--vp-c-brand-2); stroke-width: 1; stroke-dasharray: 3 3; }
+/* The window band: a quiet FILL, and vertical EDGES that carry the contrast. The band's top
+   and bottom belong to the plot, not to the schedule, and are never stroked. */
+.policy-simulator .sim-window { fill: var(--sim-window-fill); }
+/* A band a few pixels wide is ONE mark, not a fill between two edges: two full-strength
+   strokes 4px apart are a bright bar, and a horizon's worth of them is the glare the soft
+   fill exists to avoid. A small mark can carry a stronger colour without dominating, so a
+   narrow band takes its contrast from its fill and draws no edges (SEMANTIC.windowEdgePx). */
+.policy-simulator .sim-window-narrow { fill: color-mix(in srgb, var(--sim-window-line) 45%, transparent); }
+.policy-simulator .sim-window-edge { stroke: var(--sim-window-line); stroke-width: 1; }
+/* An edge the HORIZON cut into, not one the schedule closed: dashed, so the artifact is
+   never read as a policy boundary. Per EDGE, not per band — a window clipped on the left and
+   closed on the right has one of each, and drawing both alike would lie about the real one. */
+.policy-simulator .sim-window-edge-clipped { stroke-dasharray: 3 3; }
 /* Below ~3px a band would be a hairline rectangle a reader mistakes for a border. */
-.policy-simulator .sim-window-tick { stroke: var(--vp-c-brand-2); stroke-width: 1.5; }
+.policy-simulator .sim-window-tick { stroke: var(--sim-window-line); stroke-width: 1.5; }
 .policy-simulator .sim-deadline { stroke: var(--vp-c-text-2); stroke-width: 1; stroke-dasharray: 2 2; }
 .policy-simulator .sim-breach line { stroke: var(--vp-c-danger-1); stroke-width: 2; }
 .policy-simulator .sim-blocked { fill: var(--vp-c-text-3); opacity: 0.25; }
@@ -203,9 +243,15 @@
 .policy-simulator .sim-overlap-band {
   fill: none; stroke: var(--vp-c-brand-1); stroke-width: 1; stroke-dasharray: 2 2; rx: 3;
 }
-/* "Eligible after": the region from the boundary to the deadline. The left edge is
-   EXCLUSIVE — the trigger is a strict inequality — so the fill fades in from it. */
-.policy-simulator .sim-eligible { fill: var(--vp-c-brand-soft); opacity: 0.5; }
+/* "Eligible after": the region from the boundary to the deadline. Its left edge is drawn
+   DASHED — the trigger is a strict inequality, so the boundary instant is not itself
+   eligible, and a solid edge would say otherwise. Its right edge is not drawn at all: that
+   end is the deadline, which has a glyph of its own.
+   No `opacity` here: it used to multiply a soft colour by 0.5 and land at 1.13:1. */
+.policy-simulator .sim-eligible { fill: var(--sim-eligible-fill); }
+.policy-simulator .sim-eligible-edge {
+  stroke: var(--sim-eligible-line); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none;
+}
 .policy-simulator .sim-gridline { stroke: var(--vp-c-divider); stroke-width: 0.5; }
 /* Where the simulation actually STOPPED. A bar reaching it continues; it was not cut off. */
 .policy-simulator .sim-through { stroke: var(--vp-c-text-2); stroke-width: 1.5; stroke-dasharray: 6 3; }
@@ -229,21 +275,45 @@
 .policy-simulator .sim-advanced { font-size: 0.8em; color: var(--vp-c-text-2); margin-top: 0.4rem; }
 
 /* The minimap: the whole horizon, with the view as a brush. It is what makes "the view is
-   not the horizon" visible rather than merely true. */
-.policy-simulator .sim-minimap { display: block; width: 100%; height: 28px; touch-action: none; cursor: pointer; }
+   not the horizon" visible rather than merely true — and it is a CONTROL: the wheel scrolls
+   it, the brush drags, the handles resize. */
+.policy-simulator .sim-minimap { display: block; width: 100%; height: 28px; touch-action: none; }
+/* The strip is focusable (arrow keys pan it), and a pointer press focuses it — which drew the
+   UA's own ring around the whole strip on every click, a white box the brush then had to be
+   found inside. The ring belongs to the KEYBOARD, where it is the only cue there is. */
+.policy-simulator .sim-minimap:focus { outline: none; }
+.policy-simulator .sim-minimap:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 2px; }
 .policy-simulator .sim-minimap-bg { fill: var(--vp-c-bg-soft); }
-.policy-simulator .sim-minimap-window { fill: var(--vp-c-brand-soft); }
-.policy-simulator .sim-minimap-rotation { stroke: var(--vp-c-brand-1); stroke-width: 1; }
-.policy-simulator .sim-minimap-brush { fill: var(--vp-c-brand-1); opacity: 0.22; stroke: var(--vp-c-brand-1); stroke-width: 1; }
+.policy-simulator .sim-minimap-window { fill: var(--sim-window-fill); }
+/* The strip's x axis is STRETCHED to the container (preserveAspectRatio="none" — the gestures
+   depend on it). Every stroke on it therefore says how wide it is in screen pixels, or it
+   would fatten with the page. */
+.policy-simulator .sim-minimap-rotation {
+  stroke: var(--vp-c-brand-1); stroke-width: 1; vector-effect: non-scaling-stroke;
+}
+/* THE CURTAIN. The brush was a translucent teal rectangle among teal ticks and teal bands,
+   two pixels wide at any real zoom — unfindable (#260). Dimming everything OUTSIDE the view
+   makes the view the brightest thing on the strip at EVERY width, which a fill cannot be.
+   The outline is a neutral for the same reason: it must read over whatever lies beneath. */
+.policy-simulator .sim-minimap-curtain { fill: var(--sim-curtain); }
+.policy-simulator .sim-minimap-brush {
+  fill: none; stroke: var(--sim-brush-line); stroke-width: 1.5; vector-effect: non-scaling-stroke;
+}
+.policy-simulator .sim-minimap-handle line {
+  stroke: var(--sim-brush-line); stroke-width: 3; stroke-linecap: round;
+  vector-effect: non-scaling-stroke; cursor: ew-resize;
+}
 
 /* The window calendar: weekday x 15 minutes, shaded by the OPEN-TIME RATIO. */
 .policy-simulator .sim-cal-scroll { overflow-x: auto; }
 .policy-simulator .sim-cal { border-collapse: collapse; font-size: 0.7em; min-width: 720px; }
 .policy-simulator .sim-cal-hour { font-weight: 400; color: var(--vp-c-text-3); text-align: left; border-left: 1px solid var(--vp-c-divider); }
 .policy-simulator .sim-cal-day { font-weight: 400; color: var(--vp-c-text-2); text-align: right; padding-right: 0.4rem; white-space: nowrap; }
+/* The cells shade toward the WINDOW's colour, not the brand's: this calendar and the
+   timeline's bands are the same maintenance window seen twice, and one thing gets one hue. */
 .policy-simulator .sim-cal-cell {
   width: 6px; height: 14px; padding: 0; border: 1px solid var(--vp-c-bg);
-  background: color-mix(in srgb, var(--vp-c-brand-1) calc(var(--open, 0) * 100%), var(--vp-c-bg-soft));
+  background: color-mix(in srgb, var(--sim-window-line) calc(var(--open, 0) * 100%), var(--vp-c-bg-soft));
 }
 /* Never observed (a wall-clock hour a DST change skipped) is UNKNOWN, not "shut" — they are
    opposite claims, so they cannot share a shade. */
