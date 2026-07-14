@@ -29,6 +29,12 @@ type Resolved struct {
 	DrainBound   time.Duration
 	// Derived is schedule.Derive's output: A, t_rot, t_rot_est, G, C and the findings.
 	Derived schedule.Result
+	// Inputs is the schedule.Inputs that PRODUCED Derived — the values the derivation was
+	// actually fed. It rides along so a consumer can show the derivation rather than only
+	// its result (#266): P, D and the tGP fallback are computed here and appear nowhere in
+	// the manifest, so a consumer that re-read the YAML would have to re-implement this
+	// resolution to recover them — the second implementation this package exists to avoid.
+	Inputs schedule.Inputs
 }
 
 // Resolve mirrors RotationReconciler.resolve + derivedThresholds for a simulated fleet.
@@ -79,6 +85,24 @@ func Resolve(pol *policy.Policy, sched *window.Schedule, f Fleet) (Resolved, err
 		failurePause = s.FailurePause.Duration
 	}
 
+	inputs := schedule.Inputs{
+		E:                    f.ExpireAfter,
+		TGP:                  tgp,
+		TGPWasUnset:          unset,
+		P:                    p,
+		WindowLen:            d,
+		IdleGap:              idleGap,
+		ReadyTimeout:         s.ReadyTimeout.Duration,
+		Cooldown:             s.CooldownAfter.Duration,
+		DrainEstimate:        drainEst,
+		ProvisioningEstimate: provEst,
+		RetryBackoff:         s.RetryBackoff.Duration,
+		K:                    pol.K(),
+		MaxUnavailable:       pol.SurgeMaxUnavailable(),
+		NodeCount:            len(f.Nodes),
+		Override:             ov,
+	}
+
 	return Resolved{
 		// Base omits tGP; LeadTime.For adds each claim's own terminationGracePeriod.
 		LeadTime: selection.LeadTime{
@@ -91,22 +115,7 @@ func Resolve(pol *policy.Policy, sched *window.Schedule, f Fleet) (Resolved, err
 		Cooldown:     s.CooldownAfter.Duration,
 		FailurePause: failurePause,
 		DrainBound:   drainBound,
-		Derived: schedule.Derive(schedule.Inputs{
-			E:                    f.ExpireAfter,
-			TGP:                  tgp,
-			TGPWasUnset:          unset,
-			P:                    p,
-			WindowLen:            d,
-			IdleGap:              idleGap,
-			ReadyTimeout:         s.ReadyTimeout.Duration,
-			Cooldown:             s.CooldownAfter.Duration,
-			DrainEstimate:        drainEst,
-			ProvisioningEstimate: provEst,
-			RetryBackoff:         s.RetryBackoff.Duration,
-			K:                    pol.K(),
-			MaxUnavailable:       pol.SurgeMaxUnavailable(),
-			NodeCount:            len(f.Nodes),
-			Override:             ov,
-		}),
+		Inputs:       inputs,
+		Derived:      schedule.Derive(inputs),
 	}, nil
 }

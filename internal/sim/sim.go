@@ -284,6 +284,10 @@ type Timeline struct {
 	// (A, t_rot, t_rot_est, G, C and the feasibility findings) — the header strip. It is
 	// policy-derived, so it does NOT follow Env.
 	Result schedule.Result
+	// Inputs is what Result was derived FROM (schedule.Inputs). Result alone cannot explain
+	// itself: P, D and the tGP fallback are resolved from the schedule and the template, not
+	// stated in the policy.
+	Inputs schedule.Inputs
 	// Diagnostics is why the timeline looks the way it does. A Fatal finding, an
 	// unreachable input and an unmodelled path all land here rather than in error, so
 	// the UI can always render something and say why.
@@ -331,7 +335,7 @@ func Run(p *policy.Policy, f Fleet, env Env, o Options) (Timeline, error) {
 		return Timeline{}, err
 	}
 
-	tl := Timeline{Result: res.Derived}
+	tl := Timeline{Result: res.Derived, Inputs: res.Inputs}
 
 	// Env defaults to the policy's resolved forecast estimates, so an untouched
 	// simulation is self-consistent (§Env).

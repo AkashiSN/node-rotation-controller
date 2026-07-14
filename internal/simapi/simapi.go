@@ -166,9 +166,36 @@ type Result struct {
 	TRotEstimate         string    `json:"tRotEstimate"` // layer-2 forecast (ADR-0003)
 	DrainEstimate        string    `json:"drainEstimate"`
 	ProvisioningEstimate string    `json:"provisioningEstimate"`
-	G                    int       `json:"g"` // guaranteed rotation chances
-	C                    int       `json:"c"` // throughput per window occurrence
+	G                    int       `json:"g"`                // guaranteed rotation chances
+	C                    int       `json:"c"`                // throughput per window occurrence
+	Inputs               *Inputs   `json:"inputs,omitempty"` // what the above was derived FROM (#266)
 	Findings             []Finding `json:"findings,omitempty"`
+}
+
+// Inputs is what Result was derived FROM (schedule.Inputs) — the values the page substitutes
+// into the formulas beside each symbol (#266). It is here because the page must NOT re-derive
+// them: P (the worst-case period between window occurrences) and D (one occurrence's length)
+// are resolved from the schedule, and TGP silently falls back to schedule.DrainFallback when
+// the template leaves terminationGracePeriod unset — none of the three is written in the
+// manifest a visitor is reading.
+//
+// ProvisioningEstimate and DrainEstimate are deliberately NOT repeated here: Result already
+// carries them, resolved.
+type Inputs struct {
+	E             string `json:"e"`             // expireAfter (the fleet template's representative value)
+	TGP           string `json:"tgp"`           // terminationGracePeriod, fallback already applied
+	TGPIsFallback bool   `json:"tgpFallback"`   // the value above is schedule.DrainFallback, not the operator's
+	P             string `json:"p"`             // worst-case window period
+	WindowLen     string `json:"windowLen"`     // D
+	Buffer        string `json:"buffer"`        // the fixed slack in t_rot; the page must not re-declare the constant
+	ReadyTimeout  string `json:"readyTimeout"`  // surge.readyTimeout, resolved
+	Cooldown      string `json:"cooldownAfter"` // surge.cooldownAfter, resolved
+	K             int    `json:"k"`             // minRotationChances
+	M             int    `json:"m"`             // surge.maxUnavailable
+	NodeCount     int    `json:"nodeCount"`     // N
+	// AgeThresholdOverride marks an A that was GIVEN, not derived: A = E − (K·P + t_rot) does
+	// not hold for it, and a page that printed that equation anyway would be lying.
+	AgeThresholdOverride bool `json:"ageThresholdOverride"`
 }
 
 // Finding is one feasibility result from schedule.Derive, with its English
@@ -369,7 +396,7 @@ func instant(field, s string) (time.Time, error) {
 
 func toResponse(tl sim.Timeline) Response {
 	resp := Response{
-		Result:           toResult(tl.Result),
+		Result:           toResult(tl.Result, tl.Inputs),
 		Partial:          tl.Partial,
 		SimulatedThrough: stamp(tl.SimulatedThrough),
 	}
@@ -439,7 +466,7 @@ func toResponse(tl sim.Timeline) Response {
 	return resp
 }
 
-func toResult(r schedule.Result) *Result {
+func toResult(r schedule.Result, in schedule.Inputs) *Result {
 	out := &Result{
 		AgeThreshold:         r.A.String(),
 		TRot:                 r.TRot.String(),
@@ -448,6 +475,20 @@ func toResult(r schedule.Result) *Result {
 		ProvisioningEstimate: r.ProvisioningEstimate.String(),
 		G:                    r.G,
 		C:                    r.C,
+		Inputs: &Inputs{
+			E:                    in.E.String(),
+			TGP:                  in.TGP.String(),
+			TGPIsFallback:        in.TGPWasUnset,
+			P:                    in.P.String(),
+			WindowLen:            in.WindowLen.String(),
+			Buffer:               schedule.Buffer.String(),
+			ReadyTimeout:         in.ReadyTimeout.String(),
+			Cooldown:             in.Cooldown.String(),
+			K:                    in.K,
+			M:                    in.MaxUnavailable,
+			NodeCount:            in.NodeCount,
+			AgeThresholdOverride: in.Override != nil,
+		},
 	}
 	for _, f := range r.Findings {
 		out.Findings = append(out.Findings, Finding{
