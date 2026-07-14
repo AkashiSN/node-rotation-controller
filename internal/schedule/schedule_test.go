@@ -868,3 +868,42 @@ func TestDeriveCeilBoundaryOnEstimate(t *testing.T) {
 		t.Errorf("C = %d, want 2 (ceil must count the near-edge start)", r.C)
 	}
 }
+
+// TestDeriveScenarioPSoak pins the Scenario P (issue #118) tight-race soak
+// schedule: 48 sub-daily windows (P=30m, D=28m, idle gap 2m), E=2h12m, tGP=5m,
+// readyTimeout=5m, cooldown=2m, K=2, N=5. The soak's PASS criteria assert these
+// same values from the live gauges, and the RotationSpansNextWindow warn is the
+// structurally unavoidable (and only) expected finding.
+func TestDeriveScenarioPSoak(t *testing.T) {
+	r := Derive(Inputs{
+		E:              2*time.Hour + 12*time.Minute,
+		TGP:            5 * time.Minute,
+		P:              30 * time.Minute,
+		WindowLen:      28 * time.Minute,
+		IdleGap:        new(2 * time.Minute),
+		ReadyTimeout:   5 * time.Minute,
+		Cooldown:       2 * time.Minute,
+		RetryBackoff:   30 * time.Minute,
+		K:              2,
+		MaxUnavailable: 1,
+		NodeCount:      5,
+	})
+	if want := 12 * time.Minute; r.TRot != want {
+		t.Errorf("TRot = %v, want %v", r.TRot, want)
+	}
+	if want := time.Hour; r.A != want {
+		t.Errorf("A = %v, want %v", r.A, want)
+	}
+	if r.G != 2 {
+		t.Errorf("G = %d, want 2", r.G)
+	}
+	if want := 10 * time.Minute; r.TRotEst != want { // provisioning min(5m,5m) + drain min(5m,10m)
+		t.Errorf("TRotEst = %v, want %v", r.TRotEst, want)
+	}
+	if r.C != 3 { // ceil(28m / 12m)
+		t.Errorf("C = %d, want 3", r.C)
+	}
+	if len(r.Findings) != 1 || r.Findings[0].Code != "RotationSpansNextWindow" || r.Findings[0].Severity != Warn {
+		t.Errorf("findings = %v, want exactly [RotationSpansNextWindow warn]", codes(r))
+	}
+}
