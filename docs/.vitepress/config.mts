@@ -81,6 +81,7 @@ export default withMermaid(defineConfig({
           ]},
           { text: 'Validation', collapsed: false, items: [
             { text: 'Forceful fallback (Scenario O)', link: '/validation/forceful-fallback' },
+            { text: 'Tight-race soak (Scenario P)', link: '/validation/tight-race-soak' },
           ]},
           { text: 'Development', collapsed: false, items: [
             { text: 'CI/CD design', link: '/development/ci-cd' },
@@ -124,6 +125,7 @@ export default withMermaid(defineConfig({
           ]},
           { text: '検証', collapsed: false, items: [
             { text: 'Forceful fallback（シナリオ O）', link: '/ja/validation/forceful-fallback' },
+            { text: 'Tight-race soak（シナリオ P）', link: '/ja/validation/tight-race-soak' },
           ]},
           { text: '開発者向け', collapsed: false, items: [
             { text: 'CI/CD 設計', link: '/ja/development/ci-cd' },
