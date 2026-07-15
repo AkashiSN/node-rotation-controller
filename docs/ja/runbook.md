@@ -7,7 +7,7 @@
 英語原文: [docs/runbook.md](../runbook.md)。
 
 > 本コントローラは pre-1.0 である。EKS Auto Mode の PoC でコアの surge パスは
-> 検証済みだが、エッジケースと数時間規模の tight-race soak 試験は未了である
+> 検証済みで、12 時間の tight-race soak も完走済みである。同一 AZ の実容量枯渇（ICE）のみ未了である
 > （[§7.2 検証済み前提](specification/07-risks.md#72-検証済み前提)を参照）。本ランブックは
 > production 展開の出発点であって、保証ではない。
 

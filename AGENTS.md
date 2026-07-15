@@ -13,7 +13,8 @@ The project is in the **v0.3 MVP** phase: the v1 surge implementation — the
 reconcile loop and rotation state machine, schedule/selection/policy, the surge
 placeholder, metrics, and the Helm chart — is in place, with unit and envtest
 coverage. It is **pre-1.0**: EKS Auto Mode PoC runs have validated the core
-surge path, but edge cases and a full multi-hour tight-race soak remain open; see
+surge path, including a 12-hour tight-race soak (Scenario P); a genuine same-AZ
+capacity shortage (ICE) remains the open item; see
 the roadmap and validated assumptions in the specification (§6.2, §7.2) for the
 milestones toward v1.0. The specification remains the source of truth — keep code
 and spec in sync (see *Specification rules* below).
