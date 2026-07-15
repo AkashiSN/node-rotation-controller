@@ -433,7 +433,14 @@ def main(run):
         )
         print(ledger_warning, file=sys.stderr)
     rows, missing_claims = build_ledger_rows(ledger, births)
-    margins_m = [fmt_min(r["margin_s"]) for r in rows]
+    # Criterion 8 and the margin distribution govern the pool under test only
+    # (spec rev4 §6, runbook criteria 1-10 = nodepool-soak). After the epilogue,
+    # the ledger legitimately contains a nodepool-soak-epi row whose margin is
+    # ~10m BY DESIGN — mixing it in would misreport the main-pool distribution
+    # and could fail a healthy soak on an epilogue result.
+    main_rows = [r for r in rows if r["pool"] == MAIN_POOL]
+    other_rows = [r for r in rows if r["pool"] != MAIN_POOL]
+    margins_m = [fmt_min(r["margin_s"]) for r in main_rows]
 
     events, seq_ts, restarts, scrape_errors = scan_scrape_log(run)
     totals = counter_totals(events)
@@ -497,7 +504,7 @@ def main(run):
         )
     out.append("")
 
-    out.append("## Margin distribution")
+    out.append("## Margin distribution (main pool only)")
     out.append("")
     if margins_m:
         out.append(
@@ -505,7 +512,12 @@ def main(run):
             f"max={max(margins_m):.1f}m (n={len(margins_m)})"
         )
     else:
-        out.append("no rotations in ledger — no margin distribution")
+        out.append("no main-pool rotations in ledger — no margin distribution")
+    for r in other_rows:
+        out.append(
+            f"- excluded from the distribution ({r['pool']}): {r['claim']} "
+            f"margin {fmt_min(r['margin_s']):.1f}m"
+        )
     out.append("")
 
     out.append("## Counters")
@@ -584,18 +596,21 @@ def main(run):
         f"{'n/a' if short_lead_max is None else f'{short_lead_max:.0f}'} | "
         f"{verdict(short_lead_max == 0, no_data=short_lead_max is None)} |"
     )
-    out.append(f"| 5 scraper seq contiguous | {len(gaps)} gap(s), {len(gaps_over_5m)} over 5m, "
-                f"{len(restarts)} restart(s), {scrape_errors} SCRAPE_ERROR | "
-                f"{verdict(len(gaps_over_5m) == 0)} |")
+    # No scraper evidence at all (empty or wholly malformed scrape.log) is a
+    # FAIL, not a vacuous pass: the recorder of record being absent is exactly
+    # what this criterion exists to catch.
+    out.append(f"| 5 scraper seq contiguous | "
+                f"{'no scraper data' if not seq_ts else f'{len(gaps)} gap(s), {len(gaps_over_5m)} over 5m, {len(restarts)} restart(s), {scrape_errors} SCRAPE_ERROR'} | "
+                f"{verdict(len(gaps_over_5m) == 0, no_data=not seq_ts)} |")
     out.append(
         f"| 7a six gauges match pinned values (main pool) | "
         f"{len(gauge_mismatches)}/{len(GAUGE_TARGETS)} series mismatched | "
         f"{verdict(not gauge_mismatches and all(gauge_present.values()), no_data=not all(gauge_present.values()))} |"
     )
     if margins_m:
-        out.append(f"| 8 all margins>0 | min {min(margins_m):.1f}m | {verdict(min(margins_m) > 0)} |")
+        out.append(f"| 8 all margins>0 (main pool) | min {min(margins_m):.1f}m (n={len(margins_m)}) | {verdict(min(margins_m) > 0)} |")
     else:
-        out.append("| 8 all margins>0 | no rotations | FAIL |")
+        out.append("| 8 all margins>0 (main pool) | no main-pool rotations | FAIL |")
     census_ok = cen["census_ts"] is not None and not cen["old_no_inflight"] and not cen["failed"]
     # "claims:" scopes the row honestly: the spec's criterion 9 also covers
     # stale anchors and orphan placeholders, which this analyzer does not

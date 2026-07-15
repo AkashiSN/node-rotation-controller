@@ -89,7 +89,7 @@ assert_in "$run/report.md" "case1 margin distribution" "min=0.5m median=45.0m ma
 assert_in "$run/report.md" "case1 criterion 1 expired PASS" "| 1 expired==0 | 0 | PASS |"
 assert_in "$run/report.md" "case1 success survives the reset (pod-a 14 + pod-b 3)" "success=17"
 assert_in "$run/report.md" "case1 seq gap reported" "seq 3-3 missing"
-assert_in "$run/report.md" "case1 criterion 8 margins PASS" "| 8 all margins>0 | min 0.5m | PASS |"
+assert_in "$run/report.md" "case1 criterion 8 margins PASS (main-pool-scoped label)" "| 8 all margins>0 (main pool) | min 0.5m (n=3) | PASS |"
 assert_in "$run/report.md" "case1 criterion 9 census clean (young replacements right-censored)" "| 9 end census (claims: stale/failed) | 0 stale, 0 failed | PASS |"
 assert_not_in "$run/report.md" "case1 must not warn about console logs" "0 lines parsed as ledger entries"
 
@@ -174,5 +174,45 @@ assert_not_in "$run3b/report.md" "case3b must not warn" "0 lines parsed as ledge
 # The census snapshot deliberately still shows nc-1 at age 7200s > A with no
 # in-flight state: the flagged-stale path must render (name, pool, age, state).
 assert_in "$run3b/report.md" "case3b stale claim rendered with its state" "nc-1 (pool=nodepool-soak, age=7200s, state=(none))"
+
+# ===========================================================================
+# Case 4 — mixed-pool ledger (the post-epilogue runbook path): criterion 8 and
+#          the margin distribution must stay scoped to nodepool-soak; the
+#          epilogue row is reported separately, never mixed in (PR #272 review)
+# ===========================================================================
+run4="$tmp/case4"; mkdir -p "$run4"
+cat > "$run4/snapshots.jsonl" <<'EOF'
+{"ts":"2026-07-14T02:30:00Z","kind":"nodeclaims","items":[{"metadata":{"name":"nc-m1","creationTimestamp":"2026-07-14T00:00:00Z","labels":{"karpenter.sh/nodepool":"nodepool-soak"},"annotations":{}}},{"metadata":{"name":"nc-m2","creationTimestamp":"2026-07-14T00:00:00Z","labels":{"karpenter.sh/nodepool":"nodepool-soak"},"annotations":{}}},{"metadata":{"name":"nc-e1","creationTimestamp":"2026-07-14T00:00:00Z","labels":{"karpenter.sh/nodepool":"nodepool-soak-epi"},"annotations":{}}}]}
+EOF
+cat > "$run4/controller.log" <<'EOF'
+[pod/node-rotation-controller-0] 2026-07-14T01:02:00.000000000Z {"level":"info","ts":"2026-07-14T01:02:00Z","msg":"rotation complete","nodepool":"nodepool-soak","nodeclaim":"nc-m1","mode":"surge","surgeNode":"ip-10-0-1-21","surgeWait":"30s","drain":"40s","total":"1m10s"}
+[pod/node-rotation-controller-0] 2026-07-14T01:27:00.000000000Z {"level":"info","ts":"2026-07-14T01:27:00Z","msg":"rotation complete","nodepool":"nodepool-soak","nodeclaim":"nc-m2","mode":"surge","surgeNode":"ip-10-0-1-22","surgeWait":"30s","drain":"40s","total":"1m10s"}
+[pod/node-rotation-controller-0] 2026-07-14T02:02:00.000000000Z {"level":"info","ts":"2026-07-14T02:02:00Z","msg":"rotation complete","nodepool":"nodepool-soak-epi","nodeclaim":"nc-e1","mode":"forceful-fallback","drain":"48s"}
+EOF
+cat > "$run4/scrape.log" <<'EOF'
+1 2026-07-14T02:00:00Z pod-a noderotation_completed_total{nodepool="nodepool-soak",outcome="success"} 2
+EOF
+
+python3 "$analyze" "$run4" > "$run4/stdout.log" 2> "$run4/stderr.log" \
+  || die "case4: analyzer exited non-zero: $(cat "$run4/stdout.log" "$run4/stderr.log")"
+# births 00:00:00Z + 7920s = 02:12:00Z deadline for all three; completions give
+# main margins 70.0m (nc-m1) and 45.0m (nc-m2), epi margin 10.0m (nc-e1).
+assert_in "$run4/report.md" "case4 all three rotations are in the ledger" "rotations (ledger): 3"
+assert_in "$run4/report.md" "case4 distribution is main-pool only (n=2, epi's 10m absent)" "min=45.0m median=57.5m max=70.0m (n=2)"
+assert_in "$run4/report.md" "case4 epilogue row reported separately" "excluded from the distribution (nodepool-soak-epi): nc-e1 margin 10.0m"
+assert_in "$run4/report.md" "case4 criterion 8 scoped to the main pool" "| 8 all margins>0 (main pool) | min 45.0m (n=2) | PASS |"
+
+# ===========================================================================
+# Case 5 — no scraper evidence at all: criterion 5 must be FAIL (no data),
+#          never a vacuous PASS (PR #272 review)
+# ===========================================================================
+run5="$tmp/case5"; mkdir -p "$run5"
+cp "$run4/snapshots.jsonl" "$run5/snapshots.jsonl"
+cp "$run4/controller.log" "$run5/controller.log"
+printf 'not a scrape line at all\n' > "$run5/scrape.log"
+
+python3 "$analyze" "$run5" > "$run5/stdout.log" 2> "$run5/stderr.log" \
+  || die "case5: analyzer exited non-zero: $(cat "$run5/stdout.log" "$run5/stderr.log")"
+assert_in "$run5/report.md" "case5 criterion 5 fails closed without scraper data" "| 5 scraper seq contiguous | no scraper data | FAIL (no data) |"
 
 echo "fixture ok"

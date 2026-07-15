@@ -229,7 +229,7 @@ restarts. `expireAfter` stayed **2h fixed** the whole run.
 | Policy | `RotationPolicy` `nrc-soak` (`ageThreshold: auto` → `A=1h`, 48 windows/day `P=30m`/`D=28m`, `surge.readyTimeout: 5m`, `cooldownAfter: 2m`, `retryBackoff: 30m`, `minRotationChances: 2`, `surge.forcefulFallback.enabled: true` — armed); mirrored `nrc-soak-epi` policy on the epilogue pool |
 | Workload | `soak-workload`, 5-replica steady fleet (1.5-cpu pod on a 2-vCPU node, no anti-affinity), ramped one replica every 12m; `soak-epi-workload`, 1 replica on the frozen mini-pool |
 
-**Verdict: CLEAN PASS on all 13 criteria.** Over the full 12h observation window
+**Verdict: CLEAN PASS on all applicable criteria (12 PASS; criterion 13, the missed-release abort rule, was never exercised and is N/A).** Over the full 12h observation window
 (**T0** `2026-07-14T14:20:29Z`, `T_end` `2026-07-15T02:20:29Z`), `nodepool-soak`
 completed **71 graceful surge rotations** at a steady ~5.0/h cadence (design
 forecast ~5/h against `C=3` per window, 83% of the derived throughput budget),
