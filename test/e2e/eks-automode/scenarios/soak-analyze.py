@@ -398,6 +398,11 @@ def census(run, last_snapshot):
         if not name or not created:
             continue
         pool = (meta.get("labels") or {}).get(K8S_POOL_LABEL, "")
+        # Criterion 9 governs the pool under test only: claims in ungoverned
+        # pools (e.g. general-purpose, which hosts the controller and has no
+        # RotationPolicy, hence no ageThreshold) are not evidence either way.
+        if pool != MAIN_POOL:
+            continue
         state = (meta.get("annotations") or {}).get(STATE_ANNOTATION, "")
         age_s = (census_ts - parse_ts(created)).total_seconds()
         if state == "failed":
