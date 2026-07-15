@@ -1,0 +1,97 @@
+# Scenario P in-cluster recorder of record: scrapes EVERY controller pod's
+# /metrics via the API-server pods/proxy every 60s and prints
+#   <seq> <ts> <pod> <metric line>
+# to stdout (~3MB/12h). seq is monotone: any gap or restart is detectable in
+# the harvested log (kubectl logs; on restartCount>0 also harvest --previous).
+# Pinned off both soak pools so rotation never reschedules the recorder.
+#
+# Image: bitnami/kubectl no longer publishes versioned tags (verified against
+# the Docker Hub API on 2026-07-14 — bitnami/kubectl carries only `latest` plus
+# content-addressable sha256-* tags; no `1.33`, `1.36`, or any other semver tag
+# exists). `latest` currently resolves to kubectl client v1.36.2, matching this
+# cluster's kubernetes_version = "1.36" (terraform.tfvars.example). To keep the
+# 12h soak run reproducible instead of tracking a rolling tag, this pins the
+# digest that `latest` resolved to at that check. If the base image is ever
+# refreshed and drops v1.36 kubectl compatibility, re-resolve with
+# `docker pull bitnami/kubectl:latest && docker inspect --format '{{index .RepoDigests 0}}' bitnami/kubectl:latest`
+# and update both the digest and this comment.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: soak-scraper
+  namespace: node-rotation-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: soak-scraper
+  namespace: node-rotation-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/proxy"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: soak-scraper
+  namespace: node-rotation-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: soak-scraper
+subjects:
+  - kind: ServiceAccount
+    name: soak-scraper
+    namespace: node-rotation-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soak-scraper
+  namespace: node-rotation-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: soak-scraper
+  template:
+    metadata:
+      labels:
+        app: soak-scraper
+    spec:
+      serviceAccountName: soak-scraper
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: karpenter.sh/nodepool
+                    operator: NotIn
+                    values: ["nodepool-soak", "nodepool-soak-epi"]
+      containers:
+        - name: scrape
+          image: bitnami/kubectl@sha256:558420daf32bbc382e3e9af4537f4073085b336ddd47399a3b70e70087115978
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              seq=0
+              while true; do
+                seq=$((seq+1)); ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                pods=$(kubectl get pods -n node-rotation-system -l app.kubernetes.io/name=node-rotation-controller -o jsonpath='{.items[*].metadata.name}') || pods=""
+                [ -n "$pods" ] || echo "$seq $ts - SCRAPE_ERROR no-controller-pod"
+                for p in $pods; do
+                  # Capture first so the tested exit status is kubectl's own:
+                  # piped directly, the pipeline's status would be sed's
+                  # (always 0) and the SCRAPE_ERROR fallback could never fire.
+                  if out=$(kubectl get --raw "/api/v1/namespaces/node-rotation-system/pods/${p}:8080/proxy/metrics" 2>/dev/null); then
+                    printf '%s\n' "$out" | grep '^noderotation_' | sed "s/^/$seq $ts $p /"
+                  else
+                    echo "$seq $ts $p SCRAPE_ERROR proxy"
+                  fi
+                done
+                sleep 60
+              done

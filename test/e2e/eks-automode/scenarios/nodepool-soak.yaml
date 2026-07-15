@@ -1,0 +1,56 @@
+# Scenario P (issue #118) main soak pool. E=2h12m races the controller's
+# leadTime = K·P + t_rot = 1h12m (auto A=1h): each node becomes a candidate at
+# age 1h and must catch a window and finish a graceful surge inside its last
+# 72 minutes — ~1/150 of the daily-window PoC's E=336h. E is set at creation
+# and NEVER patched (Karpenter drift). instance-cpu pinned to 2 so each
+# 1.5-cpu workload pod needs its own node (5 pods => 5 nodes).
+#
+# disruption.budgets blocks Karpenter's OWN voluntary disruption
+# (Underutilized, Drifted) so only the controller's rotation — and the
+# expireAfter backstop it must beat — turns nodes over. Empty stays allowed so
+# a vacated surge leftover is reclaimed (consolidateAfter 60s).
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: nodepool-soak
+  labels:
+    noderotation-soak/in-scope: "true"
+spec:
+  template:
+    metadata:
+      labels:
+        noderotation-soak/pool: soak
+    spec:
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      expireAfter: 2h12m
+      terminationGracePeriod: 5m
+  limits:
+    cpu: "16" # steady 5 nodes x 2 vCPU + surge + margin
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 60s
+    budgets:
+      - nodes: "0"
+        reasons: ["Underutilized", "Drifted"]

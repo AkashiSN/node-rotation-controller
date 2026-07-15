@@ -8,7 +8,7 @@ section links back to the relevant spec section.
 Japanese translation: [docs/ja/runbook.md](ja/runbook.md).
 
 > The controller is pre-1.0. EKS Auto Mode PoC runs have validated the core surge
-> path, but edge cases and a full multi-hour tight-race soak remain open (see
+> path, including a 12-hour tight-race soak; a genuine same-AZ capacity shortage (ICE) remains open (see
 > [§7.2 validated assumptions](specification/07-risks.md#72-validated-assumptions)). Treat
 > this runbook as the starting point for a production rollout, not a guarantee.
 

@@ -1,0 +1,54 @@
+# Scenario P (issue #118) epilogue pool: a single node, born FROZEN
+# (noderotation.io/freeze is a far-future freeze-until timestamp, set at
+# creation so no rotation can ever start early), aged past the fallback
+# boundary E − t_rot and then released by soak-epi-release.sh inside the
+# interval (d−12m, d−8m). Deterministic single-claim forceful-fallback firing;
+# the multi-node mix evidence stays with Scenario O. Same schedule/policy shape
+# as the main pool; mutually exclusive labels keep governance isolated.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: nodepool-soak-epi
+  labels:
+    noderotation-soak-epi/in-scope: "true"
+  annotations:
+    noderotation.io/freeze: "2027-01-01T00:00:00Z"
+spec:
+  template:
+    metadata:
+      labels:
+        noderotation-soak-epi/pool: epi
+    spec:
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      expireAfter: 2h12m
+      terminationGracePeriod: 5m
+  limits:
+    cpu: "8"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 60s
+    budgets:
+      - nodes: "0"
+        reasons: ["Underutilized", "Drifted"]

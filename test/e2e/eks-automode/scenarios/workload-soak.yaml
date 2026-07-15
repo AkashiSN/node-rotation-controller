@@ -1,0 +1,30 @@
+# Scenario P main soak workload: 5 x 1.5-cpu pods pinned to nodepool-soak, one
+# per 2-vCPU node. replicas ships 0 — the runbook ramps 0→5 one replica every
+# 12m to spread birth phases across the A=1h cycle (no synchronized batch).
+# No anti-affinity (it would symmetrically block a drained pod from re-landing).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soak-workload
+  namespace: default
+  labels:
+    app: soak-workload
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: soak-workload
+  template:
+    metadata:
+      labels:
+        app: soak-workload
+    spec:
+      nodeSelector:
+        noderotation-soak/pool: soak
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: "1500m"
+              memory: "512Mi"

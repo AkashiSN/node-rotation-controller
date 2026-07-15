@@ -213,3 +213,99 @@ restarts. `expireAfter` stayed **2h fixed** the whole run.
   graceful, no further forceful since replacements are not deadline-synchronized).
   Only the original 12-node batch is recorded above; the trailing churn is expected
   steady-state operation, not part of the Scenario O assertion.
+
+---
+
+## Run: 2026-07-15 — `test/118-tight-race-soak` @ `3002146` (Scenario P tight-race soak, #118)
+
+**Artifacts under test**
+
+| | |
+|---|---|
+| Controller image | branch `test/118-tight-race-soak` @ `3002146`, built and pushed to the ephemeral stack's ECR as `:poc` (linux/amd64+arm64) |
+| Helm chart | `charts/node-rotation-controller` (this branch), `-f scenarios/controller-values.yaml`, `replicaCount: 1`, `priorityClassName: system-cluster-critical` (#271) |
+| Platform | EKS Auto Mode, Kubernetes 1.36, `karpenter.sh/v1`, `us-west-2` |
+| NodePool | `nodepool-soak`, **fixed `expireAfter: 2h12m`** (never patched), `terminationGracePeriod: 5m`, disruption budgets block `Underutilized`/`Drifted`; epilogue mini-pool `nodepool-soak-epi` (limits.cpu 8, N=1) born with `noderotation.io/freeze` already set |
+| Policy | `RotationPolicy` `nrc-soak` (`ageThreshold: auto` → `A=1h`, 48 windows/day `P=30m`/`D=28m`, `surge.readyTimeout: 5m`, `cooldownAfter: 2m`, `retryBackoff: 30m`, `minRotationChances: 2`, `surge.forcefulFallback.enabled: true` — armed); mirrored `nrc-soak-epi` policy on the epilogue pool |
+| Workload | `soak-workload`, 5-replica steady fleet (1.5-cpu pod on a 2-vCPU node, no anti-affinity), ramped one replica every 12m; `soak-epi-workload`, 1 replica on the frozen mini-pool |
+
+**Verdict: CLEAN PASS on all applicable criteria (12 PASS; criterion 13, the missed-release abort rule, was never exercised and is N/A).** Over the full 12h observation window
+(**T0** `2026-07-14T14:20:29Z`, `T_end` `2026-07-15T02:20:29Z`), `nodepool-soak`
+completed **71 graceful surge rotations** at a steady ~5.0/h cadence (design
+forecast ~5/h against `C=3` per window, 83% of the derived throughput budget),
+every one make-before-break new-provision, with completions landing roughly
+every 12m in lock-step with the ramp phase. **`outcome="expired"` stayed 0 for
+the entire run** — the headline result — and `noderotation_forceful_fallback_total`
+on `nodepool-soak` stayed 0 despite `surge.forcefulFallback` being armed the
+whole time (quiescence: the fallback is available but never needed while the
+controller's `leadTime` genuinely races `expireAfter`). Zero `outcome="failure"`,
+zero `policy_conflict`, zero `short_lead_nodes` across 909 scrapes, the six
+derived schedule gauges (`age_threshold_seconds=3600`, `window_period_seconds=1800`,
+`t_rot_bound_seconds=720`, `t_rot_estimate_seconds=600`, `throughput_capacity=3`,
+`rotation_chances=2`) held exact at all 909 scrapes, findings stayed exactly
+`{RotationSpansNextWindow}` throughout, the scraper's `seq` was contiguous (0
+gaps, 0 restarts, 0 `SCRAPE_ERROR`), and the controller pod held `restartCount=0`
+for the full 12h. A short, attended **epilogue** on a separate frozen mini-pool
+then deterministically drove one claim across the fallback boundary and
+confirmed the surge-less branch fires cleanly on the same controller/config.
+
+**Margin distribution** (main pool only, `n=71`; margin = candidate's
+`creationTimestamp + expireAfter` − rotation completion): **min 68.3m**
+(`nodepool-soak-8hbzb`), **median 70.3m**, **max 71.2m** (`nodepool-soak-d94p8`)
+— every rotation finished with over an hour of the 2h12m deadline still to
+spare, and the spread across 71 independent rotations is under 3 minutes,
+consistent with the fixed `leadTime=1h12m` schedule rather than any tail risk
+building up over the 12h run.
+
+| Criterion | Verdict | Evidence observed |
+|-----------|---------|-------------------|
+| 1. `outcome="expired"` == 0 | PASS | 0 across the full 12h + tail-follow + epilogue |
+| 2. `outcome="success"` climbs ≈5/h, total ≥ 40 | PASS | 71 on `nodepool-soak` (72 including the epilogue's `nodepool-soak-epi` success), steady ~12m completion cadence |
+| 3. `forceful_fallback_total` == 0 on `nodepool-soak` | PASS | 0 the entire run — armed via `surge.forcefulFallback.enabled: true` but never fired on the main pool |
+| 4. `short_lead_nodes` == 0 at every scrape | PASS | max 0 across all 909 scrapes |
+| 5. `restartCount` == 0; scraper `seq` contiguous | PASS | controller `restartCount=0` for 12h; 0 seq gaps, 0 restarts, 0 `SCRAPE_ERROR` across 909 scrapes |
+| 6. Load presence at every snapshot | PASS (live-verified) | deployment desired=available=ready=5 throughout; all 5 pods `Running` on `Ready` `nodepool-soak` nodes at every snapshot |
+| 7. Config-under-test presence | PASS (7a offline + 7b live-verified) | 7a: all 6 schedule gauges exact at 909/909 scrapes, 0 mismatches; 7b: `matchedNodePools=1` and `Ready=True reason=Accepted` on both `nrc-soak` and `nrc-soak-epi` confirmed live; findings exactly `{RotationSpansNextWindow}`, no unexpected finding code anywhere in the run |
+| 8. Per-rotation margin > 0 | PASS | min 68.3m, median 70.3m, max 71.2m, n=71 (main pool) |
+| 9. End census | PASS | at `T_end`, all 5 live claims were younger than `A` (ages 11–59m, right-censored, no tail-follow obligation); the offline census at harvest time (`2026-07-15T04:27:46Z`, scoped to `nodepool-soak` only post-fix) found 0 claims ≥ `A` without an in-flight rotation and 0 claims `state=failed` |
+| 10. No unexpected Karpenter disruption on the main pool | PASS | only `DisruptionBlocked`/`Unconsolidatable` Events observed on `nodepool-soak` objects (the budgets + `do-not-disrupt` suppression working as designed); no `Expiration`/`Underutilized`/`Drifted` |
+| 11. Epilogue frozen state | PASS | while frozen (~2h, `noderotation.io/freeze=2027-01-01T00:00:00Z`): `noderotation_candidates{nodepool="nodepool-soak-epi"}=1`, `noderotation_in_progress{nodepool="nodepool-soak-epi"}=0` throughout, node untouched |
+| 12. Epilogue release / fallback fire | PASS | release computed `R=2026-07-15T04:23:50Z` (deadline `d=04:34:50Z`, `d−11m`, in-window); claim `nodepool-soak-epi-gtx42` deleted `04:24:46Z` — 56s after release, 10m04s before its deadline, inside the 7m drain bound; `forceful_fallback_total{nodepool="nodepool-soak-epi"}` `0→1`; `completed_total{nodepool="nodepool-soak-epi",outcome="success"}` `→1`; `ForcefulFallback` Warning Event with the spec message; the continuous placeholder ledger (`pods -w` on `noderotation.io/surge-for`) recorded **zero** placeholder for the epi claim; `expired` stayed 0; main pool rotated undisturbed through the epilogue (`70→71` on `nodepool-soak`, no fallback/expired/failure logged there, no completion gap exceeding `P + t_rot = 42m`) |
+| 13. Abort rule (missed release) | N/A | the release script completed normally inside its bounds; the abort path was never exercised |
+
+**Epilogue narrative.** `nodepool-soak-epi` was created already frozen
+(`noderotation.io/freeze=2027-01-01T00:00:00Z`, Scenario E's mechanism), so its
+single node aged into candidacy but never started: claim `nodepool-soak-epi-gtx42`
+was born `2026-07-15T02:22:50Z` and sat at `candidates=1, in_progress=0` for
+~2h while frozen — the freeze semantics held for the full attended wait, not
+just momentarily. `soak-epi-release.sh` computed the release instant by an
+interval search from the claim's actual `creationTimestamp`
+(`d = creationTimestamp + expireAfter = 04:34:50Z`; chosen `R = 04:23:50Z`,
+satisfying `d − 12m < R < d − 8m`), waited for it under `nohup`, and removed
+the freeze. Once released, the graceful surge no longer fit inside the
+remaining time to the deadline, so the controller took the surge-less
+fallback branch: `forceful_fallback_total{nodepool-soak-epi}` climbed `0→1`
+with a `ForcefulFallback` Warning Event carrying the spec message, and the
+claim deleted `56s` after release — `10m04s` ahead of its own deadline, well
+inside the `tGP + Buffer = 7m` drain bound. The continuous `pods -w`
+placeholder ledger for the epi claim recorded **no placeholder Pod at any
+point** — the defining signature of the surge-less path (spec §3.3) —
+distinguishing it cleanly from all 71 make-before-break rotations on the main
+pool. `expired` never incremented, and the main pool's own rotation cadence
+(`70→71` during the epilogue window) was unaffected: no fallback, no expired,
+no failure logged there, and no completion gap on `nodepool-soak` exceeded
+`P + t_rot = 42m`.
+
+**Operational note (evidence-layer design worked as intended).** The local
+recorder (secondary evidence) went blind for a 15-minute stretch
+(`21:29`–`21:44Z`) when the operator workstation's cloud credentials expired
+mid-run. This had no effect on the recorded result: the in-cluster scraper
+(the recorder of record, §Setup) stayed gapless across the same interval — 0
+seq gaps, 0 `SCRAPE_ERROR` — and the local recorder auto-resumed once the
+credentials were refreshed. This is the two-recorder design (§Setup, "survives
+the scraper being lost, and vice versa") holding up under a real,
+unplanned failure of one of the two layers.
+
+**Findings.** None. This run closes out the last item tracked in spec §7.2 as
+"open on real cloud" alongside a genuine same-AZ capacity shortage (ICE, which
+remains open — issue #109) — see the updated §7.2 rows and §6.2 roadmap entry.

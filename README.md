@@ -15,7 +15,7 @@ v0.6.0 is about the **throughput forecast** — the check that tells you, before
 
 v0.6.1 is a chart-only follow-up: the controller Deployment can now set an optional top-level `priorityClassName`, so on a shared pool the component that rotates the pool need not run at the default priority. It is the controller's own priority, unrelated to the surge placeholder's negative-priority class (spec §3.3). No controller behavior, CRD schema, annotation or metric changed.
 
-The core surge path is validated on EKS Auto Mode across a full rotation regression suite, including a trick-free forceful-fallback run on a synchronized batch. A genuine same-AZ capacity shortage (ICE) driving rollback, and a multi-hour tight-race soak, remain the open items before v1.0 (see the [roadmap](docs/specification/06-release.md#62-roadmap)).
+The core surge path is validated on EKS Auto Mode across a full rotation regression suite, including a trick-free forceful-fallback run on a synchronized batch and a 12-hour tight-race soak under a sub-daily window (Scenario P). A genuine same-AZ capacity shortage (ICE) driving rollback remains the open item before v1.0 (see the [roadmap](docs/specification/06-release.md#62-roadmap)).
 
 Still **pre-1.0** — the configuration surface may change between minor releases. [docs/specification/](docs/specification/) remains the source of truth for the design; see [Compatibility](#compatibility) for the Karpenter contract.
 
