@@ -29,7 +29,7 @@ const T = computed(() =>
   ja.value
     ? {
         cap: '図 1 — 全 72 回転の deadline margin',
-        sub: '横軸: T0 からの経過時間。縦軸: 完了時点で deadline までに残っていた時間（分）。オレンジの 1 点がエピローグの意図的な fallback 発火（margin 10.1 分）— 本編の帯との落差がこの検証の要約になっている。',
+        sub: '横軸: T0 からの経過時間。縦軸: 完了時点で deadline までに残っていた時間（分）。T_end（12h 観測窓の終端、窓内 60 回転）より右の点は有人エピローグ期間中の完了で、刻みも margin も変わっていない。オレンジの 1 点がエピローグの意図的な fallback 発火（margin 10.1 分）— 本編の帯との落差がこの検証の要約になっている。',
         aria: '全72回転のdeadline margin。本編71回転は68.3〜71.2分の帯に収まり、エピローグの1点のみ10.1分。',
         yUnit: '分',
         band: `本編 71 回転: ${bandBot}〜${bandTop} 分`,
@@ -44,7 +44,7 @@ const T = computed(() =>
       }
     : {
         cap: 'Figure 1 — deadline margin of all 72 rotations',
-        sub: 'x: elapsed time since T0. y: time still left to the deadline at completion (minutes). The single orange dot is the epilogue’s deliberate fallback firing (margin 10.1 min) — the drop from the main-pool band is the whole run in one picture.',
+        sub: 'x: elapsed time since T0. y: time still left to the deadline at completion (minutes). Dots right of the T_end rule (end of the 12h observation window; 60 rotations inside it) completed while the attended epilogue ran — cadence and margin unchanged. The single orange dot is the epilogue’s deliberate fallback firing (margin 10.1 min) — the drop from the main-pool band is the whole run in one picture.',
         aria: 'Deadline margin of all 72 rotations. The 71 main-pool rotations sit in a 68.3–71.2 minute band; the single epilogue point is at 10.1 minutes.',
         yUnit: 'min',
         band: `main pool, 71 rotations: ${bandBot}–${bandTop} min`,

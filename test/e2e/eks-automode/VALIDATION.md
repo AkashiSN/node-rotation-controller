@@ -231,10 +231,12 @@ restarts. `expireAfter` stayed **2h fixed** the whole run.
 
 **Verdict: CLEAN PASS on all applicable criteria (12 PASS; criterion 13, the missed-release abort rule, was never exercised and is N/A).** Over the full 12h observation window
 (**T0** `2026-07-14T14:20:29Z`, `T_end` `2026-07-15T02:20:29Z`), `nodepool-soak`
-completed **71 graceful surge rotations** at a steady ~5.0/h cadence (design
+completed **60 graceful surge rotations** at a steady ~5.0/h cadence (design
 forecast ~5/h against `C=3` per window, 83% of the derived throughput budget),
-every one make-before-break new-provision, with completions landing roughly
-every 12m in lock-step with the ramp phase. **`outcome="expired"` stayed 0 for
+and kept that cadence unchanged through the attended epilogue period for
+**71 in total by end of recording** (last completion `2026-07-15T04:25:24Z`,
+T0+14.1h) — every one make-before-break new-provision, with completions
+landing roughly every 12m in lock-step with the ramp phase. **`outcome="expired"` stayed 0 for
 the entire run** — the headline result — and `noderotation_forceful_fallback_total`
 on `nodepool-soak` stayed 0 despite `surge.forcefulFallback` being armed the
 whole time (quiescence: the fallback is available but never needed while the
@@ -260,7 +262,7 @@ building up over the 12h run.
 | Criterion | Verdict | Evidence observed |
 |-----------|---------|-------------------|
 | 1. `outcome="expired"` == 0 | PASS | 0 across the full 12h + tail-follow + epilogue |
-| 2. `outcome="success"` climbs ≈5/h, total ≥ 40 | PASS | 71 on `nodepool-soak` (72 including the epilogue's `nodepool-soak-epi` success), steady ~12m completion cadence |
+| 2. `outcome="success"` climbs ≈5/h, total ≥ 40 | PASS | 60 on `nodepool-soak` within `[T0, T_end]` (5.0/h); 71 by end of recording (72 including the epilogue's `nodepool-soak-epi` success), steady ~12m completion cadence |
 | 3. `forceful_fallback_total` == 0 on `nodepool-soak` | PASS | 0 the entire run — armed via `surge.forcefulFallback.enabled: true` but never fired on the main pool |
 | 4. `short_lead_nodes` == 0 at every scrape | PASS | max 0 across all 909 scrapes |
 | 5. `restartCount` == 0; scraper `seq` contiguous | PASS | controller `restartCount=0` for 12h; 0 seq gaps, 0 restarts, 0 `SCRAPE_ERROR` across 909 scrapes |
@@ -270,7 +272,7 @@ building up over the 12h run.
 | 9. End census | PASS | at `T_end`, all 5 live claims were younger than `A` (ages 11–59m, right-censored, no tail-follow obligation); the offline census at harvest time (`2026-07-15T04:27:46Z`, scoped to `nodepool-soak` only post-fix) found 0 claims ≥ `A` without an in-flight rotation and 0 claims `state=failed` |
 | 10. No unexpected Karpenter disruption on the main pool | PASS | only `DisruptionBlocked`/`Unconsolidatable` Events observed on `nodepool-soak` objects (the budgets + `do-not-disrupt` suppression working as designed); no `Expiration`/`Underutilized`/`Drifted` |
 | 11. Epilogue frozen state | PASS | while frozen (~2h, `noderotation.io/freeze=2027-01-01T00:00:00Z`): `noderotation_candidates{nodepool="nodepool-soak-epi"}=1`, `noderotation_in_progress{nodepool="nodepool-soak-epi"}=0` throughout, node untouched |
-| 12. Epilogue release / fallback fire | PASS | release computed `R=2026-07-15T04:23:50Z` (deadline `d=04:34:50Z`, `d−11m`, in-window); claim `nodepool-soak-epi-gtx42` deleted `04:24:46Z` — 56s after release, 10m04s before its deadline, inside the 7m drain bound; `forceful_fallback_total{nodepool="nodepool-soak-epi"}` `0→1`; `completed_total{nodepool="nodepool-soak-epi",outcome="success"}` `→1`; `ForcefulFallback` Warning Event with the spec message; the continuous placeholder ledger (`pods -w` on `noderotation.io/surge-for`) recorded **zero** placeholder for the epi claim; `expired` stayed 0; main pool rotated undisturbed through the epilogue (`70→71` on `nodepool-soak`, no fallback/expired/failure logged there, no completion gap exceeding `P + t_rot = 42m`) |
+| 12. Epilogue release / fallback fire | PASS | release computed `R=2026-07-15T04:23:50Z` (deadline `d=04:34:50Z`, `d−11m`, in-window); claim `nodepool-soak-epi-gtx42` deleted `04:24:46Z` — 56s after release, 10m04s before its deadline, inside the 7m drain bound; `forceful_fallback_total{nodepool="nodepool-soak-epi"}` `0→1`; `completed_total{nodepool="nodepool-soak-epi",outcome="success"}` `→1`; `ForcefulFallback` Warning Event with the spec message; the continuous placeholder ledger (`pods -w` on `noderotation.io/surge-for`) recorded **zero** placeholder for the epi claim; `expired` stayed 0; main pool rotated undisturbed through the epilogue (`70→71` on `nodepool-soak` across the release-to-fire window, no fallback/expired/failure logged there, no completion gap exceeding `P + t_rot = 42m`) |
 | 13. Abort rule (missed release) | N/A | the release script completed normally inside its bounds; the abort path was never exercised |
 
 **Epilogue narrative.** `nodepool-soak-epi` was created already frozen
@@ -292,9 +294,12 @@ placeholder ledger for the epi claim recorded **no placeholder Pod at any
 point** — the defining signature of the surge-less path (spec §3.3) —
 distinguishing it cleanly from all 71 make-before-break rotations on the main
 pool. `expired` never incremented, and the main pool's own rotation cadence
-(`70→71` during the epilogue window) was unaffected: no fallback, no expired,
+(`70→71` across the release-to-fire window) was unaffected: no fallback, no expired,
 no failure logged there, and no completion gap on `nodepool-soak` exceeded
-`P + t_rot = 42m`.
+`P + t_rot = 42m`. (The `70→71` count runs from T0 across the whole recording:
+the 11 main-pool completions after `T_end` belong to this continued-cadence
+epilogue period, not to the 12h observation window — see the verdict
+paragraph's 60-vs-71 split.)
 
 **Operational note (evidence-layer design worked as intended).** The local
 recorder (secondary evidence) went blind for a 15-minute stretch

@@ -24,7 +24,7 @@ missed-release abort rule, was never exercised and is N/A).
 
 | 71<small>/71</small> | 0 | 68.3<small> min</small> | 56<small> s</small> |
 |:---|:---|:---|:---|
-| graceful surge rotations over the 12h main run (5.0/h) | `expired` · `failure` · main-pool fallback · `short_lead` · restarts | minimum deadline margin (median 70.3, max 71.2) | epilogue release → surge-less fallback completed |
+| main-pool graceful rotations — 60 inside the 12h window (5.0/h), 71 by end of recording (T0+14.1h) | `expired` · `failure` · main-pool fallback · `short_lead` · restarts | minimum deadline margin (median 70.3, max 71.2) | epilogue release → surge-less fallback completed |
 
 ## Aim and derived schedule
 
@@ -52,12 +52,14 @@ report.
 
 ## The margin picture
 
-Over 12 hours from T0 the main pool completed **71 rotations, every one a
-graceful make-before-break surge onto a newly provisioned node**, landing
-roughly every 12 minutes with five slots keeping phase. The margin — the old
-claim's deadline minus the rotation's completion — stayed within 68.3–71.2
-minutes across all 71, a spread under 3 minutes: **no degradation accumulated
-over the 12-hour run**.
+From T0 to the end of recording (T0+14.1h — the formal 12h observation window
+plus the attended epilogue period) the main pool completed **71 rotations,
+every one a graceful make-before-break surge onto a newly provisioned node**:
+60 inside `[T0, T_end]` — exactly the forecast 5.0/h — and 11 more at the
+unchanged ~12-minute cadence while the epilogue was staged and fired, with
+five slots keeping phase throughout. The margin — the old claim's deadline
+minus the rotation's completion — stayed within 68.3–71.2 minutes across all
+71, a spread under 3 minutes: **no degradation accumulated over the run**.
 
 <SoakMarginChart />
 
@@ -66,7 +68,7 @@ over the 12-hour run**.
 | # | Criterion | Verdict | Observed |
 |---|---|---|---|
 | 1 | `outcome="expired"` == 0 | PASS | 0 for the full run + tail-follow + epilogue; no Karpenter `Expiration` events |
-| 2 | `success` climbs ≈5/h, total ≥ 40 | PASS | 71 (72 incl. the epilogue), steady ~12m cadence |
+| 2 | `success` climbs ≈5/h, total ≥ 40 | PASS | 60 within `[T0, T_end]` (5.0/h); 71 by end of recording (72 incl. the epilogue), steady ~12m cadence |
 | 3 | main-pool `forceful_fallback_total` == 0 (armed) | PASS | 0 the entire run — first demonstration of quiescence |
 | 4 | `short_lead_nodes` == 0 at every scrape | PASS | max 0 across all 909 scrapes |
 | 5 | restarts 0; scraper `seq` contiguous | PASS | controller `restartCount=0` for 12h; 0 gaps, 0 restarts, 0 `SCRAPE_ERROR` |
@@ -116,7 +118,7 @@ evidence is [Scenario O](/validation/forceful-fallback)'s).
 | 03:22:50Z → | becomes a candidate at age 1h; frozen, so it sits at `candidates=1` / `in_progress=0` (freeze semantics hold for the full attended wait) |
 | 04:23:50Z | `soak-epi-release.sh` removes the freeze at R, found by interval search (first in-window instant ≥ d−11m, proving d−12m < R < d−8m). 11 min left < `t_rot` 12 min → a graceful surge no longer fits |
 | 04:24:46Z | **56 s after release**, the claim is deleted (measured drain 48 s < the 7 min bound). The log's `mode=forceful-fallback` with no `surgeNode` field is itself proof of the surge-less path |
-| Evidence | `forceful_fallback_total{nodepool-soak-epi}` 0→1 · `ForcefulFallback` Warning event with the spec's message · the continuous placeholder ledger (`pods -w` on `noderotation.io/surge-for`) recorded **zero** placeholder for the epi claim · `expired` stayed 0 · the main pool rotated undisturbed through the epilogue (70→71, completion gaps ≤ `P + t_rot` = 42m) |
+| Evidence | `forceful_fallback_total{nodepool-soak-epi}` 0→1 · `ForcefulFallback` Warning event with the spec's message · the continuous placeholder ledger (`pods -w` on `noderotation.io/surge-for`) recorded **zero** placeholder for the epi claim · `expired` stayed 0 · the main pool rotated undisturbed through the epilogue (70→71 across the release-to-fire window, completion gaps ≤ `P + t_rot` = 42m) |
 
 The abort rule for a missed release — if the freeze cannot be removed before
 d−8m, tear the pool down **still frozen** (a late unfreeze cannot prevent the
