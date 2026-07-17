@@ -103,7 +103,7 @@
 .policy-simulator .sim-hint { color: var(--vp-c-text-2); font-size: 0.8em; line-height: 1.45; margin: 0 0 0.6rem; }
 
 /* Every value surface is mono: durations, instants, and identifiers read as code. */
-.policy-simulator input[type="text"], .policy-simulator input:not([type]), .policy-simulator input[type="number"] {
+.policy-simulator input[type="text"], .policy-simulator input:not([type]), .policy-simulator input[type="number"], .policy-simulator input[type="time"], .policy-simulator select {
   border: 1px solid var(--vp-c-divider); border-radius: 4px; padding: 3px 8px; background: var(--vp-c-bg);
   font-family: var(--vp-font-family-mono); font-size: 0.92em; width: 100%; min-width: 0;
 }
@@ -116,10 +116,10 @@
 
 /* Field grid: uniform columns instead of a ragged flex-wrap, so rows keep a rhythm. */
 .policy-simulator .sim-form {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 0.5rem 0.75rem; border: 0; padding: 0; margin: 0 0 0.6rem; min-inline-size: 0;
 }
-.policy-simulator .sim-form label { display: flex; flex-direction: column; gap: 2px; font-size: 0.8em; color: var(--vp-c-text-2); min-width: 0; }
+.policy-simulator .sim-form label { display: flex; flex-direction: column; gap: 3px; font-size: 0.8em; color: var(--vp-c-text-2); min-width: 0; background: var(--vp-c-bg-soft); border-radius: 6px; padding: 6px 8px; }
 /* When a neighbour's label text wraps to two lines, keep the input row aligned —
    but only when the input is the label's last child: pushing an input that has a
    hint <small> below it would instead un-align it from its hint-less neighbour. */
@@ -130,12 +130,28 @@
 .policy-simulator .sim-form .sim-check input { width: auto; }
 /* The weekday enum: a row of checkboxes, not a comma-separated text field. It is a
    <div>, not a <label>, so it needs the label's own column layout restated. */
-.policy-simulator .sim-days { display: flex; flex-direction: column; font-size: 0.8em; color: var(--vp-c-text-2); min-width: 0; }
-.policy-simulator .sim-days-grid { display: flex; flex-wrap: wrap; gap: 0.15rem 0.7rem; margin-top: 0.25rem; }
-.policy-simulator .sim-days-grid label {
-  flex-direction: row; align-items: center; gap: 0.25rem; font-size: 1em; color: var(--vp-c-text-1);
+.policy-simulator .sim-days { display: flex; flex-direction: column; font-size: 0.8em; color: var(--vp-c-text-2); min-width: 0; background: var(--vp-c-bg-soft); border-radius: 6px; padding: 6px 8px; }
+.policy-simulator .sim-days-dropdown { position: relative; margin-top: 0.25rem; }
+.policy-simulator .sim-days-toggle {
+  width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center;
+  border: 1px solid var(--vp-c-divider); border-radius: 4px; padding: 3px 8px;
+  background: var(--vp-c-bg); font-family: var(--vp-font-family-mono); font-size: 0.92em;
+  cursor: pointer; min-height: 1.8em;
 }
-.policy-simulator .sim-days-grid input { width: auto; margin: 0; }
+.policy-simulator .sim-days-toggle:hover { border-color: var(--vp-c-brand-1); }
+.policy-simulator .sim-days-arrow { font-size: 0.7em; color: var(--vp-c-text-3); }
+.policy-simulator .sim-days-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 100;
+  background: var(--vp-c-bg); border: 1px solid var(--vp-c-divider); border-radius: 6px;
+  padding: 6px 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  display: flex; flex-direction: column; gap: 4px; min-width: 100%;
+}
+.policy-simulator .sim-days-option {
+  display: flex; align-items: center; gap: 0.4rem; padding: 3px 4px; border-radius: 4px;
+  cursor: pointer; font-size: 1em; color: var(--vp-c-text-1); font-weight: 400;
+}
+.policy-simulator .sim-days-option:hover { background: var(--vp-c-bg-soft); }
+.policy-simulator .sim-days-option input { width: auto; margin: 0; }
 /* Long instants (RFC 3339) get a full row so they are never clipped mid-value. */
 .policy-simulator .sim-form .sim-field-wide { grid-column: 1 / -1; }
 .policy-simulator .sim-form button { align-self: end; justify-self: start; }
@@ -292,7 +308,7 @@
 .policy-simulator .sim-group { border: 0; padding: 0; margin: 0 0 0.8rem; min-inline-size: 0; }
 .policy-simulator .sim-group + .sim-group { border-top: 1px solid var(--vp-c-divider); padding-top: 0.7rem; }
 .policy-simulator .sim-group > legend {
-  padding: 0; margin-bottom: 0.45rem; font-size: 0.72rem; font-weight: 600;
+  padding: 0; margin-bottom: 0.6rem; font-size: 0.72rem; font-weight: 600;
   letter-spacing: 0.03em; text-transform: uppercase; color: var(--vp-c-text-2);
 }
 /* A label that reads like its value is a label a reader has to parse. Field names sit above

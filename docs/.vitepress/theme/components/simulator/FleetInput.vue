@@ -50,21 +50,33 @@ function patchNode(i: number, part: Partial<Fleet['nodes'][number]>) {
 <template>
   <section class="sim-block">
     <h3>{{ t.fleet }}</h3>
+    <p class="sim-hint">{{ t.fleetHint }}</p>
 
     <fieldset class="sim-form">
       <label>{{ t.expireAfter }}
         <input :value="fleet.expireAfter" @change="patch({ expireAfter: ($event.target as HTMLInputElement).value })" />
+        <small>{{ t.fieldHelp.expireAfter }}</small>
       </label>
       <label>{{ t.tgp }}
         <input :value="fleet.terminationGracePeriod ?? ''"
                @change="patch({ terminationGracePeriod: ($event.target as HTMLInputElement).value || undefined })" />
+        <small>{{ t.fieldHelp.tgp }}</small>
       </label>
     </fieldset>
 
     <fieldset class="sim-form">
-      <label>{{ t.nodeCount }}<input type="number" min="1" max="50" v-model.number="count" /></label>
-      <label>{{ t.spread }}<input v-model="spread" /></label>
-      <label class="sim-field-wide">{{ t.firstCreatedAt }}<input v-model="first" /></label>
+      <label>{{ t.nodeCount }}
+        <input type="number" min="1" max="50" v-model.number="count" />
+        <small>{{ t.fieldHelp.nodeCount }}</small>
+      </label>
+      <label>{{ t.spread }}
+        <input v-model="spread" />
+        <small>{{ t.fieldHelp.spread }}</small>
+      </label>
+      <label class="sim-field-wide">{{ t.firstCreatedAt }}
+        <input v-model="first" />
+        <small>{{ t.fieldHelp.firstCreatedAt }}</small>
+      </label>
       <button type="button" @click="regenerate">{{ t.generate }}</button>
     </fieldset>
 

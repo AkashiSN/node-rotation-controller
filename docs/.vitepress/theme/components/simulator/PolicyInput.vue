@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { projectPolicy, applyPolicyEdit, type PolicyForm } from './policyYaml.ts'
 import { useLabels } from './i18n.ts'
 
@@ -32,6 +32,26 @@ function edit(field: keyof PolicyForm, value: unknown) {
 // (Mon;Tue;Wed;Thu;Fri;Sat;Sun — rotationpolicy_types.go), so the field is a
 // fixed multi-select rather than free text.
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+
+// Dropdown state for the days multi-select
+const daysOpen = ref(false)
+
+// Close the dropdown when clicking outside. VitePress is an SPA, so pair the
+// document-level listener with the component lifecycle rather than retaining a
+// stale ref every time a visitor leaves and revisits the simulator route.
+function closeDays() {
+  daysOpen.value = false
+}
+onMounted(() => document.addEventListener('click', closeDays))
+onBeforeUnmount(() => document.removeEventListener('click', closeDays))
+
+// Summary text showing selected days
+const selectedDaysSummary = computed(() => {
+  const selected = WEEKDAYS.filter(d => dayChecked(d))
+  if (selected.length === 0) return ''
+  if (selected.length === 7) return t.value.everyDay
+  return selected.join(', ')
+})
 
 function dayChecked(day: string): boolean {
   // ParseWeekday is case-insensitive, so match that way — a source YAML with
@@ -104,22 +124,32 @@ function onMinRotationChancesChange(raw: string) {
                 <select :value="form.timezone" @change="edit('timezone', ($event.target as HTMLSelectElement).value)">
                   <option v-for="tz in timezones" :key="tz" :value="tz">{{ tz }}</option>
                 </select>
+                <small>{{ t.fieldHelp.timezone }}</small>
               </label>
               <div class="sim-days">
                 <span>{{ t.days }}</span>
-                <div class="sim-days-grid">
-                  <label v-for="d in WEEKDAYS" :key="d">
-                    <input type="checkbox" :checked="dayChecked(d)"
-                           @change="toggleDay(d, ($event.target as HTMLInputElement).checked)" />
-                    {{ d }}
-                  </label>
+                <div class="sim-days-dropdown" @click.stop>
+                  <button type="button" class="sim-days-toggle" @click="daysOpen = !daysOpen">
+                    {{ selectedDaysSummary || '—' }}
+                    <span class="sim-days-arrow">{{ daysOpen ? '▲' : '▼' }}</span>
+                  </button>
+                  <div v-if="daysOpen" class="sim-days-menu">
+                    <label v-for="d in WEEKDAYS" :key="d" class="sim-days-option">
+                      <input type="checkbox" :checked="dayChecked(d)"
+                             @change="toggleDay(d, ($event.target as HTMLInputElement).checked)" />
+                      {{ d }}
+                    </label>
+                  </div>
                 </div>
+                <small>{{ t.fieldHelp.days }}</small>
               </div>
               <label>{{ t.windowStart }}
                 <input type="time" :value="form.start" @change="edit('start', ($event.target as HTMLInputElement).value)" />
+                <small>{{ t.fieldHelp.windowStart }}</small>
               </label>
               <label>{{ t.windowEnd }}
                 <input type="time" :value="form.end" @change="edit('end', ($event.target as HTMLInputElement).value)" />
+                <small>{{ t.fieldHelp.windowEnd }}</small>
               </label>
             </div>
           </fieldset>
@@ -130,9 +160,11 @@ function onMinRotationChancesChange(raw: string) {
               <label>{{ t.minRotationChances }}
                 <input type="number" min="1" :value="form.minRotationChances ?? 2"
                        @change="onMinRotationChancesChange(($event.target as HTMLInputElement).value)" />
+                <small>{{ t.fieldHelp.minRotationChances }}</small>
               </label>
               <label>{{ t.ageThreshold }}
                 <input :value="form.ageThreshold" @change="edit('ageThreshold', ($event.target as HTMLInputElement).value)" />
+                <small>{{ t.fieldHelp.ageThreshold }}</small>
               </label>
             </div>
           </fieldset>
@@ -142,20 +174,25 @@ function onMinRotationChancesChange(raw: string) {
             <div class="sim-form">
               <label>{{ t.provisioningEstimate }}
                 <input :value="form.provisioningEstimate" @change="edit('provisioningEstimate', ($event.target as HTMLInputElement).value)" />
+                <small>{{ t.fieldHelp.provisioningEstimate }}</small>
               </label>
               <label>{{ t.drainEstimate }}
                 <input :value="form.drainEstimate" @change="edit('drainEstimate', ($event.target as HTMLInputElement).value)" />
+                <small>{{ t.fieldHelp.drainEstimate }}</small>
               </label>
               <label>{{ t.readyTimeout }}
                 <input :value="form.readyTimeout" @change="edit('readyTimeout', ($event.target as HTMLInputElement).value)" />
+                <small>{{ t.fieldHelp.readyTimeout }}</small>
               </label>
               <label>{{ t.cooldownAfter }}
                 <input :value="form.cooldownAfter" @change="edit('cooldownAfter', ($event.target as HTMLInputElement).value)" />
+                <small>{{ t.fieldHelp.cooldownAfter }}</small>
               </label>
               <label class="sim-check">
                 <input type="checkbox" :checked="form.forcefulFallback"
                        @change="edit('forcefulFallback', ($event.target as HTMLInputElement).checked)" />
                 {{ t.forcefulFallback }}
+                <small>{{ t.fieldHelp.forcefulFallback }}</small>
               </label>
             </div>
           </fieldset>

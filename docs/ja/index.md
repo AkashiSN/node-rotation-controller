@@ -2,8 +2,8 @@
 layout: home
 hero:
   name: node-rotation-controller
-  text: Karpenter のための Make-before-break Node ローテーション
-  tagline: メンテナンスウィンドウ内で Karpenter 管理ノードを先回りローテーションし、expireAfter の発火を実質起こさせない。
+  text: Karpenter ノードの Graceful ローテーション
+  tagline: "Karpenter の expireAfter は予測不能なタイミングでノードを強制 drain する — 本コントローラーはそれを、メンテナンスウィンドウ内の graceful な置換で先回りする。"
   actions:
     - theme: brand
       text: はじめに
@@ -12,13 +12,15 @@ hero:
       text: 仕様書
       link: /ja/specification
     - theme: alt
-      text: 検証
-      link: /ja/validation/forceful-fallback
+      text: ランブック
+      link: /ja/runbook
 features:
-  - title: Surge-first
-    details: 低優先度の placeholder Pod を介して NodePool 所有の代替キャパシティを誘導する — Karpenter を迂回せず、単独の NodeClaim も作らない。
-  - title: ウィンドウ有界
-    details: expireAfter を下回る ageThreshold を導出し、expireAfter はバックストップとして温存する（撤廃しない）。
-  - title: 実 EKS で検証済み
-    details: 実 EKS の検証シナリオ（Scenario O）が graceful→forceful fallback の分岐、最早期限順、do-not-disrupt 除外を同一デッドライン上で実証。
+  - title: ダウンタイムゼロの surge
+    details: 旧ノードを drain する前に代替ノードを Ready にする。一時的な placeholder Pod で NodePool 所有の容量を誘導し、Karpenter がノードを起動、PDB が drain を制御する。
+  - title: ウィンドウ有界のローテーション
+    details: ローテーション開始はメンテナンスウィンドウ内に限定。自動導出される age 閾値により、各ノードは expireAfter の期限前に複数回のローテーション機会を得る。
+  - title: デフォルトで安全
+    details: expireAfter はバックストップとして温存し、撤廃しない。コントローラーが停止、またはローテーションが失敗しても、ノードはコントローラーなしの場合と同じように期限切れする — 現状より悪くならない。
+  - title: EKS Auto Mode で検証済み
+    details: 実 EKS Auto Mode クラスタでの E2E 検証を完了 — 12 時間の無人 soak、ゾーン制約 PV の再アタッチ、リーダーフェイルオーバー、graceful→forceful fallback 境界を含む。
 ---
