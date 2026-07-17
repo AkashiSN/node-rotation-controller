@@ -22,7 +22,7 @@ jobs:
   label:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         with:
           script: |
             // The full set of type labels this workflow manages. A PR carries at

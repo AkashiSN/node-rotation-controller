@@ -33,7 +33,7 @@ jobs:
       E2E_KWOK_CLUSTER: nrc-kwok-e2e
       E2E_KWOK_IMAGE: ghcr.io/akashisn/node-rotation-controller:e2e
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Full history so the change-detection diff can reach the PR base commit.
           fetch-depth: 0
@@ -78,7 +78,7 @@ jobs:
       # first use. The warmup step below fetches just the e2e tools up front
       # (fail-fast + clear logs) without building the unrelated
       # gopls/golangci-lint/setup-envtest/terraform packages.
-      - uses: aquaproj/aqua-installer@v4.0.4
+      - uses: aquaproj/aqua-installer@v4.0.5
         if: steps.changes.outputs.run == 'true'
         with:
           aqua_version: v2.60.1
@@ -90,7 +90,7 @@ jobs:
       # and aqua's tool store (kind/ko/kustomize/helm/kubectl binaries) across runs.
       - name: Cache Go build/module + aqua tools
         if: steps.changes.outputs.run == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/go-build
@@ -147,7 +147,7 @@ jobs:
 
       - name: Upload failure artifacts
         if: failure() && steps.changes.outputs.run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-kwok-artifacts-${{ github.run_id }}
           path: artifacts
