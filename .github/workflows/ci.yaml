@@ -41,6 +41,8 @@ jobs:
         run: bash .github/scripts/detect-ci-changes.test.sh
       - name: Verify release version markers are synchronized
         run: bash .github/scripts/check-release-version-sync.sh
+      - name: Verify the Go toolchain version is synchronized
+        run: bash .github/scripts/check-go-toolchain-sync.sh
       - name: Detect changed paths
         id: detect
         env:

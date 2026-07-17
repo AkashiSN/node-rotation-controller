@@ -134,6 +134,7 @@ helm upgrade --install karpenter "${KARPENTER_MOD}/kwok/charts" \
   --set settings.featureGates.staticCapacity=false \
   --set settings.featureGates.spotToSpotConsolidation=false \
   --set settings.featureGates.nodeRepair=false \
+  --set settings.featureGates.capacityBuffer=false \
   --wait --timeout 180s
 
 # ── 4. NodePools / KWOKNodeClass ────────────────────────────────────────────

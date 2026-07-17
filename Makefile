@@ -132,7 +132,7 @@ wasm-guard: wasm
 # The docs site serves the simulator module and Go's own JS loader from
 # docs/public/, which VitePress copies to the site root. Both are BUILD OUTPUT
 # (gitignored): wasm_exec.js is version-locked to the Go toolchain that produced
-# the module (aqua pins golang/go@go1.26.4), so it is generated here on every
+# the module (the Go toolchain aqua pins), so it is generated here on every
 # build rather than vendored by hand, where the next Go bump would silently
 # break it.
 DOCS_PUBLIC ?= docs/public

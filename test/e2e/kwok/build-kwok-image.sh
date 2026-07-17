@@ -42,7 +42,7 @@ trap 'rm -rf "${BUILD_DIR}"' EXIT
 cat >"${BUILD_DIR}/go.mod" <<EOF
 module nrc-kwok-provider-build
 
-go 1.26.4
+go 1.26.5
 
 require sigs.k8s.io/karpenter ${KARPENTER_VERSION}
 EOF
