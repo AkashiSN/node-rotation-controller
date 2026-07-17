@@ -8,7 +8,7 @@ How this repository keeps required status checks fast without ever leaving one s
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yaml` | push to `main`, every PR | Required: `lint`, `test`, `build`, `chart` |
+| `ci.yaml` | push to `main`, every PR | Required: `changes`, `lint`, `test`, `build`, `docs`, `chart` |
 | `e2e.yaml` | push to `main`, every PR | KWOK-based Karpenter e2e (single `e2e` job) |
 | `release.yaml` | push of a `v*` tag | Multi-arch image + Helm chart OCI + attestation + GitHub Release |
 | `pages.yaml` | push to `main` (docs paths), manual | VitePress site → GitHub Pages |
@@ -34,13 +34,13 @@ This is why the repository does **not** use `paths-ignore` or job-level `if:`.
 ### How it works
 
 1. A dedicated `changes` job computes gating flags (always runs, no `if:`)
-2. `lint`, `test`, `build`, `chart` each declare `needs: changes` and read its outputs
+2. `lint`, `test`, `build`, `docs`, `chart` each declare `needs: changes` and read its outputs
 3. Classification logic lives in one place (DRY)
 
 The classifier is `.github/scripts/detect-ci-changes.sh`:
 - A small, pure shell script (no `git`, no GitHub Actions context)
 - Reads newline-separated changed paths on stdin
-- Prints four booleans
+- Prints five booleans
 
 ### Input sources
 
@@ -51,7 +51,14 @@ The classifier is `.github/scripts/detect-ci-changes.sh`:
 
 ### Self-test
 
-`.github/scripts/detect-ci-changes.test.sh` unit-tests the classifier against a table of sample path sets. It runs on every CI invocation — gating logic cannot silently rot.
+`.github/scripts/detect-ci-changes.test.sh` unit-tests the classifier against a
+table of sample path sets. It runs on every CI invocation — gating logic cannot
+silently rot.
+
+The same always-running job executes
+`.github/scripts/check-release-version-sync.sh`. A PR cannot leave the chart,
+README EN/JA, agent/contributor status, or runbook EN/JA on different current
+release versions.
 
 ### Path → flag → job
 
@@ -60,7 +67,8 @@ The classifier is `.github/scripts/detect-ci-changes.sh`:
 | `*.go`, `go.mod`, `go.sum`, `api/`, `config/`, `.golangci.yml` | `go` | `lint`, `test`, `build` |
 | `charts/**` | `chart` | `chart` |
 | `Dockerfile`, `.dockerignore` | `docker` | `build` |
-| `Makefile`, `aqua.yaml`, `aqua-policy.yaml`, `aqua/**`, `.github/workflows/ci.yaml`, `.github/scripts/**` | `infra` | all four jobs |
+| `docs/**`, `README*.md`, package files, simulator Go sources | `docs` | `docs` |
+| `Makefile`, `aqua.yaml`, `aqua-policy.yaml`, `aqua/**`, `.github/workflows/ci.yaml`, `.github/scripts/**` | `infra` | `lint`, `test`, `build`, `chart` |
 
 ### Resulting step gates
 
@@ -69,9 +77,10 @@ The classifier is `.github/scripts/detect-ci-changes.sh`:
 | `lint` | `go \|\| infra` |
 | `test` | `go \|\| infra` |
 | `build` | `go \|\| docker \|\| infra` |
+| `docs` | `docs` |
 | `chart` | `chart \|\| infra` |
 
-- **`infra` is deliberately broad:** CI workflow, shared Makefile, or aqua toolchain pins can affect every job — fans out to all four rather than guessing.
+- **`infra` is deliberately broad:** CI workflow, shared Makefile, or aqua toolchain pins can affect all four non-doc jobs, so it fans out to them rather than guessing. The `docs` flag separately follows docs-site and simulator inputs, including the shared build-toolchain files (`go.mod`, `go.sum`, `Makefile`, `aqua.yaml`) that produce the wasm module — so those set `docs` in addition to `go` or `infra`.
 
 ## `e2e.yaml`: single-job in-step detection
 
@@ -105,12 +114,21 @@ Triggers only on `v*` tags — not part of branch protection, so no `pending`-ch
 
 | Job | Purpose |
 |-----|---------|
-| `guard` | Fail fast if tag disagrees with `Chart.yaml` version |
+| `guard` | Fail if tag, chart, or current-release markers disagree |
 | `image` | Multi-arch build + push + SBOM + SLSA provenance + attest + cosign |
 | `chart` | Package Helm chart → OCI push + attest + cosign |
 | `release` | Create GitHub Release with chart + SBOM attached |
 
 ### Image job details
+
+Before publishing, `guard` runs both version checks:
+
+- `check-chart-version.sh` requires tag == chart `version` == `appVersion`
+- `check-release-version-sync.sh` requires matching current-release markers in
+  README EN/JA, `AGENTS.md`, `CONTRIBUTING.md`, and runbook EN/JA
+
+The same sync check already runs on every PR, so a release-preparation omission
+is normally caught before merge and is checked again before publication.
 
 - Architectures: `linux/amd64`, `linux/arm64`
 - Registry: `ghcr.io/akashisn/node-rotation-controller`

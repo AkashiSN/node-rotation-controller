@@ -38,6 +38,7 @@ jobs:
           out="$(.github/scripts/check-chart-version.sh "${GITHUB_REF_NAME}")"
           echo "$out"
           echo "${out}" >> "$GITHUB_OUTPUT"   # script prints version=<x.y.z>
+          .github/scripts/check-release-version-sync.sh "${GITHUB_REF_NAME}"
 
   image:
     needs: guard

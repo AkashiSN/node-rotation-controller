@@ -39,6 +39,8 @@ jobs:
           fetch-depth: 0
       - name: Self-test the change classifier
         run: bash .github/scripts/detect-ci-changes.test.sh
+      - name: Verify release version markers are synchronized
+        run: bash .github/scripts/check-release-version-sync.sh
       - name: Detect changed paths
         id: detect
         env:

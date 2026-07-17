@@ -85,6 +85,7 @@ export default withMermaid(defineConfig({
           ]},
           { text: 'Development', collapsed: false, items: [
             { text: 'CI/CD design', link: '/development/ci-cd' },
+            { text: 'Documentation style', link: '/development/documentation-style' },
           ]},
           { text: 'Reference', collapsed: false, items: [
             { text: 'ADR index', link: '/reference/adr/' },
@@ -129,6 +130,7 @@ export default withMermaid(defineConfig({
           ]},
           { text: '開発者向け', collapsed: false, items: [
             { text: 'CI/CD 設計', link: '/ja/development/ci-cd' },
+            { text: 'ドキュメントスタイル（英語）', link: '/development/documentation-style' },
           ]},
           // Perf notes are user-facing and translated; ADRs are English-only by
           // design (dated decision records addressed to maintainers), so the ADR
