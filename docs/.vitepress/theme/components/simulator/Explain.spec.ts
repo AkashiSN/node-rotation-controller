@@ -74,11 +74,34 @@ describe('the policy form reads as a form', () => {
       const groups = groupsOf(w)
       expect(groups[0].legend).toContain('メンテナンスウィンドウ')
       expect(groups[0].fields).toContain('タイムゾーン')
+      const everyDay = DEFAULT_POLICY_YAML.replace(
+        'days: [Wed, Sat]',
+        'days: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]',
+      )
+      const allDays = mount(PolicyInput, { props: { yaml: everyDay } })
+      expect(allDays.find('.sim-days-toggle').text()).toContain('毎日')
+      allDays.unmount()
       // The Go field names stay identifiers in both locales — they are what you type in the
       // YAML, and a translated `cooldownAfter` would be a lie about the schema.
       expect(groups[2].fields).toContain('provisioningEstimate')
+      w.unmount()
     } finally {
       locale.value = 'en-US'
+    }
+  })
+
+  test('the outside-click listener follows the component lifecycle', () => {
+    const add = vi.spyOn(document, 'addEventListener')
+    const remove = vi.spyOn(document, 'removeEventListener')
+    try {
+      const w = mount(PolicyInput, { props: { yaml: DEFAULT_POLICY_YAML } })
+      const clickCall = add.mock.calls.find(([type]) => type === 'click')
+      expect(clickCall).toBeDefined()
+      w.unmount()
+      expect(remove).toHaveBeenCalledWith('click', clickCall![1])
+    } finally {
+      add.mockRestore()
+      remove.mockRestore()
     }
   })
 

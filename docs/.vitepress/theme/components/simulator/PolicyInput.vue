@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { projectPolicy, applyPolicyEdit, type PolicyForm } from './policyYaml.ts'
 import { useLabels } from './i18n.ts'
 
@@ -36,16 +36,20 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
 // Dropdown state for the days multi-select
 const daysOpen = ref(false)
 
-// Close the dropdown when clicking outside
-if (typeof document !== 'undefined') {
-  document.addEventListener('click', () => { daysOpen.value = false })
+// Close the dropdown when clicking outside. VitePress is an SPA, so pair the
+// document-level listener with the component lifecycle rather than retaining a
+// stale ref every time a visitor leaves and revisits the simulator route.
+function closeDays() {
+  daysOpen.value = false
 }
+onMounted(() => document.addEventListener('click', closeDays))
+onBeforeUnmount(() => document.removeEventListener('click', closeDays))
 
 // Summary text showing selected days
 const selectedDaysSummary = computed(() => {
   const selected = WEEKDAYS.filter(d => dayChecked(d))
   if (selected.length === 0) return ''
-  if (selected.length === 7) return 'Every day'
+  if (selected.length === 7) return t.value.everyDay
   return selected.join(', ')
 })
 

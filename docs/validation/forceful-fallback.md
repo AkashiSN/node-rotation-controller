@@ -4,7 +4,7 @@
 Window-bounded forceful fallback (#156), earliest-deadline ordering (#157), and do-not-disrupt exclusion (#170) running together on a shared deadline — all on real EKS Auto Mode.
 :::
 
-Real-EKS validation of the three features above exercised simultaneously. See [§7.2](/specification/07-risks#72-validated-assumptions) for the assumptions this flips to validated, and the [runbook](/runbook#3-interpreting-the-noderotation_-metrics) for what `noderotation_forceful_fallback_total` and `ForcefulFallback` mean operationally.
+Real-EKS validation of the three features above exercised simultaneously. See [§7.2](/specification/07-risks#72-validated-assumptions) for the assumptions this flips to validated, and the [runbook](/runbook#3-metrics-reference) for what `noderotation_forceful_fallback_total` and `ForcefulFallback` mean operationally.
 
 <TimelineForcefulFallback />
 

@@ -32,8 +32,8 @@ Jump to [§7 Troubleshooting](#7-troubleshooting) — a symptom-based index that
 
 **What to do:**
 
-- Keep **one node's worth of headroom per in-use AZ** in the NodePool's `spec.limits`.
-- Confirm EC2 vCPU quota has room in each AZ, not just aggregate.
+- Keep enough **pool-wide** `spec.limits` headroom for one additional node, and ensure the NodePool's `requirements` permit every in-use AZ. `spec.limits` cannot reserve capacity per AZ.
+- Separately confirm provider capacity in each AZ and enough regional EC2 vCPU quota for the surge.
 - Consider capacity reservations for the surge instance shape in each AZ.
 
 **How to detect a shortfall:**

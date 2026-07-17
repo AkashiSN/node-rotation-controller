@@ -4,7 +4,7 @@
 ウィンドウ有界の forceful fallback（#156）、earliest-deadline ソート（#157）、do-not-disrupt 除外（#170）を同一デッドライン上で同時に走らせた実 EKS Auto Mode 検証。
 :::
 
-上記 3 機能を同時に行使した実 EKS 検証。この検証が validated に切り替える前提は [§7.2](/ja/specification/07-risks#72-検証済み前提) を、`noderotation_forceful_fallback_total` メトリクスと `ForcefulFallback` Warning イベントの運用上の意味は [ランブック](/ja/runbook#3-noderotation_-メトリクスの読み方) を参照。
+上記 3 機能を同時に行使した実 EKS 検証。この検証が validated に切り替える前提は [§7.2](/ja/specification/07-risks#72-検証済み前提) を、`noderotation_forceful_fallback_total` メトリクスと `ForcefulFallback` Warning イベントの運用上の意味は [ランブック](/ja/runbook#3-メトリクスリファレンス) を参照。
 
 <TimelineForcefulFallback />
 

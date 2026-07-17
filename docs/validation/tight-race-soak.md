@@ -4,7 +4,7 @@
 A 12-hour real-EKS soak where `leadTime` genuinely races `expireAfter`. Demonstrates: (1) the graceful surge always finishes first (`expired` stays 0), and (2) forceful fallback fires deterministically when a graceful surge no longer fits.
 :::
 
-The pool ran with fixed `expireAfter: 2h12m` — just above derived `leadTime` of 1h12m — under sub-daily windows (48 × 30 min/day). This validates [§3.2](/specification/03-design#32-candidate-selection) live. See [§7.2](/specification/07-risks#72-validated-assumptions) for the assumptions validated, [Scenario O](/validation/forceful-fallback) for the earlier forceful-fallback validation this extends, and the [runbook](/runbook#3-interpreting-the-noderotation_-metrics) for metric definitions.
+The pool ran with fixed `expireAfter: 2h12m` — just above derived `leadTime` of 1h12m — under sub-daily windows (48 × 30 min/day). This validates [§3.2](/specification/03-design#32-candidate-selection) live. See [§7.2](/specification/07-risks#72-validated-assumptions) for the assumptions validated, [Scenario O](/validation/forceful-fallback) for the earlier forceful-fallback validation this extends, and the [runbook](/runbook#3-metrics-reference) for metric definitions.
 
 **Run**: 2026-07-14T14:20:29Z (T0) → +12h, EKS Auto Mode, K8s 1.36, `us-west-2`.
 Canonical record: `test/e2e/eks-automode/VALIDATION.md` (§ "Run: 2026-07-15 — Scenario P").

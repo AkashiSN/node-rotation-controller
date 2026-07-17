@@ -4,7 +4,7 @@
 `leadTime` が `expireAfter` と本気で競争する状態を 12 時間持続させた実 EKS ソーク。実証: (1) graceful surge が常に先着（`expired` は 0 のまま）、(2) graceful が組めなくなった瞬間に forceful fallback が決定的に発火。
 :::
 
-プールは固定 `expireAfter: 2h12m` — 導出 `leadTime` 1h12m のすぐ上 — で、サブデイリーウィンドウ（30 分周期 × 48 本/日）の下で実行。[§3.2](/ja/specification/03-design#32-候補選定) の保証をライブで実証した。前提の validated 切り替えは [§7.2](/ja/specification/07-risks#72-検証済み前提)、先行検証は [シナリオ O](/ja/validation/forceful-fallback)、メトリクス定義は [ランブック](/ja/runbook#3-noderotation_-メトリクスの読み方) を参照。
+プールは固定 `expireAfter: 2h12m` — 導出 `leadTime` 1h12m のすぐ上 — で、サブデイリーウィンドウ（30 分周期 × 48 本/日）の下で実行。[§3.2](/ja/specification/03-design#32-候補選定) の保証をライブで実証した。前提の validated 切り替えは [§7.2](/ja/specification/07-risks#72-検証済み前提)、先行検証は [シナリオ O](/ja/validation/forceful-fallback)、メトリクス定義は [ランブック](/ja/runbook#3-メトリクスリファレンス) を参照。
 
 **実施**: 2026-07-14T14:20:29Z（T0）→ +12h、EKS Auto Mode、K8s 1.36、`us-west-2`。
 正本記録: `test/e2e/eks-automode/VALIDATION.md`（§ "Run: 2026-07-15 — Scenario P"）。

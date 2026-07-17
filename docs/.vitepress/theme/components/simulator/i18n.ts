@@ -33,6 +33,7 @@ export interface Labels {
   end: string
   timezone: string
   days: string
+  everyDay: string
   windowStart: string
   windowEnd: string
   minRotationChances: string
@@ -191,6 +192,7 @@ const en: Labels = {
   end: 'End',
   timezone: 'Timezone',
   days: 'Days',
+  everyDay: 'Every day',
   windowStart: 'Window start',
   windowEnd: 'Window end',
   minRotationChances: 'minRotationChances (K)',
@@ -207,7 +209,7 @@ const en: Labels = {
     windowStart: 'Time the window opens (24h)',
     windowEnd: 'Time the window closes (24h)',
     minRotationChances: 'How many windows a node gets before expiry (K)',
-    ageThreshold: '"auto" or a duration (e.g. 120h, 5d12h)',
+    ageThreshold: '"auto" or a Go duration string using h/m/s units (e.g. "120h", "1h30m")',
     readyTimeout: 'Max wait for the surge node to become Ready',
     cooldownAfter: 'Pause between successive successful rotations',
     provisioningEstimate: 'Expected provisioning time (throughput forecast)',
@@ -355,6 +357,7 @@ const ja: Labels = {
   end: '終了',
   timezone: 'タイムゾーン',
   days: '曜日',
+  everyDay: '毎日',
   windowStart: 'ウィンドウの開始',
   windowEnd: 'ウィンドウの終了',
   minRotationChances: 'minRotationChances (K)',
@@ -371,7 +374,7 @@ const ja: Labels = {
     windowStart: 'ウィンドウの開始時刻（24h）',
     windowEnd: 'ウィンドウの終了時刻（24h）',
     minRotationChances: 'expiry 前にノードが得るウィンドウ回数 (K)',
-    ageThreshold: '"auto" または期間の直接指定（例: 120h, 5d12h）',
+    ageThreshold: '"auto" または h/m/s 単位の Go duration 形式の文字列（例: "120h", "1h30m"）',
     readyTimeout: 'surge ノードが Ready になるまでの最大待ち時間',
     cooldownAfter: '成功したローテーション間の休止',
     provisioningEstimate: '期待プロビジョニング時間（スループット予測用）',
