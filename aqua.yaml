@@ -25,9 +25,9 @@ packages:
   # --- Go toolchain ---
   # The Go toolchain itself is pinned here so local `make` and CI use the exact
   # same compiler (no actions/setup-go). MUST stay >= and in sync with the `go`
-  # directive in go.mod (currently `go 1.26.4`) — bump both together, or Go's
+  # directive in go.mod (currently `go 1.26.5`) — bump both together, or Go's
   # GOTOOLCHAIN=auto will silently download a newer toolchain and bypass this pin.
-  - name: golang/go@go1.26.4
+  - name: golang/go@go1.26.5
   # --- Go test / lint / language-server tooling (was `go install` in Makefile) ---
   # setup-envtest only fetches the envtest control-plane binaries; `make test`
   # still downloads the matching Kubernetes assets on first run (ENVTEST_K8S_VERSION).
