@@ -24,19 +24,19 @@ extract() {
   [[ -f "$file" ]] || { error "$1: file not found"; return; }
   case "$1" in
     go.mod)
-      # `go 1.26.5` directive (first bare `go <version>` line).
+      # the `go <version>` directive (first bare `go <version>` line).
       awk '$1=="go" && $2 ~ /^[0-9]/ {print $2; exit}' "$file"
       ;;
     aqua.yaml)
-      # `- name: golang/go@go1.26.5`
+      # the `- name: golang/go@go<version>` pin.
       sed -n 's/.*golang\/go@go\([0-9][0-9.]*\).*/\1/p' "$file" | head -n1
       ;;
     Dockerfile)
-      # `FROM golang:1.26.5-bookworm@sha256:...`
+      # the `FROM golang:<version>-bookworm@sha256:...` builder image.
       sed -n 's/.*golang:\([0-9][0-9.]*\)-bookworm.*/\1/p' "$file" | head -n1
       ;;
     test/e2e/kwok/build-kwok-image.sh)
-      # `go 1.26.5` inside the generated go.mod heredoc.
+      # the `go <version>` line inside the generated go.mod heredoc.
       awk '$1=="go" && $2 ~ /^[0-9]/ {print $2; exit}' "$file"
       ;;
     *)
