@@ -19,7 +19,7 @@ v1 "no cloud-provider API dependency" invariant.
 |-----------|------------------|--------|
 | kind node image | `kindest/node:v1.36.1` (digest) | `kind.yaml` (matches `kind v0.32.0`) |
 | KWOK controller | `v0.5.2` | `github.com/kubernetes-sigs/kwok` kustomize + stages |
-| Karpenter KWOK cloudprovider | the **exact** tag in the repo's `go.mod` (`sigs.k8s.io/karpenter`, currently `v1.13.0`) | built with `ko` from a throwaway module — see below |
+| Karpenter KWOK cloudprovider | the **exact** `sigs.k8s.io/karpenter` tag in the repo's `go.mod` | built with `ko` from a throwaway module — see below |
 | node-rotation-controller | the PR-built image | this repo's Helm chart (`charts/`) |
 
 ### How the Karpenter KWOK provider is built (reproducibly, in isolation)
@@ -34,11 +34,14 @@ Karpenter Helm chart come from the same module in the Go module cache, so they
 are always tag-consistent with the binary. The image is tagged
 `ko.local/karpenter-kwok:<tag>` and loaded into kind.
 
-> **Chart caveat (v1.13.0):** the vendored KWOK Helm chart's deployment template
-> references `settings.featureGates.staticCapacity`, which the chart's
-> `values.yaml` does not default — left unset it renders `FEATURE_GATES=…
-> StaticCapacity=,…` and the controller panics. `bootstrap.sh` therefore passes
-> `--set settings.featureGates.staticCapacity=false` (and the other two gates).
+> **Chart caveat:** the vendored KWOK Helm chart's deployment template wires
+> several `settings.featureGates.*` values into `FEATURE_GATES` that its
+> `values.yaml` does not default (currently `staticCapacity` and
+> `capacityBuffer`). Left unset they render as an empty value — e.g.
+> `FEATURE_GATES=…,CapacityBuffer=` — which the controller rejects on startup
+> (`strconv.ParseBool`), crashing it. `bootstrap.sh` therefore passes an
+> explicit `--set settings.featureGates.<gate>=false` for every gate the
+> template references.
 
 ## Prerequisites
 
