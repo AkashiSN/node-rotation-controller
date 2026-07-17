@@ -79,7 +79,7 @@ current release バージョンが異なる PR は通過できない。
 | `docs` | `docs` |
 | `chart` | `chart \|\| infra` |
 
-- **`infra` は意図的に広い:** CI ワークフロー、共有 Makefile、aqua ツールチェーン固定バージョンの変更は docs 以外の 4 job すべてに影響しうるため、推測せず波及。`docs` flag は docs site と simulator の入力を別に追跡する。
+- **`infra` は意図的に広い:** CI ワークフロー、共有 Makefile、aqua ツールチェーン固定バージョンの変更は docs 以外の 4 job すべてに影響しうるため、推測せず波及。`docs` flag は docs site と simulator の入力を別に追跡し、wasm モジュールを生成する共有ビルドツールチェーンのファイル（`go.mod`, `go.sum`, `Makefile`, `aqua.yaml`）も含む — これらは `go` や `infra` に加えて `docs` も立てる。
 
 ## `e2e.yaml`: 単一ジョブ内での変更検知
 

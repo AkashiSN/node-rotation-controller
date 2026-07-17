@@ -80,7 +80,7 @@ release versions.
 | `docs` | `docs` |
 | `chart` | `chart \|\| infra` |
 
-- **`infra` is deliberately broad:** CI workflow, shared Makefile, or aqua toolchain pins can affect all four non-doc jobs, so it fans out to them rather than guessing. The `docs` flag separately follows docs-site and simulator inputs.
+- **`infra` is deliberately broad:** CI workflow, shared Makefile, or aqua toolchain pins can affect all four non-doc jobs, so it fans out to them rather than guessing. The `docs` flag separately follows docs-site and simulator inputs, including the shared build-toolchain files (`go.mod`, `go.sum`, `Makefile`, `aqua.yaml`) that produce the wasm module — so those set `docs` in addition to `go` or `infra`.
 
 ## `e2e.yaml`: single-job in-step detection
 
