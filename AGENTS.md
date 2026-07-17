@@ -9,25 +9,31 @@ The **source of truth for design** is [`docs/specification/`](docs/specification
 (Japanese translation: [`docs/ja/specification/`](docs/ja/specification/)).
 Read it before making design-affecting changes.
 
-The project is in the **v0.3 MVP** phase: the v1 surge implementation — the
-reconcile loop and rotation state machine, schedule/selection/policy, the surge
-placeholder, metrics, and the Helm chart — is in place, with unit and envtest
-coverage. It is **pre-1.0**: EKS Auto Mode PoC runs have validated the core
-surge path, including a 12-hour tight-race soak (Scenario P); a genuine same-AZ
-capacity shortage (ICE) remains the open item; see
-the roadmap and validated assumptions in the specification (§6.2, §7.2) for the
-milestones toward v1.0. The specification remains the source of truth — keep code
-and spec in sync (see *Specification rules* below).
+The latest release is **v0.6.1** and the project remains **pre-1.0**. The v1
+surge MVP is implemented: the annotation-backed rotation state machine,
+per-NodePool `RotationPolicy` resolution and observational status, surge
+placeholder, opt-in window-bounded forceful fallback, throughput forecast,
+metrics and Warning Events, Helm chart, and browser policy simulator are in
+place. Unit, envtest, KWOK, and documentation tests run in CI. EKS Auto Mode
+PoC runs have validated the core surge and fallback paths, including the
+12-hour tight-race soak (Scenario P). A genuine same-AZ capacity shortage (ICE)
+driving rollback remains the documented real-cloud validation gap before v1.0;
+see the roadmap and validated assumptions in the specification (§6.2, §7.2).
+The specification remains the source of truth — keep code and spec in sync.
 
 ## Development process
 
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) is the source of truth for the contributor
+  workflow, branch/worktree isolation, validation, and release preparation.
 - **Design changes require an Issue first.** Anything that changes behavior,
-  the configuration schema, annotation keys, or the public surface must start
-  as a GitHub Issue and reach agreement before implementation.
+  the configuration schema, annotation keys, metric names, or the public
+  surface must start as a GitHub Issue and reach agreement before implementation.
 - **Branch naming**: `feat/<issue#>-<topic>`, `fix/<issue#>-<topic>`,
   `docs/<topic>`, `chore/<topic>`, `refactor/<topic>`.
 - **One PR = one concern.** Keep PRs focused and reviewable.
-- Every PR body must reference its issue with `Closes #<issue>` (or `Refs #<issue>`).
+- Reference the Issue with `Closes #<issue>` or `Refs #<issue>` when one exists.
+  Trivial typo or formatting-only fixes may omit an Issue but must say so in the
+  PR body.
 - **`main` is protected**: PR-only, CI must be green, squash merge.
 - **Conventional Commits** for commit messages and PR titles:
   `type(scope): subject` where type ∈ {feat, fix, docs, chore, refactor, test, perf}.
@@ -35,25 +41,17 @@ and spec in sync (see *Specification rules* below).
   - `feat(reconciler): add age-threshold candidate selection`
   - `fix(window): handle DST timezone transitions`
   - `docs(spec): clarify backstop semantics`
-- **Milestones** (`v0.2`, `v0.3`, …) group issues toward each release.
+- **Release preparation is an atomic version-sync change.** Follow the mandatory
+  checklist in
+  [`CONTRIBUTING.md`](CONTRIBUTING.md#release-version-synchronization) and run
+  both release-version guards before proposing or pushing a tag.
 
-## Parallel development with worktrees
+## Isolated development with worktrees
 
-- **One Issue = one PR = one branch = one git worktree.** Each unit of work
-  lives in its own `git worktree` so concurrent work streams never share a
-  working tree and cannot interfere with one another.
-- **Place worktrees under `.worktrees/`.** Create each worktree inside the repo
-  at `.worktrees/<branch-topic>` (e.g.
-  `git worktree add -b chore/foo .worktrees/foo origin/main`). The directory is
-  git-ignored, so the working tree stays inside the repo (visible to editors)
-  without being tracked — instead of a sibling directory outside the repo.
-- **Tear down after merge.** Once a PR is squash-merged, remove its worktree
-  (`git worktree remove`) and delete the branch. Worktrees are disposable and
-  must not accumulate.
-- **No stacked branches.** Do not branch off another in-flight feature branch.
-  If a change depends on work that is not yet merged, land the base change
-  first: open and merge the base PR, then start the dependent work on a fresh
-  branch off the updated `main`. Keep every branch rooted at `main`.
+Use the worktree workflow in
+[`CONTRIBUTING.md`](CONTRIBUTING.md#isolated-and-parallel-work). In particular,
+each PR gets its own branch and worktree under `.worktrees/`, branches start
+from `main`, and stacked in-flight branches are not used.
 
 ## Specification rules
 
@@ -93,6 +91,13 @@ and spec in sync (see *Specification rules* below).
 
 ## Contributor docs
 
-Human-facing process lives in [`CONTRIBUTING.md`](CONTRIBUTING.md). This file
-is the single source of truth for process; `CLAUDE.md` only adds AI-specific
-emphasis and points back to it.
+Human-facing process lives in [`CONTRIBUTING.md`](CONTRIBUTING.md), the single
+source of truth for contributor workflow. `CLAUDE.md` is a symlink to this file,
+so Claude Code and agents that read `AGENTS.md` receive the same project
+instructions without duplicated copies.
+
+Before creating or modifying project documentation, read and follow
+[`docs/development/documentation-style.md`](docs/development/documentation-style.md).
+It is the shared style, translation, safe-editing, and validation standard for
+humans and AI agents. Agent-specific files should point to it rather than copy
+its rules.

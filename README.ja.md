@@ -15,7 +15,7 @@ v0.6.0 のテーマは **スループット予測** — ノードが 1 台も動
 
 v0.6.1 は chart のみの追補である: コントローラの Deployment に optional なトップレベル `priorityClassName` を設定できるようになり、共有プールでプールを回すコンポーネント自身を既定優先度で動かさずに済む。これはコントローラ自身の優先度であり、surge placeholder の負優先度クラス（仕様 §3.3）とは無関係である。コントローラの挙動・CRD スキーマ・アノテーション・メトリクスの変更はない。
 
-コアの surge 経路は EKS Auto Mode 上でフルローテーション回帰スイートを通して検証済みであり、同期したバッチに対するトリックなしの forceful fallback 実行も含まれる。v1.0 に向けて残る項目は、同一 AZ の実際の容量不足（ICE）によるロールバックと、数時間規模の tight-race soak である（[ロードマップ](docs/ja/specification/06-release.md#62-ロードマップ)を参照）。
+コアの surge 経路は EKS Auto Mode 上でフルローテーション回帰スイートを通して検証済みであり、同期したバッチに対するトリックなしの forceful fallback 実行と、sub-daily ウィンドウ下の 12 時間 tight-race soak（Scenario P）も含まれる。v1.0 に向けて残る項目は、実際の同一 AZ 容量不足（ICE）によるロールバックである（[ロードマップ](docs/ja/specification/06-release.md#62-ロードマップ)を参照）。
 
 なお依然として **pre-1.0** であり、設定スキーマは minor リリース間で変わりうる。設計の一次情報（source of truth）は [docs/specification/](docs/specification/) であり、[docs/ja/specification/](docs/ja/specification/) は同期された日本語訳である。Karpenter の契約は[互換性](#互換性)を参照。
 

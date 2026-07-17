@@ -8,7 +8,7 @@
 
 | ワークフロー | トリガー | 目的 |
 |---|---|---|
-| `ci.yaml` | `main` への push、全 PR | 必須: `lint`, `test`, `build`, `chart` |
+| `ci.yaml` | `main` への push、全 PR | 必須: `changes`, `lint`, `test`, `build`, `docs`, `chart` |
 | `e2e.yaml` | `main` への push、全 PR | KWOK ベース Karpenter e2e（単一 `e2e` ジョブ） |
 | `release.yaml` | `v*` タグの push | マルチアーキイメージ + Helm chart OCI + attestation + GitHub Release |
 | `pages.yaml` | `main` への push（docs パス）、手動 | VitePress サイト → GitHub Pages |
@@ -34,13 +34,13 @@
 ### 仕組み
 
 1. 専用の `changes` ジョブがゲーティングフラグを計算（常に実行、`if:` なし）
-2. `lint`、`test`、`build`、`chart` が `needs: changes` を宣言しその出力を読む
+2. `lint`、`test`、`build`、`docs`、`chart` が `needs: changes` を宣言しその出力を読む
 3. 分類ロジックは 1 箇所に集約（DRY）
 
 分類器は `.github/scripts/detect-ci-changes.sh`:
 - 小さく純粋なシェルスクリプト（`git` も GitHub Actions コンテキストも使わない）
 - 標準入力から改行区切りの変更パスを読む
-- 4 つの真偽値を出力
+- 5 つの真偽値を出力
 
 ### 入力ソース
 
@@ -51,7 +51,13 @@
 
 ### セルフテスト
 
-`.github/scripts/detect-ci-changes.test.sh` がサンプルパス集合のテーブルに対して分類器をユニットテスト。CI 実行のたびに走る — ゲーティングロジック自体が気づかれずに壊れることはない。
+`.github/scripts/detect-ci-changes.test.sh` がサンプルパス集合のテーブルに
+対して分類器をユニットテスト。CI 実行のたびに走るため、ゲーティングロジック
+自体が気づかれずに壊れることはない。
+
+同じ常時実行 job で `.github/scripts/check-release-version-sync.sh` も実行。
+chart、README EN/JA、agent/contributor 向けステータス、runbook EN/JA の
+current release バージョンが異なる PR は通過できない。
 
 ### パス → フラグ → ジョブ
 
@@ -60,7 +66,8 @@
 | `*.go`, `go.mod`, `go.sum`, `api/`, `config/`, `.golangci.yml` | `go` | `lint`, `test`, `build` |
 | `charts/**` | `chart` | `chart` |
 | `Dockerfile`, `.dockerignore` | `docker` | `build` |
-| `Makefile`, `aqua.yaml`, `aqua-policy.yaml`, `aqua/**`, `.github/workflows/ci.yaml`, `.github/scripts/**` | `infra` | 全 4 ジョブ |
+| `docs/**`, `README*.md`, package ファイル、simulator Go source | `docs` | `docs` |
+| `Makefile`, `aqua.yaml`, `aqua-policy.yaml`, `aqua/**`, `.github/workflows/ci.yaml`, `.github/scripts/**` | `infra` | `lint`, `test`, `build`, `chart` |
 
 ### 結果のステップゲート
 
@@ -69,9 +76,10 @@
 | `lint` | `go \|\| infra` |
 | `test` | `go \|\| infra` |
 | `build` | `go \|\| docker \|\| infra` |
+| `docs` | `docs` |
 | `chart` | `chart \|\| infra` |
 
-- **`infra` は意図的に広い:** CI ワークフロー、共有 Makefile、aqua ツールチェーン固定バージョンの変更はすべてのジョブに影響しうるため、推測せず全 4 ジョブへ波及。
+- **`infra` は意図的に広い:** CI ワークフロー、共有 Makefile、aqua ツールチェーン固定バージョンの変更は docs 以外の 4 job すべてに影響しうるため、推測せず波及。`docs` flag は docs site と simulator の入力を別に追跡する。
 
 ## `e2e.yaml`: 単一ジョブ内での変更検知
 
@@ -105,12 +113,21 @@ e2e に関係するパスの diff を検査:
 
 | ジョブ | 目的 |
 |-----|---------|
-| `guard` | タグが `Chart.yaml` バージョンと不一致なら即座に失敗 |
+| `guard` | タグ、chart、current-release marker が不一致なら失敗 |
 | `image` | マルチアーキビルド + push + SBOM + SLSA provenance + attest + cosign |
 | `chart` | Helm chart パッケージ → OCI push + attest + cosign |
 | `release` | GitHub Release 作成（chart + SBOM 添付） |
 
 ### image ジョブの詳細
+
+公開前に `guard` が両方のバージョンチェックを実行:
+
+- `check-chart-version.sh`: tag == chart `version` == `appVersion` を要求
+- `check-release-version-sync.sh`: README EN/JA、`AGENTS.md`、
+  `CONTRIBUTING.md`、runbook EN/JA の current-release marker 一致を要求
+
+同じ sync check は全 PR ですでに実行されるため、release-preparation の更新漏れは
+通常 merge 前に検出され、公開前にも再検査される。
 
 - アーキテクチャ: `linux/amd64`, `linux/arm64`
 - レジストリ: `ghcr.io/akashisn/node-rotation-controller`

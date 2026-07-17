@@ -4,7 +4,9 @@ What does this PR change?
 
 ## Why
 
-The motivation. Link the issue: `Closes #<issue>` (or `Refs #<issue>`).
+The motivation. Link the issue with `Closes #<issue>` or `Refs #<issue>` when
+one exists. For an exempt typo or formatting-only change, write
+`No issue: <reason>`.
 
 ## Spec sync
 
@@ -19,5 +21,6 @@ How was this verified?
 
 - [ ] One concern per PR
 - [ ] Conventional Commit title (`type(scope): subject`)
+- [ ] Not a release-preparation PR, or the release-version synchronization guards pass
 - [ ] No organization-specific / proprietary information introduced
 - [ ] CI is green
