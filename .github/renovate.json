@@ -3,5 +3,41 @@
   "extends": [
     "config:recommended",
     "github>aquaproj/aqua-renovate-config#2.13.0"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the Go version pinned in the KWOK e2e provider builder's generated go.mod",
+      "managerFilePatterns": [
+        "/^test/e2e/kwok/build-kwok-image\\.sh$/"
+      ],
+      "matchStrings": [
+        "\\ngo (?<currentValue>1\\.\\d+\\.\\d+)\\n"
+      ],
+      "depNameTemplate": "golang/go",
+      "datasourceTemplate": "golang-version"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Bump the Go toolchain in one PR across go.mod, Dockerfile, aqua.yaml, and the KWOK builder. A CI guard (check-go-toolchain-sync.sh) still fails the build if any pin drifts out of sync.",
+      "groupName": "go-toolchain",
+      "matchDepNames": [
+        "go",
+        "golang",
+        "golang/go"
+      ]
+    },
+    {
+      "description": "Kubernetes libraries are released in lockstep; update them together.",
+      "groupName": "kubernetes packages",
+      "matchPackageNames": [
+        "k8s.io/**",
+        "sigs.k8s.io/**"
+      ]
+    }
   ]
 }
