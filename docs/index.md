@@ -2,8 +2,8 @@
 layout: home
 hero:
   name: node-rotation-controller
-  text: Make-before-break node rotation for Karpenter
-  tagline: Proactively rotate Karpenter-managed nodes within a maintenance window, before expireAfter fires.
+  text: Graceful node rotation for Karpenter
+  tagline: "Karpenter's expireAfter drains nodes at unpredictable times — this controller rotates them gracefully, inside your maintenance window, before that happens."
   actions:
     - theme: brand
       text: Get Started
@@ -12,13 +12,15 @@ hero:
       text: Specification
       link: /specification
     - theme: alt
-      text: Validation
-      link: /validation/forceful-fallback
+      text: Runbook
+      link: /runbook
 features:
-  - title: Surge-first
-    details: Induces NodePool-owned replacement capacity via a low-priority placeholder Pod — never bypasses Karpenter, never creates a standalone NodeClaim.
-  - title: Window-bounded
-    details: Derives an ageThreshold that stays below expireAfter, kept as a backstop rather than removed.
-  - title: Validated on real EKS
-    details: The real-EKS validation scenario (Scenario O) proves the graceful→forceful fallback split, earliest-deadline ordering, and do-not-disrupt exclusion on a shared deadline.
+  - title: Zero-downtime surge
+    details: A replacement node is ready before the old one is drained. The controller induces NodePool-owned capacity via a temporary placeholder Pod — Karpenter provisions the node, PDBs govern the drain.
+  - title: Window-bounded rotation
+    details: Rotation starts only inside your configured maintenance window. An automatically derived age threshold ensures every node gets multiple chances to rotate before its expireAfter deadline.
+  - title: Safe by default
+    details: expireAfter is kept as a backstop, never removed. If the controller is absent or a rotation fails, nodes still expire exactly as they would without it — never worse than the status quo.
+  - title: Validated on EKS Auto Mode
+    details: End-to-end tested on real EKS Auto Mode clusters — including a 12-hour unattended soak, zonal-PV rebind, leader failover, and the graceful-to-forceful-fallback boundary.
 ---

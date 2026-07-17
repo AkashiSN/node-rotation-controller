@@ -1,126 +1,155 @@
 # CI/CD 設計
 
-本リポジトリは 3 つの GitHub Actions ワークフローと、ドキュメントデプロイ用の
-ワークフローを運用する。このページでは、必須ステータスチェックを高速に保ちつつ、
-チェックを `pending` のまま固まらせないための変更検知ゲーティングの仕組みを
-解説する。
+::: tip このページの内容
+必須ステータスチェックを高速に保ちつつ、`pending` で固まらせない仕組み — 集中化された変更検知分類器によるステップレベルのゲーティング。
+:::
 
 ## ワークフロー一覧
 
 | ワークフロー | トリガー | 目的 |
 |---|---|---|
-| `ci.yaml` | `main` への push、全 PR | 必須チェック: `lint`、`test`、`build`、`chart`（および後述の `changes`） |
-| `e2e.yaml` | `main` への push、全 PR | surge メカニズム向けの KWOK ベース Karpenter e2e、単一の `e2e` ジョブ |
-| `release.yaml` | `v*` タグの push | マルチアーキのコントローライメージと Helm chart（OCI）を `ghcr.io` にビルド・push し、双方に attestation と署名を付与した後、GitHub Release を作成 |
-| `pages.yaml` | `main` への push（ドキュメント関連パス）、手動実行 | 本 VitePress サイトをビルドし GitHub Pages にデプロイ |
+| `ci.yaml` | `main` への push、全 PR | 必須: `lint`, `test`, `build`, `chart` |
+| `e2e.yaml` | `main` への push、全 PR | KWOK ベース Karpenter e2e（単一 `e2e` ジョブ） |
+| `release.yaml` | `v*` タグの push | マルチアーキイメージ + Helm chart OCI + attestation + GitHub Release |
+| `pages.yaml` | `main` への push（docs パス）、手動 | VitePress サイト → GitHub Pages |
 
 ## `pending` の罠
 
-`main` のブランチ保護は必須ステータスチェックを名前で指定している。あるワークフロー
-やジョブが、たとえばワークフロー直下の `paths-ignore` や *ジョブ* 単位の `if:`
-条件によって特定の push / PR で完全にスキップされると、GitHub はそのチェックの
-結論を一切報告しない。結論のない必須チェックは「green」ではなく `pending` に
-固まったままであり、必須チェックが 1 つでもその状態である限り PR は絶対に
-マージできない。これが本リポジトリでドキュメントのみの変更や無関係な変更で CI を
-スキップするために `paths-ignore`（やジョブ単位の `if:`）を**使わない**理由である。
+::: warning なぜ重要か
+結論のない必須チェックは "green" ではなく `pending` で固まる。必須チェックが 1 つでもその状態なら PR は絶対にマージできない。
+:::
 
-正しい解決策は、*ジョブ* は常に実行しつつ、その中の高コストな *ステップ* だけを
-関係する変更がない場合にスキップすることである。重要な各ステップにステップ単位の
-`if:` を付けることで、ジョブ自体は入力が変わっていなければ数秒で実際の結論
-（成功）に到達し、変わっていれば処理をすべて実行する。
+`main` のブランチ保護は必須ステータスチェックを名前で指定している。ワークフローやジョブが **完全にスキップ** された場合（`paths-ignore` やジョブ単位の `if:` により）、GitHub は結論を報告しない → `pending` で固まる。
+
+**解決策:** *ジョブ* は常に実行し、関係する変更がない場合に高コストな *ステップ* のみスキップ。
+
+- 重要な各ステップにステップ単位の `if:` を付与
+- 入力が変わっていなければジョブは数秒で実際の結論（成功）に到達
+- 関連ファイルが変更された場合のみフルワークを実行
+
+これが `paths-ignore` やジョブ単位の `if:` を **使わない** 理由。
 
 ## `ci.yaml`: `changes` ジョブ
 
-`ci.yaml` はゲーティング用フラグを専用の `changes` ジョブで一度だけ計算し、
-`lint`・`test`・`build`・`chart` の各ジョブが `needs: changes` を宣言してその
-出力を読む。分類ロジックを（4 つのジョブそれぞれに重複させるのでなく）1 つの
-ジョブに集約することで DRY を保っている。`changes` 自体には `if:` を付けず常に
-実行する — 分類スクリプトの出力を信頼する前にそのセルフテストまで走らせる —
-ため、`changes` 自身も `pending` に固まった状態を作り得ない。
+### 仕組み
 
-分類器は `.github/scripts/detect-ci-changes.sh` であり、変更されたパスの
-改行区切りリストを標準入力から読み、4 つの真偽値を出力する、小さく純粋な
-シェルスクリプト（`git` も GitHub Actions のコンテキストも使わない）である。
+1. 専用の `changes` ジョブがゲーティングフラグを計算（常に実行、`if:` なし）
+2. `lint`、`test`、`build`、`chart` が `needs: changes` を宣言しその出力を読む
+3. 分類ロジックは 1 箇所に集約（DRY）
 
-`ci.yaml` は pull request では `git diff --name-only "$BASE_SHA" HEAD` の
-出力をこれに渡し、`main` への直接 push では全フラグを `true` として扱う（PR
-のベースとの diff が存在せず、`main` への push では常にすべて（全ステップ）を実行すべき
-であるため）。
+分類器は `.github/scripts/detect-ci-changes.sh`:
+- 小さく純粋なシェルスクリプト（`git` も GitHub Actions コンテキストも使わない）
+- 標準入力から改行区切りの変更パスを読む
+- 4 つの真偽値を出力
 
-`.github/scripts/detect-ci-changes.test.sh` はサンプルとなる
-パス集合の表に対して分類器をユニットテストし、CI が実行されるたびに走る
-ため、ゲーティングロジック自体が気づかれないうちに壊れることはない。
+### 入力ソース
+
+| コンテキスト | 入力 |
+|---------|-------|
+| Pull request | `git diff --name-only "$BASE_SHA" HEAD` |
+| `main` への push | 全フラグ `true`（diff のベースなし; 常にすべて実行） |
+
+### セルフテスト
+
+`.github/scripts/detect-ci-changes.test.sh` がサンプルパス集合のテーブルに対して分類器をユニットテスト。CI 実行のたびに走る — ゲーティングロジック自体が気づかれずに壊れることはない。
 
 ### パス → フラグ → ジョブ
 
-| パスパターン | フラグ | ゲートされるジョブ／ステップ |
+| パスパターン | フラグ | ゲートされるジョブ/ステップ |
 |---|---|---|
-| `*.go`、`go.mod`、`go.sum`、`api/`、`config/`、`.golangci.yml` | `go` | `lint`、`test`、`build` |
+| `*.go`, `go.mod`, `go.sum`, `api/`, `config/`, `.golangci.yml` | `go` | `lint`, `test`, `build` |
 | `charts/**` | `chart` | `chart` |
-| `Dockerfile`、`.dockerignore` | `docker` | `build` |
-| `Makefile`、`aqua.yaml`、`aqua-policy.yaml`、`aqua/**`、`.github/workflows/ci.yaml`、`.github/scripts/**` | `infra` | `lint`・`test`・`build`・`chart` のすべて |
+| `Dockerfile`, `.dockerignore` | `docker` | `build` |
+| `Makefile`, `aqua.yaml`, `aqua-policy.yaml`, `aqua/**`, `.github/workflows/ci.yaml`, `.github/scripts/**` | `infra` | 全 4 ジョブ |
 
-結果として各ジョブのステップゲートは次のようになる。
+### 結果のステップゲート
 
-- **`lint`**、**`test`** は `go || infra` のとき実ステップを実行する。
-- **`build`** は `go || docker || infra` のとき実ステップを実行する。
-- **`chart`** は `chart || infra` のとき実ステップを実行する。
+| ジョブ | 実ステップ実行条件 |
+|-----|---------------------|
+| `lint` | `go \|\| infra` |
+| `test` | `go \|\| infra` |
+| `build` | `go \|\| docker \|\| infra` |
+| `chart` | `chart \|\| infra` |
 
-`infra` は意図的に広く取ってある。CI ワークフロー自体、共有 Makefile、aqua の
-ツールチェーン固定バージョンへの変更は 4 ジョブすべての挙動に影響しうるため、
-どれが実際に影響を受けるかを推測するのではなく全 4 ジョブへ波及させている。
+- **`infra` は意図的に広い:** CI ワークフロー、共有 Makefile、aqua ツールチェーン固定バージョンの変更はすべてのジョブに影響しうるため、推測せず全 4 ジョブへ波及。
 
 ## `e2e.yaml`: 単一ジョブ内での変更検知
 
-`e2e.yaml` は意図的に `ci.yaml` と異なる形をとる: ジョブは `e2e` の 1 つだけで
-あり、`e2e` という名前の単一の必須チェックに対応する。変更検知は別ジョブで
-なくジョブの*最初のステップ*として実行される。なぜなら、`changes` 方式の別
-ジョブを導入すると、他に消費者のいない単一ジョブのワークフローにジョブ間
-`needs` 依存という余計な間接化を持ち込むだけで、ここでは DRY の恩恵がないからである（`ci.yaml` は分類結果を
-4 ジョブで共有するが、`e2e.yaml` のジョブは 1 つしかない）。検知ステップは diff
-を e2e に関係するパス（`internal/`、`cmd/`、`charts/`、`test/e2e/`、
-`go.mod`/`go.sum`、`Makefile`、`Dockerfile`、`aqua.yaml`、
-`.github/workflows/e2e.yaml`）について調べ、純粋な Markdown の変更を除外する。
-以降のすべてのステップ — 約 45 分の kind / Karpenter KWOK ブートストラップと
-`go test` の実行を含む — はその結果でゲートされる。これらのパスに触れない PR は
-数秒で `e2e: success` を報告し、`main` への push では常にフルスイートが実行
-される。
+`ci.yaml` とは意図的に異なる形:
+
+- **1 ジョブ**（`e2e`）= 1 つの必須チェック
+- 変更検知はジョブの **最初のステップ** として実行（別の上流ジョブではない）
+- 消費者が 1 つしかないため、別の `changes` ジョブによる DRY の恩恵なし
+
+### 検知スコープ
+
+e2e に関係するパスの diff を検査:
+- `internal/`, `cmd/`, `charts/`, `test/e2e/`
+- `go.mod`, `go.sum`, `Makefile`, `Dockerfile`, `aqua.yaml`
+- `.github/workflows/e2e.yaml`
+- 純粋な Markdown 変更を除外
+
+### 動作
+
+| コンテキスト | 結果 |
+|---------|--------|
+| これらのパスに触れない PR | `e2e: success` を数秒で報告 |
+| 関連パスに触れる PR | フル ~45 分スイート |
+| `main` への push | 常にフルスイート |
 
 ## `release.yaml`: タグ駆動の OCI 公開
 
-`release.yaml` は `v*` タグの push のみでトリガーされ、通常の push では動かない
-ため `pending` 必須チェックのリスクがない — release 系ワークフローはブランチ
-保護の対象外である。逐次実行される 4 つのジョブから成る:
+`v*` タグの push のみでトリガー — ブランチ保護の対象外のため `pending` チェックのリスクなし。
 
-- `guard` は push されたタグが `Chart.yaml` のバージョンと食い違っていれば
-  即座に失敗する;
-- `image` はマルチアーキ（`linux/amd64`、`linux/arm64`）のコントローラ
-  イメージを `ghcr.io/akashisn/node-rotation-controller` へビルド・push し、
-  ハイフン付きのプレリリースタグ（例: `v0.4.0-rc.1`）でない限り `latest`
-  タグも付与する。ビルドはレジストリ内 SBOM と SLSA provenance を併せて
-  publish し、その後 push された index ダイジェストに attestation を付与、
-  cosign で keyless 署名し、Release 用の SPDX SBOM を生成する;
-- `chart` は Helm chart をパッケージし `oci://ghcr.io/akashisn/charts` へ
-  OCI アーティファクトとして push した後、push されたマニフェストの
-  ダイジェストに attestation を付与し keyless 署名する;
-- `release` はパッケージ済み chart と SPDX SBOM をダウンロードし、その両方を
-  添付した GitHub Release を作成し、`image` ジョブが `latest` をスキップする
-  のと同じハイフン付きタグに対してはプレリリースとしてマークする。
+### 4 つの逐次ジョブ
 
-attestation と署名はプレリリースタグに対しても実行する — 検証できない `-rc`
-を publish しても意味がないためである。`permissions` はワークフロー全体ではなく
-ジョブ単位に絞ってあり、`id-token`/`attestations`/`packages: write` を持つのは
-`image` と `chart` のみ、`contents: write` を持つのは `release` のみである。
-利用者側の検証手順は
-[`SECURITY.md`](https://github.com/AkashiSN/node-rotation-controller/blob/main/SECURITY.md#verifying-releases)
-を参照。
+| ジョブ | 目的 |
+|-----|---------|
+| `guard` | タグが `Chart.yaml` バージョンと不一致なら即座に失敗 |
+| `image` | マルチアーキビルド + push + SBOM + SLSA provenance + attest + cosign |
+| `chart` | Helm chart パッケージ → OCI push + attest + cosign |
+| `release` | GitHub Release 作成（chart + SBOM 添付） |
+
+### image ジョブの詳細
+
+- アーキテクチャ: `linux/amd64`, `linux/arm64`
+- レジストリ: `ghcr.io/akashisn/node-rotation-controller`
+- ハイフン付きプレリリース（例: `v0.4.0-rc.1`）でない限り `latest` タグを付与
+- レジストリ内 SBOM + SLSA provenance
+- push された index ダイジェストに attestation + キーレス cosign 署名
+- Release 用 SPDX SBOM を生成
+
+### chart ジョブの詳細
+
+- Helm chart をパッケージ → `oci://ghcr.io/akashisn/charts`
+- push されたマニフェストダイジェストに attestation + キーレス署名
+
+### release ジョブの詳細
+
+- パッケージ済み chart + SPDX SBOM をダウンロード
+- 両方を添付した GitHub Release を作成
+- ハイフン付きタグの場合はプレリリースとしてマーク
+
+### 権限
+
+ジョブ単位でスコープ（ワークフローレベルではない）:
+
+| ジョブ | 権限 |
+|-----|-------------|
+| `image`, `chart` | `id-token`, `attestations`, `packages: write` |
+| `release` | `contents: write` |
+
+attestation はプレリリースタグに対しても実行。利用者側の検証手順は [`SECURITY.md`](https://github.com/AkashiSN/node-rotation-controller/blob/main/SECURITY.md#verifying-releases) を参照。
 
 ## `pages.yaml`: ドキュメントデプロイ
 
-4 つ目のワークフロー `pages.yaml` は、本 VitePress サイトを `npm run docs:build`
-でビルドし GitHub Pages にデプロイする。トリガーは `docs/**`、ルートの
-`README.md`/`README.ja.md`（ビルド時に Getting Started ページへコピーされる）、
-`package.json`、`package-lock.json`、またはワークフロー自身のファイルに触れる
-`main` への push、および手動実行（`workflow_dispatch`）である。上述の必須チェック集合には
-含まれない（ドキュメントを公開するだけで、マージをゲートしないため）。したがって、この
-ページで説明した変更検知ゲーティングは不要である。
+本 VitePress サイトを `npm run docs:build` でビルドし GitHub Pages にデプロイ。
+
+### トリガー
+
+- `main` への push で以下に触れた場合: `docs/**`, `README.md`, `README.ja.md`, `package.json`, `package-lock.json`, またはワークフローファイル自身
+- `workflow_dispatch` で手動実行
+
+### 必須チェックではない
+
+このワークフローはドキュメントを公開するのみ — マージをゲートしない。変更検知ゲーティングは不要。

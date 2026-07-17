@@ -2,54 +2,159 @@
 
 ## 7.1 リスク
 
-| # | リスク | 対策 |
-|---|--------|------|
-| R1 | コントローラ Pod クラッシュ / リーダー喪失 | `replicas=2` + leader election。`expireAfter` バックストップは保持。failure メトリクスでアラート |
-| R2 | ウィンドウ内に全候補を捌けない | §3.2 のスループット検証が事前に警告。`noderotation_candidates` が 2 ウィンドウ連続で > 0 のままの場合にアラート。将来バージョンで `maxUnavailable > 1` を検討 |
-| R3 | 代替 NodeClaim が立たない（容量不足 / AZ 枯渇 / NodePool の `limits` リソース予算が枯渇）| コントローラは開始前に NodePool `limits` のリソース予算のヘッドルームを事前確認し（§5.2）、placeholder の requests が収まらなければ警告。それ以外は `readyTimeout` でロールバック。NodePool は元より複数 AZ / 複数インスタンスタイプを許容しておくこと。**ゾーンの注意点:** surge ノードは zonal-PV 再バインドのため候補ノードの AZ に固定される（§3.3 *ステートフル／ゾーン制約のワークロード*）ため、同一 AZ の容量不足を別ゾーンへフォールバックできない — zonal-PV ワークロードを抱える NodePool では AZ ごとに surge の余裕を残すこと |
-| R4 | 誤設定の PDB で drain がブロックされる | Karpenter の `terminationGracePeriod` で最終的に強制 drain。PDB のレビューはアプリ owner の責務 |
-| R5 | 業務クリティカル期間の freeze 付与忘れ | freeze annotation はアドホックにではなく GitOps 等で宣言的に管理する想定 |
-| R6 | テストクラスタが定常的に入れ替わる（例: 夜間シャットダウン）場合の検証ギャップ | シャットダウンを無効化し、age 閾値を超えるsoak 期間で end-to-end のローテーションを検証 |
+| # | リスク | 緩和策 |
+|---|------|------------|
+| R1 | コントローラーのクラッシュ / リーダー喪失 | `replicas=2` + リーダー選出; backstop 保持; 失敗アラート |
+| R2 | ウィンドウがすべての候補に不足 | §3.2 スループットチェックが警告; 候補持続でアラート |
+| R3 | surge キャパシティ不可（AZ 不足 / limits） | ヘッドルーム事前チェック（§5.2）; `readyTimeout` ロールバック; マルチ AZ / マルチインスタンスタイプ |
+| R4 | ドレインが設定ミスの PDB でブロック | `terminationGracePeriod` が強制ドレイン; PDB レビューはアプリオーナーの責務 |
+| R5 | クリティカル期間中の freeze 忘れ | 宣言的に管理（GitOps）、アドホックではなく |
+| R6 | テストクラスターが定常的にターンオーバー | `ageThreshold` を超える soak 期間中はシャットダウンを無効化 |
+
+- **R3 ゾーンの注意:** surge は候補の AZ に固定（§3.7）。同一 AZ の不足は他のゾーンにフォールバックできない — ゾーン PV NodePool では AZ ごとのヘッドルームを確保すべき。
 
 ## 7.2 検証済み前提
 
-| 前提 | 状態 | 根拠 |
-|------|------|------|
-| standalone（NodePool-owned でない）`NodeClaim` が EKS Auto Mode で *プロビジョニング可能* | **検証済** — K8s 1.35 / `karpenter.sh/v1`（2026-05-29）| `nodeClassRef`（マネージド `eks.amazonaws.com/NodeClass`）+ `requirements` のみの NodeClaim が約 30 秒で `Ready`（実 EC2・node 登録）に到達。admission も受理（`--dry-run=server`）、finalizer 駆動の graceful 削除も確認 |
-| §3.3 の **placeholder Pod surge** が NodePool-owned な置換を誘発し make-before-break で完了する | **検証済** — EKS Auto Mode / K8s 1.33 / `karpenter.sh/v1`（2026-06-22）| 低優先度の placeholder Pod が新規 NodePool-owned な surge `NodeClaim` を誘発し、それが旧 `NodeClaim` 削除 **より前に** `Ready`（約 30 秒）に到達。削除により旧ノードは voluntary 経路で drain され、ワークロードは surge ノードへ再スケジュール。`noderotation_completed_total{outcome="success"}` が増加 |
-| 同一 AZ surge により EBS CSI ドライバが **zonal な EBS ボリューム** を再アタッチできる（zonal-PV 再バインド、§3.3）| **検証済** — EKS Auto Mode（2026-06-22）| StatefulSet の gp3 PVC が `us-west-2a` にバインド。複数回のローテーションを通じて `matchNodeRequirements` の zone パリティが全ての surge ノードを `us-west-2a` に保ち、**同一** PV が（再プロビジョニングでなく）再アタッチされ sentinel データが保持された |
-| `readyTimeout` に間に合わなかった surge が **クリーンにロールバック** する（§3.2 / §5.2、R3）| **検証済** — EKS Auto Mode（2026-06-22）| `readyTimeout` をノード Ready 到達時間より短く設定すると試行がタイムアウト → 誘発した surge claim を回収、placeholder 削除、候補ノードを uncordon/unfreeze、候補は **保持**（ローテーションされず）、`retry-count` 増加、`noderotation_completed_total{outcome="failure"}` 増加 |
-| NodePool `limits` 枯渇が surge を開始前に **ゲート** する（§5.2 ステップ 3）| **検証済** — EKS Auto Mode（2026-06-22）| `spec.limits.cpu` がヘッドルームを残さない状態で、適格な候補（`noderotation_candidates=1`）があっても surge せず — コントローラは `insufficient limits headroom; cannot surge` をログし、`noderotation_in_progress` は 0 のまま、代替ノードは作られなかった |
-| required な `karpenter.sh/nodepool` セレクタが surge のバインドとプロビジョニングを候補のプールに **閉じ込める**（§3.3）| **検証済** — EKS Auto Mode（2026-06-22）| スコープ外の 2 つ目の NodePool が同一 AZ に ~1.7 cpu 空き（~1 cpu の placeholder には十分）のノードを持つ状態でも、nrc-poc の surge は nrc-poc に留まった — surge `NodeClaim` は `karpenter.sh/nodepool=nrc-poc`、placeholder は `pool=poc` ノードにバインド、他プールの `NodeClaim` 一覧は不変（吸収もプロビジョニングもなし）|
-| 明示的な `NodeClaim` 削除が旧ノードを Karpenter の **voluntary（PDB 尊重）** 経路で drain する（§3.3）| **検証済** — EKS Auto Mode（2026-06-22）| ブロッキング PDB（`minAvailable=2`、2 レプリカ）で drain が **停滞** — 両レプリカが旧ノードに留まり旧 `NodeClaim` も残存（forceful 経路なら即 evict）。`minAvailable=1` に緩和するとレプリカが 1 台ずつ移動しローテーション完了 |
-| コントローラが surge 中の **新旧両ノード** に `karpenter.sh/do-not-disrupt` を付与し、完了時に除去する（§3.3）| **検証済** — EKS Auto Mode（2026-06-22）| surge 中、旧候補ノードと新 surge ホストの両方が `karpenter.sh/do-not-disrupt=true` とコントローラの `do-not-disrupt-owned` マーカーを保持。完了時の unfreeze で両方除去（`expireAfter` をブロックしないことは文書化済み Karpenter 挙動で再検証せず）|
-| pending 中に **捕捉された強制失効** が success/failure ではなく `outcome="expired"` を記録する（§5.2）| **検証済** — EKS Auto Mode（2026-06-22）| プールを freeze し pending 中の候補 `NodeClaim` を削除すると `abortPendingExpiry` が走り、`state=expired`・プールアンカー clear・surge 残存なし・`noderotation_completed_total{outcome="expired"}` が増加 |
-| `expireAfter` は、コントローラの lead time が勝ち切る**バックストップ**であり続ける（R6）| **検証済**（構成上 + 実観測）— EKS Auto Mode（2026-06-22）| 候補は `expireAfter=336h` を保持しつつ、コントローラは `ageThreshold=5m` でローテーション。`noderotation_rotation_chances=13`・`noderotation_short_lead_nodes=0`。スケール版 soak（3 回連続ローテーション）で全ノードが約 5m で入れ替わり（`completed_total{outcome="success"}` +3、`expired`/`failure` なし、`short_lead_nodes` 0 一貫）、バックストップの遥か手前。フルな数時間の *接戦* soak（日次ウィンドウは大きな `expireAfter` を強制するためその形では接戦にならない）はサブデイリーなウィンドウ下で別途検証済み — 下の 2026-07-15 の 2 行を参照 |
-| placeholder が新ノードを誘発せず **同一プールの既存空きキャパへ bin-pack** する（capacity-absorb 経路、§3.3）| **検証済** — EKS Auto Mode（2026-06-23）| *若い*（`ageThreshold` 未満＝非候補）同一 AZ の空きノードが ~1970m 空きを持つ状態で、候補の 250m placeholder が **そのノードへ直接** スケジュールされ（`Successfully assigned`、`FailedScheduling` なし）、**新規 `NodeClaim` は一切誘発されなかった** — プールの claim 数はローテーション全体で 2 のまま（3 にならず）。`surge-for` マーカーは **既存** の空きノード（surge ターゲット）に付き、drain された候補 Pod は予約済みヘッドルームへ再着地、プールは 1 ノードへ収束し、`noderotation_completed_total{outcome="success"}` が増加。（この経路を強制するのは非自明: 空きノードは若くなければならない — 期限間近の空きノードは soft 除外され（§3.3、issue #96）Karpenter がプロビジョニングのレースに勝ってしまう — かつ両ワークロードは相互の Pod anti-affinity を持ってはならない。anti-affinity は対称的で、drain された Pod が空きノードへ再着地するのを阻むため。2 ノードはサイズ設定で分離する。）|
-| 新 leader が **進行中ローテーションを annotation のみから再開** する（§5.1）| **検証済** — EKS Auto Mode（2026-06-23）| ローテーション途中（`state=pending`、`surge-claim`/`started-at` 記録済み）で leader Pod を kill すると、新レプリカが Lease を取得し **同一** ローテーションを継続 — `surge-claim` と `started-at` が同一のまま pending→draining→complete へ進行 — in-memory 状態なし、ローテーションのやり直しなし |
-| 進行中ローテーションは **ウィンドウ境界を越えて完了** し、境界後は新規ローテーションが始まらない（§3.1）| **検証済** — EKS Auto Mode（2026-06-23）| ウィンドウ内で開始したローテーション（`state=pending`）は、ウィンドウを閉じても（`maintenanceWindows` 変更 + コントローラ再起動）中断されず完了。一方 2 つ目の適格候補（`noderotation_candidates=1`、`noderotation_window_active=0`）は開始せず、`noderotation_in_progress=0` |
-| placeholder は **preempt の被害者**（負優先度、`preemptionPolicy: Never`、bare Pod）であり、持続的な高優先度の圧力は **`readyTimeout` で有界なロールバック** に終わる（§3.3）| **検証済** — EKS Auto Mode（2026-06-23）| 高優先度 Pod が placeholder を preempt（`Preempted` イベント）。placeholder は場所を空けるために他を preempt せず（`preemption: not eligible due to preemptionPolicy=Never`）、bare Pod なので再 pending しない（コントローラのみが再作成）。高優先度 blocker が唯一の同一 AZ 空きを占有し新ノードが `limits` で禁止された状態で、placeholder は `readyTimeout` まで `Pending` のまま → クリーンなロールバック: 候補は保持 + uncordon、surge は回収、`noderotation_completed_total{outcome="failure"}` +1、`retry-count=1` |
-| Karpenter が voluntary（Drift）disruption に対して `do-not-disrupt` を **honor する**（§3.3、#95）| **検証済** — EKS Auto Mode（2026-06-23）| `karpenter.sh/do-not-disrupt=true`（コントローラが付与するのと同じ値）を持ち、NodePool `spec.template` 変更で `Drifted=True` にしたノードは 3 分以上置換されなかった。annotation を除去すると Karpenter は即座に drift で置換（make-before-break）。上の「適用する」行を補完する — コントローラの annotation は surge 中に honor される（`expireAfter` をブロックしないことは文書化済み Karpenter 挙動で再検証せず）|
-| ウィンドウ有界の **surge-less forceful fallback** が、graceful surge を期限までに完了できないとき、失効が迫った `NodeClaim` を voluntary 経路でウィンドウ内に削除する（§3.3、ADR-0001、#156）| **検証済** — EKS Auto Mode / K8s 1.36（2026-07-04）| 同期した 12 ノードのバッチ（共有の **固定** 2h `expireAfter`）で `N=12 > K·C=2` の状況が graceful + forceful の **混在** としてローテーション: 先頭 6 台は graceful（placeholder surge）、余剰 6 台は共有期限の `t_rot` 内に入った時点で **surge-less** — 進行中は NodePool アンカー `noderotation.io/rotation-mode=forceful-fallback`、claim ごとに `Warning`/`ForcefulFallback` イベント（*"…surge-less: a graceful surge cannot complete before its deadline; deleting in-window via the voluntary path (PDBs apply)"*）、forceful 候補には **placeholder Pod なし**（`surge_wait` ヒストグラムは graceful 6 台のみを計上）、`noderotation_forceful_fallback_total` は **`0→6`** にクリーンに増加（surge-less 1 本ごとに +1、コントローラは全期間 `restartCount=0`）。PDB（`minAvailable=11`）は一貫して維持（voluntary 経路）、`expired` バックストップは **ゼロ**。`expireAfter` は一切 patch せず — forceful はバッチのスループット不足のみで誘発（トリックなし）|
-| ローテーションは候補を **最早期限順**（`creationTimestamp + expireAfter`、次に `creationTimestamp`、次に `Name`）で消費する（§3.2、#157）| **検証済** — EKS Auto Mode / K8s 1.36（2026-07-04）| 12 ノードのバッチは `creationTimestamp`（＝期限）を共有するため順序は `Name` タイブレークに縮退し、正確に昇順で消費された: `2rvd5 < 6ssql < dtkgz < fswsg < gxsfs < krcdc < nkfbh < pdfwl < s7l9r < vvsqr < w9kx7 < wcmwr` |
-| 運用者の `karpenter.sh/do-not-disrupt` がノードをローテーション候補選択から **除外** する（§3.2、#170）| **検証済** — EKS Auto Mode / K8s 1.36（2026-07-04）| 進行中でない候補のノードに `karpenter.sh/do-not-disrupt=true`（運用者所有 — コントローラの `do-not-disrupt-owned` マーカーなし）を付与すると `noderotation_candidates{nodepool="nodepool-ff"}` が **4→3** に低下し、そのノードは選ばれなかった（`NodeClaim` 保持、`deletionTimestamp` なし）。annotation を **除去** するとゲージは再び上昇 — 双方向で除外を確認（idle で凍結中のプールは reconcile 間隔が長いため nudge が必要）|
-| サブデイリーなウィンドウ下での数時間規模の **tight-race** soak: コントローラの `leadTime` が本当に接戦の `expireAfter` に対して一貫して勝ち切り、`surge.forcefulFallback` を armed のまま一度も発火させない（R6、§3.2、issue #118）| **検証済** — EKS Auto Mode / K8s 1.36、12h 無人（2026-07-15）| `expireAfter E=2h12m` をラン全体で固定（無変更）し、導出された `leadTime=1h12m`（48 windows/day、`P=30m`、`K=2`、`t_rot=12m`）に対して本当に接戦させた — 週単位で測る daily window の `expireAfter` とは異なる、本物のレース。安定した 5 ノードのプールが **71/71 のローテーションを graceful に完了**（make-before-break、約 12m 間隔 — 12h 観測窓内は 60 回転で予測どおりちょうど約 5.0/h、残り 11 回転は有人エピローグ期間中も同じ刻みで継続）し、ラン全体を通じて **`outcome="expired"` は 0 のまま**だった。ローテーションごとのマージン（期限 − 完了時刻）は一貫して正: min 68.3m、median 70.3m、max 71.2m（n=71）。`noderotation_forceful_fallback_total` は `surge.forcefulFallback.enabled: true` を全期間 armed のままにしていたにもかかわらずプール上で **0** のまま — フォールバックは armed だが一度も必要にならなかった（静穏性）。909 回のスクレイプを通じて `failure` ゼロ・`policy_conflict` ゼロ・`short_lead_nodes=0`、導出された 6 個のスケジュールゲージは 909 回すべてで厳密一致、スクレイパの `seq` は連続（gap 0・restart 0）、コントローラ Pod は全期間 `restartCount=0` だった。詳細記録: `test/e2e/eks-automode/VALIDATION.md` |
-| ウィンドウ有界の **forceful fallback が決定的に発火する** のは、claim が `E − t_rot` を跨ぎ graceful な surge がもはやスケジュール不能になったとき、という点を単一の有界 claim に絞って検証（§3.3、ADR-0001、issue #118）| **検証済** — EKS Auto Mode / K8s 1.36（2026-07-15）| 別の単一ノードのミニプールを、あらかじめ freeze された状態で作成（Scenario E の機構）し、その 1 claim を候補として age させつつ開始させなかった。claim の実際の `creationTimestamp` とその `expireAfter` 期限から解放時刻を計算する、有人・fail-closed なスクリプトの下で解放。解放後、graceful な surge は期限までの残り時間に収まらなくなったため、コントローラは surge-less の分岐を取った: そのプール上の `noderotation_forceful_fallback_total` は **0→1** となり `ForcefulFallback` Warning イベントを伴った。claim は解放から **56 秒後**に削除 — 自身の期限の 10m04s 前、`tGP + Buffer = 7m` の drain bound の範囲内。継続的な placeholder 台帳はその claim について **一度も placeholder Pod が存在しなかった**ことを記録 — surge-less 経路を特徴づける決定的な signature。`expired` は 0 のまま。メイン soak プール自身のローテーション cadence はこの間まったく影響を受けなかった（fallback/expired/failure なし、`P + t_rot` を超える completion gap なし）。単一の有界 claim に絞って、上の同期 12 ノードバッチが検証した同じ graceful↔surge-less の分岐機構を裏付ける |
+::: tip 検証サマリー
+**検証済み（20+ シナリオ）:** コア surge、同一 AZ ゾーン PV リバインド、ロールバック、limits ゲーティング、マルチプールの閉じ込め、PDB ドレイン、do-not-disrupt マーカー、force-expiry 検出、キャパシティ吸収、placeholder プリエンプション、ウィンドウ境界、リーダー変更再開、forceful fallback、earliest-deadline ソート、オペレーターオプトアウト、12 時間 tight-race soak。
 
-> **なぜ surge 機構ではなく「能力」として記録するか。** standalone NodeClaim の結果は、コントローラが作成した NodeClaim を Karpenter が尊重することを示し、プロジェクトのリスクを下げる。しかし surge 設計（§3.3）は意図的にこれを**使わない**: standalone ノードは NodePool に owned されず、Pod が NodePool 会計・expiry・drift・budget の外のノードに載り続け、意図的な NodePool 分離を壊すため。placeholder 方式が成立しない場合の **fallback** として文書化しておく。
->
-> **現在の検証状況（PoC スコープ）:** 本命の placeholder Pod surge 機構、新規プロビジョニング経路、同一 AZ zonal-PV 再バインド、`readyTimeout` ロールバック + クリーンアップ、NodePool `limits` ゲート、複数 NodePool の閉じ込め、voluntary な PDB 尊重 drain、新旧両 surge ノードの `do-not-disrupt` マーカー、強制失効の `expired` outcome、スケール版 R6 soak、capacity-absorb 経路、placeholder の preemption（被害者 + `readyTimeout` 有界 rollback）、ウィンドウ境界の開始/停止、leader 交代の再開、voluntary disruption に対する `do-not-disrupt` の honor は上の検証済み行に記録済みである。
->
-> v0.4 以降の追加 — ウィンドウ有界の **surge-less forceful fallback**（#156）、**最早期限**の候補順序付け（#157）、候補選択からの **`do-not-disrupt` 除外**（#170）— は 2026-07-04 の 3 行に記録済みで、`expireAfter` を固定したまま（トリックなし）graceful + forceful の混在として実 EKS 上で end-to-end に検証した。
->
-> フルな数時間の **tight-race `expireAfter` soak**（issue #118）— `leadTime` が本当に `expireAfter` と接戦するサブデイリーなウィンドウ下での 12h 無人ラン、および forceful-fallback の境界を単一の有界 claim に絞って検証する有人エピローグ — は上の 2026-07-15 の 2 行に記録済み。詳細は `test/e2e/eks-automode/VALIDATION.md` を参照。
->
-> 実クラウドで未了: 本物の同一 AZ **キャパシティ不足（ICE）** による rollback 誘発（オンデマンドで決定的に再現できないため短い `readyTimeout` で代替）— issue #109 で追跡中。RBAC の十分性と `karpenter.sh/v1` CRD デコードは暗黙に検証済み — コントローラは surge オブジェクトの create/patch/delete と実 `NodeClaim` の reconcile をエラーなく実施。
+**未決:** 真の同一 AZ キャパシティ不足（ICE）によるリアルクラウドでのロールバック（issue #109）。
+:::
+
+### コアメカニズム
+
+| 前提 | ステータス | 日付 |
+|------------|--------|------|
+| スタンドアロン `NodeClaim` が Auto Mode でプロビジョニング可能 | 検証済み | 2026-05-29 |
+| placeholder Pod surge が make-before-break を完了 | 検証済み | 2026-06-22 |
+| 同一 AZ surge で EBS 再アタッチ（ゾーン PV リバインド） | 検証済み | 2026-06-22 |
+| `readyTimeout` ミスがクリーンにロールバック | 検証済み | 2026-06-22 |
+| NodePool `limits` 消費が surge をゲート | 検証済み | 2026-06-22 |
+| required `karpenter.sh/nodepool` が surge をプールに閉じ込め | 検証済み | 2026-06-22 |
+| 明示的 `NodeClaim` 削除が voluntary パスでドレイン（PDB） | 検証済み | 2026-06-22 |
+| `do-not-disrupt` を両ノードに適用、完了時に削除 | 検証済み | 2026-06-22 |
+| pending 中の force-expiry が `expired` を記録（success/failure ではない） | 検証済み | 2026-06-22 |
+
+### 応用シナリオ
+
+| 前提 | ステータス | 日付 |
+|------------|--------|------|
+| キャパシティ吸収パス（空きにビンパック、新ノードなし） | 検証済み | 2026-06-23 |
+| リーダー変更がアノテーションのみから再開 | 検証済み | 2026-06-23 |
+| 進行中のローテーションがウィンドウ境界を超えて完了 | 検証済み | 2026-06-23 |
+| placeholder がプリエンプション犠牲者; 敵対的プリエンプション → ロールバック | 検証済み | 2026-06-23 |
+| `do-not-disrupt` が Drift に対して有効 | 検証済み | 2026-06-23 |
+
+### v0.4 以降の追加
+
+| 前提 | ステータス | 日付 |
+|------------|--------|------|
+| Forceful fallback（12 ノードバッチ、graceful + surge なしミックス） | 検証済み | 2026-07-04 |
+| earliest-deadline 候補ソート | 検証済み | 2026-07-04 |
+| オペレーター `do-not-disrupt` が選定から除外 | 検証済み | 2026-07-04 |
+
+### soak テスト
+
+| 前提 | ステータス | 日付 |
+|------------|--------|------|
+| 12h tight-race soak: 71/71 graceful、0 expired、0 failure | 検証済み | 2026-07-15 |
+| Forceful fallback が制限された claim に対して決定的に発動 | 検証済み | 2026-07-15 |
+
+::: details 完全な検証エビデンス — クリックで展開
+
+#### スタンドアロン NodeClaim（能力確認、surge メカニズムではない）
+
+`nodeClassRef` + `requirements` のみの NodeClaim が `Ready` に到達（~30s、実 EC2）; admission が `--dry-run=server` を受け入れ; graceful な finalizer ドリブン削除を確認。K8s 1.35、`karpenter.sh/v1`（2026-05-29）。
+
+#### placeholder Pod surge（2026-06-22）
+
+低優先度 placeholder が NodePool 所有の surge `NodeClaim` を誘導し `Ready` に到達（~30s）。旧 NodeClaim 削除前に完了; ドレインは voluntary パスに従い; ワークロードが surge ノードに再スケジュール; `noderotation_completed_total{outcome="success"}` がインクリメント。
+
+#### 同一 AZ ゾーン PV リバインド（2026-06-22）
+
+StatefulSet gp3 PVC が `us-west-2a` でバインド; ローテーションを跨いで `matchNodeRequirements` のゾーンパリティがすべての surge ノードを `us-west-2a` に維持; **同一** PV が再アタッチ（再プロビジョニングではない）; センチネルデータ生存。
+
+#### タイムアウトロールバック（2026-06-22）
+
+`readyTimeout` をノード ready 時間未満に設定 → タイムアウト → surge claim reap、placeholder 削除、候補保持 + uncordon、`outcome="failure"` インクリメント。
+
+#### Limits ゲーティング（2026-06-22）
+
+`spec.limits.cpu` にヘッドルームなし: 適格候補は surge されず; `insufficient limits headroom; cannot surge` をログ; `in_progress` は 0 のまま。
+
+#### マルチプールの閉じ込め（2026-06-22）
+
+同一 AZ の空きを持つ別プール: surge は候補のプールに留まる（`karpenter.sh/nodepool=nrc-poc`）; 別プール変更なし。
+
+#### PDB 準拠ドレイン（2026-06-22）
+
+ブロッキング PDB（`minAvailable=2`、2 レプリカ）がドレインを停滞; `minAvailable=1` に緩和で 1 つずつマイグレーション完了。
+
+#### `do-not-disrupt` マーカー（2026-06-22）
+
+旧ノードと surge ノードの両方が `do-not-disrupt=true` + `do-not-disrupt-owned` を保持; 完了時の unfreeze で両方を削除。
+
+#### force-expiry 検出（2026-06-22）
+
+プールを freeze + pending 候補の `NodeClaim` を削除 → `state=expired`、anchor クリア、surge 残留なし、`outcome="expired"` インクリメント。
+
+#### キャパシティ吸収パス（2026-06-23）
+
+若い（`ageThreshold` 未満、非候補）同一 AZ スペアノードが ~1970m free で 250m placeholder を吸収（新 NodeClaim 誘導なし）; プールは 2 claim のまま; `outcome="success"` インクリメント。
+
+#### リーダー変更再開（2026-06-23）
+
+ローテーション中（`state=pending`）にリーダー Pod を kill; 新レプリカが Lease を取得し同じローテーションをアノテーションから継続 — 同一 `surge-claim`、同一 `started-at`、リスタートなしで完了。
+
+#### ウィンドウ境界動作（2026-06-23）
+
+ウィンドウ内でローテーション開始; ウィンドウクローズ後も中止せず完了; 第 2 の適格候補は開始しない（`window_active=0`）。
+
+#### placeholder プリエンプション（2026-06-23）
+
+高優先度 Pod が placeholder をプリエンプト; placeholder は何もプリエンプトしない（`preemptionPolicy=Never`）; limits でリプロビジョンブロック下で Pending のまま `readyTimeout` まで → クリーンロールバック。
+
+#### `do-not-disrupt` vs Drift（2026-06-23）
+
+Drifted ノードに `do-not-disrupt=true` → 3 分以上置換されず; アノテーション除去で即座に drift-replace。
+
+#### Forceful fallback — 12 ノードバッチ（2026-07-04）
+
+12 ノード、固定 2h `expireAfter`、`N=12 > K·C=2`: 最初の 6 は graceful、余剰 6 は surge なし。`rotation-mode=forceful-fallback`; `ForcefulFallback` Warning Events; forceful 候補に placeholder なし; `noderotation_forceful_fallback_total` が `0→6` にクリーンに上昇; PDB は維持; expired ゼロ。
+
+#### earliest-deadline ソート（2026-07-04）
+
+12 ノードバッチが 1 つの `creationTimestamp` を共有 → ソートは Name タイブレークに退化: claim は昇順で消費（`2rvd5 < 6ssql < dtkgz < ...`）。
+
+#### オペレーター `do-not-disrupt` 除外（2026-07-04）
+
+候補の Node に `do-not-disrupt=true`（owned マーカーなし）をアノテート → `candidates` ゲージが 4→3 にドロップ; 除去で復元。
+
+#### 12h tight-race soak（2026-07-15）
+
+`E=2h12m`、`leadTime=1h12m`、48 ウィンドウ/日、5 ノードプール。71/71 ローテーション graceful（~12m ケイデンス）。最小マージン 68.3m、中央値 70.3m、最大 71.2m。expired ゼロ、failure ゼロ、`forceful_fallback_total=0`（armed だが不要）。コントローラー `restartCount=0`、909 スクレイプ、連続 `seq`。詳細記録: `test/e2e/eks-automode/VALIDATION.md`。
+
+#### Forceful fallback 境界（2026-07-15）
+
+別の単一ノードミニプール、候補状態になるまで freeze。解放後 graceful surge が期限内に収まらない → surge なしブランチ: `forceful_fallback_total` 0→1; claim が解放 56 秒後に削除（期限の 10m04s 前）; 当該 claim で placeholder は一切なし; `expired` は 0 のまま。
+
+:::
+
+### 未決事項
+
+真の同一 AZ **キャパシティ不足（ICE）** によるロールバック — 短い `readyTimeout` で代替（オンデマンドで決定的に誘発不可）。issue #109 で追跡。
+
+### 注記
+
+- スタンドアロン `NodeClaim` の結果はプロジェクトのリスクを低減するが **surge メカニズムではない**（§3.3 — スタンドアロンノードは NodePool アカウンティングを破壊）
+- RBAC の十分性と `karpenter.sh/v1` CRD デコードはすべてのシナリオで暗黙的に検証
 
 ## 7.3 未決事項
 
-1. **祝日対応スケジューリング**（`Sat` が祝日に当たる場合にローテーションをスキップ）。v1 設計は意図的に祝日を無視
-2. v2 の pre-pull イメージ取得方式（Karpenter NodeClass 標準機能 vs 専用 Job）
-3. EKS Auto Mode 以外との互換を謳う前の**マルチクラウド検証**（AKS NAP / GKE）
+1. **祝日対応スケジューリング** — ウィンドウ日が祝日に当たる場合にローテーションをスキップ。v1 では意図的に祝日を無視。
+2. **pre-pull イメージソース** — Karpenter NodeClass のイメージプル機能を使うか専用 Job か（v2）。
+3. **マルチクラウド検証** — EKS Auto Mode を超えた互換性を主張する前に AKS NAP、GKE をテスト。
 
-> `RotationPolicy` CRD（issue #119）により解決済み: *NodePool が別々のローテーションポリシーを必要とする場合の CRD ベースのポリシー移行* と *NodePool ごとのメンテナンスウィンドウ vs クラスタ単一ウィンドウ* — いずれも NodePool ごとの `RotationPolicy`（§5.4）で提供される。
+::: tip 解決済み
+*CRD ベースのポリシー移行* と *NodePool ごとのメンテナンスウィンドウ* — `RotationPolicy` CRD で提供（issue #119、§5.4）。
+:::

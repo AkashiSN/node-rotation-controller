@@ -19,6 +19,7 @@ export interface Labels {
   policyYamlHint: string
   extraWindows: (n: number) => string
   fleet: string
+  fleetHint: string
   nodeCount: string
   firstCreatedAt: string
   spread: string
@@ -41,6 +42,25 @@ export interface Labels {
   provisioningEstimate: string
   drainEstimate: string
   forcefulFallback: string
+  /** Short descriptions for each field, shown below the input. */
+  fieldHelp: {
+    timezone: string
+    days: string
+    windowStart: string
+    windowEnd: string
+    minRotationChances: string
+    ageThreshold: string
+    readyTimeout: string
+    cooldownAfter: string
+    provisioningEstimate: string
+    drainEstimate: string
+    forcefulFallback: string
+    expireAfter: string
+    tgp: string
+    nodeCount: string
+    spread: string
+    firstCreatedAt: string
+  }
   /** The policy form's sections, mirroring the policy's own structure. */
   policyGroups: { window: string; derivation: string; surge: string }
   /** A finding's severity, as an accessible name for the glyph that carries it. The
@@ -157,9 +177,10 @@ const en: Labels = {
   policyYamlHint: 'The YAML is authoritative — it is what the simulator decodes, exactly as a cluster would. The form edits it in place.',
   extraWindows: (n) => `+${n} more maintenance window${n === 1 ? '' : 's'} in the YAML (the effective window is their union); the form edits the first one.`,
   fleet: 'Fleet',
+  fleetHint: 'The nodes to simulate. The generator creates a batch; you can also edit individual rows.',
   nodeCount: 'Nodes',
   firstCreatedAt: 'First created at',
-  spread: 'Spread (Go duration, e.g. 168h)',
+  spread: 'Spread (e.g. 168h, 30m, 2h30m)',
   generate: 'Generate',
   expireAfter: 'expireAfter (NodePool template)',
   tgp: 'terminationGracePeriod (NodePool template)',
@@ -179,6 +200,25 @@ const en: Labels = {
   provisioningEstimate: 'provisioningEstimate',
   drainEstimate: 'drainEstimate',
   forcefulFallback: 'Forceful fallback',
+  /** Short descriptions for each field, shown below the input. */
+  fieldHelp: {
+    timezone: 'IANA timezone for the window (e.g. Asia/Tokyo)',
+    days: 'Which weekdays the window recurs on',
+    windowStart: 'Time the window opens (24h)',
+    windowEnd: 'Time the window closes (24h)',
+    minRotationChances: 'How many windows a node gets before expiry (K)',
+    ageThreshold: '"auto" or a duration (e.g. 120h, 5d12h)',
+    readyTimeout: 'Max wait for the surge node to become Ready',
+    cooldownAfter: 'Pause between successive successful rotations',
+    provisioningEstimate: 'Expected provisioning time (throughput forecast)',
+    drainEstimate: 'Expected drain time (throughput forecast)',
+    forcefulFallback: 'Delete surge-less if graceful can\'t finish in time',
+    expireAfter: 'Node lifetime before Karpenter force-expires it (e.g. 336h)',
+    tgp: 'How long Karpenter waits before force-killing pods (e.g. 24h)',
+    nodeCount: 'Number of nodes to generate (1–50)',
+    spread: 'Time between first and last node creation (e.g. 168h = 1 week)',
+    firstCreatedAt: 'Creation timestamp of the first node (ISO 8601)',
+  },
   policyGroups: {
     window: 'Maintenance window — when rotation may START',
     derivation: 'Derivation — how early a node is picked',
@@ -299,11 +339,12 @@ const ja: Labels = {
   drain: 'ドレイン',
   policy: 'ポリシー',
   policyYamlHint: 'YAML が正本です（シミュレーターはクラスタと同じ厳密さでこれをデコードします）。フォームはこの YAML をその場で書き換えます。',
-  extraWindows: (n) => `YAML にはメンテナンス窓があと ${n} 件あります（実効窓はそれらの和集合）。フォームが編集するのは 1 件目だけです。`,
+  extraWindows: (n) => `YAML にはメンテナンスウィンドウがあと ${n} 件あります（実効ウィンドウはそれらの和集合）。フォームが編集するのは 1 件目だけです。`,
   fleet: 'ノード群',
+  fleetHint: 'シミュレートするノード。ジェネレーターでバッチ生成し、個別行を編集することもできる。',
   nodeCount: 'ノード数',
   firstCreatedAt: '最初のノードの作成時刻',
-  spread: '分散幅（Go duration、例: 168h）',
+  spread: '分散幅（例: 168h, 30m, 2h30m）',
   generate: '生成',
   expireAfter: 'expireAfter（NodePool テンプレート）',
   tgp: 'terminationGracePeriod（NodePool テンプレート）',
@@ -314,8 +355,8 @@ const ja: Labels = {
   end: '終了',
   timezone: 'タイムゾーン',
   days: '曜日',
-  windowStart: '窓の開始',
-  windowEnd: '窓の終了',
+  windowStart: 'ウィンドウの開始',
+  windowEnd: 'ウィンドウの終了',
   minRotationChances: 'minRotationChances (K)',
   ageThreshold: 'ageThreshold',
   cooldownAfter: 'cooldownAfter',
@@ -323,21 +364,40 @@ const ja: Labels = {
   provisioningEstimate: 'provisioningEstimate',
   drainEstimate: 'drainEstimate',
   forcefulFallback: 'Forceful fallback',
+  /** 各フィールドの短い説明。入力の下に表示される。 */
+  fieldHelp: {
+    timezone: 'ウィンドウの IANA タイムゾーン（例: Asia/Tokyo）',
+    days: 'ウィンドウが繰り返される曜日',
+    windowStart: 'ウィンドウの開始時刻（24h）',
+    windowEnd: 'ウィンドウの終了時刻（24h）',
+    minRotationChances: 'expiry 前にノードが得るウィンドウ回数 (K)',
+    ageThreshold: '"auto" または期間の直接指定（例: 120h, 5d12h）',
+    readyTimeout: 'surge ノードが Ready になるまでの最大待ち時間',
+    cooldownAfter: '成功したローテーション間の休止',
+    provisioningEstimate: '期待プロビジョニング時間（スループット予測用）',
+    drainEstimate: '期待ドレイン時間（スループット予測用）',
+    forcefulFallback: 'graceful が間に合わなければ surge なしで回す',
+    expireAfter: 'Karpenter が強制失効させるまでのノード寿命（例: 336h）',
+    tgp: 'Karpenter が Pod を強制 kill するまでの猶予（例: 24h）',
+    nodeCount: '生成するノード数（1〜50）',
+    spread: '最初と最後のノード作成の間隔（例: 168h = 1 週間）',
+    firstCreatedAt: '最初のノードの作成タイムスタンプ（ISO 8601）',
+  },
   policyGroups: {
-    window: 'メンテナンス窓 — ローテーションを「開始してよい」時間帯',
+    window: 'メンテナンスウィンドウ — ローテーションを「開始してよい」時間帯',
     derivation: '導出 — ノードをどれだけ早く選ぶか',
     surge: 'surge — 1 回のローテーションの動き方',
   },
   severity: { warn: '警告', fatal: '致命的' },
   symbols: {
     title: 'A・t_rot・t_rot_est・G・C とは',
-    hint: '上の各記号の意味です。E はノードの expireAfter、P は窓の出現間隔の最悪値、D は 1 回の窓の長さ、tGP は terminationGracePeriod、buffer はコントローラー自身の検知遅れのために確保する固定の猶予時間です。実際の値は上の t_rot の行で確認できます。',
+    hint: '上の各記号の意味です。E はノードの expireAfter、P はウィンドウの出現間隔の最悪値、D は 1 回のウィンドウの長さ、tGP は terminationGracePeriod、buffer はコントローラー自身の検知遅れのために確保する固定の猶予時間です。実際の値は上の t_rot の行で確認できます。',
     defs: {
       a: 'ノードが候補になる年齢。構成上つねに expireAfter より手前に来るように導出されるため、バックストップはバックストップのままでいられます。',
       tRot: 'ノード 1 台のローテーション時間の上界 — surge の待ちと、強制完了されるドレインの合計。期限側の「上界」であって、健全なローテーションの所要時間ではありません。',
       tRotEst: '健全なローテーション 1 回の想定所要時間。期限の項も buffer も含みません（上界ではなく、スループットの分母だからです）。',
       g: 'expireAfter が発火する前にスケジュールが実際に保証するローテーション機会の回数。auto 導出では G = K、ageThreshold を明示指定すると再計算されます。',
-      c: '1 回の窓で開始できるローテーション数（m = surge.maxUnavailable、v1 では 1 固定）。ローテーションは直列で、間隔は cooldownAfter です。',
+      c: '1 回のウィンドウで開始できるローテーション数（m = surge.maxUnavailable、v1 では 1 固定）。ローテーションは直列で、間隔は cooldownAfter です。',
     },
     specSymbols: '仕様 §1.4（記号一覧）',
     specDerivation: '§3.2（導出）',
@@ -368,7 +428,7 @@ const ja: Labels = {
     life: 'ノードの寿命', rotation: 'ローテーション開始',
     surgeless: 'surge なし（forceful fallback）', ready: '代替ノード Ready',
     done: 'ローテーション完了', deadline: 'expireAfter 期限',
-    breach: 'expireAfter 超過', window: 'メンテナンス窓', blocked: 'ブロック',
+    breach: 'expireAfter 超過', window: 'メンテナンスウィンドウ', blocked: 'ブロック',
   },
   chart: {
     provisioning: 'プロビジョニング中（代替ノードを立ち上げている）',
@@ -384,11 +444,11 @@ const ja: Labels = {
     malformed: 'この境界がレスポンスにない（バグ）',
     continues: 'シミュレーション終了時点でまだ生存 — バーはこの先も続く',
     surgeless: 'surge なし（forceful fallback）: 代替ノードを先に立てない',
-    rotationHint: 'ローテーションのボタンは「回」単位で移動します（ローテーションが起きたメンテナンス窓 1 回分）。その窓に合わせて表示するので、窓の境界も、そこで起きたローテーションもすべて一度に画面に入ります（窓の中でのローテーションは直列で、間隔は t_rot_est + cooldownAfter です）。',
+    rotationHint: 'ローテーションのボタンは「回」単位で移動します（ローテーションが起きたメンテナンスウィンドウ 1 回分）。そのウィンドウに合わせて表示するので、ウィンドウの境界も、そこで起きたローテーションもすべて一度に画面に入ります（ウィンドウの中でのローテーションは直列で、間隔は t_rot_est + cooldownAfter です）。',
     firstRotation: '最初のローテーション',
     prevRotation: '前のローテーション',
     nextRotation: '次のローテーション',
-    fitWindow: 'メンテナンス窓に合わせる',
+    fitWindow: 'メンテナンスウィンドウに合わせる',
     reset: '期間全体',
     zoomIn: '拡大',
     zoomOut: '縮小',
@@ -398,11 +458,11 @@ const ja: Labels = {
     view: '表示範囲',
     simulatedThrough: 'シミュレート済み',
     coverage: '寿命カバレッジ',
-    coverageHint: '最長のノード寿命（expireAfter）の倍数です。「世代数」ではありません: createdAt のばらつき、ノードごとの上書き、窓待ち、cooldown のいずれもその等価性を壊します。',
+    coverageHint: '最長のノード寿命（expireAfter）の倍数です。「世代数」ではありません: createdAt のばらつき、ノードごとの上書き、ウィンドウ待ち、cooldown のいずれもその等価性を壊します。',
     coverageOption: (n) => `${n}倍`,
     pinned: 'シミュレート期間は下の時刻に固定されています。カバレッジのボタンを押すと固定が解除されます。',
     advanced: '正確なシミュレート期間（ISO 8601）',
-    calendar: 'メンテナンス窓が実際に開いていた時間帯（観測値）',
+    calendar: 'メンテナンスウィンドウが実際に開いていた時間帯（観測値）',
     calendarHint: (weeks, tz) =>
       `この実行が観測した完全な ${weeks} 週間を、${tz} で畳み込んだものです（全 maintenanceWindows エントリの和集合）。各セルは「開いていた分数 ÷ 観測した分数」で、週数のカウントではありません: 開閉を二値化する閾値は、1 分だけの重なりをセル全体に膨らませるか、逆に消してしまうかのどちらかになります。`,
     calendarPartial: (through) => `実行は ${through} で停止したため、それ以前の完全な週だけを数えています。`,

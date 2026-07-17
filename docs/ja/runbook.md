@@ -1,556 +1,301 @@
 # 運用ランブック
 
-`node-rotation-controller` を実クラスタで運用するための手引き。設計の *なぜ* は
-[仕様書](specification/)が source of truth であり、本ランブックは運用者向けの
-*どうやって* を扱う。各節は対応する仕様セクションへリンクしている。
+`node-rotation-controller` の運用ガイド。各セクションは **いつ該当するか**・**何を見るか**・**何をするか** に答える。
 
-英語原文: [docs/runbook.md](../runbook.md)。
+設計の理由は[仕様書](specification/)を参照。英語原文: [docs/runbook.md](../runbook.md)。
 
-> 本コントローラは pre-1.0 である。EKS Auto Mode の PoC でコアの surge パスは
-> 検証済みで、12 時間の tight-race soak も完走済みである。同一 AZ の実容量枯渇（ICE）のみ未了である
-> （[§7.2 検証済み前提](specification/07-risks.md#72-検証済み前提)を参照）。本ランブックは
-> production 展開の出発点であって、保証ではない。
+::: tip いまインシデント対応中なら？
+[§7 トラブルシューティング](#7-トラブルシューティング)へ直行 — 症状から対処へのインデックス。
+:::
 
-> **いまインシデント対応中なら？**
-> [§7 トラブルシューティング: 症状別インデックス](#7-トラブルシューティング-症状別インデックス)
-> から始めること — 観測できる各症状を、それを確定するメトリクス/イベントと、
-> 直すべきセクションに対応づけてある。
+---
 
 ## 目次
 
-1. [ゾーン制約 PV ワークロード向けの AZ ごとの surge ヘッドルーム](#1-ゾーン制約-pv-ワークロード向けの-az-ごとの-surge-ヘッドルーム)
-2. [drain のキャリブレーション: `drainEstimate` と `terminationGracePeriod`](#2-drain-のキャリブレーション-drainestimate-と-terminationgraceperiod)
-3. [`noderotation_*` メトリクスの読み方](#3-noderotation_-メトリクスの読み方)
+1. [AZ ごとの surge ヘッドルーム（ゾーン PV）](#1-az-ごとの-surge-ヘッドルームゾーン-pv)
+2. [スループットと tGP の調整](#2-スループットと-tgp-の調整)
+3. [メトリクスリファレンス](#3-メトリクスリファレンス)
 4. [freeze ワークフロー](#4-freeze-ワークフロー)
 5. [drain が詰まったときの対処](#5-drain-が詰まったときの対処)
 6. [アラート（PrometheusRule）](#6-アラートprometheusrule)
-7. [トラブルシューティング: 症状別インデックス](#7-トラブルシューティング-症状別インデックス)
-8. [コントローラのアップグレードとロールバック](#8-コントローラのアップグレードとロールバック)
-9. [大規模クラスタでのコントローラのサイジング（Pod キャッシュ）](#9-大規模クラスタでのコントローラのサイジングpod-キャッシュ)
+7. [トラブルシューティング](#7-トラブルシューティング)
+8. [アップグレードとロールバック](#8-アップグレードとロールバック)
+9. [大規模クラスタでのサイジング](#9-大規模クラスタでのサイジング)
 
 ---
 
-## 1. ゾーン制約 PV ワークロード向けの AZ ごとの surge ヘッドルーム
+## 1. AZ ごとの surge ヘッドルーム（ゾーン PV）
 
-**対象:** **ゾーン制約** PersistentVolume（EBS `gp3`/`io2`、または
-`nodeAffinity` に `topology.kubernetes.io/zone` 制約を持つ PV）に紐づくワークロードを
-前段に置く NodePool。
+**いつ:** NodePool がゾーン制約の PersistentVolume（EBS `gp3`/`io2`、または `topology.kubernetes.io/zone` の nodeAffinity を持つ PV）に紐づくワークロードを前段に置くとき。
 
-**なぜ重要か。** surge は make-before-break であり、コントローラは古いノードを drain する
-*前に* 代替ノードを追加する。ゾーン制約 PV ワークロードでは、既存ボリュームが再アタッチ
-できるよう、代替ノードは **候補の AZ に固定される** —
-`topology.kubernetes.io/zone` は `surge.matchNodeRequirements` の既定 `required`
-集合に含まれる
-（[§3.3 *ステートフル／ゾーン制約のワークロード*](specification/03-design.md#33-surge-シーケンスv1)）。
-コントローラはゾーンストレージを AZ 間で移動できないし、実際に移動もしない。
+**制約:** surge ノードは既存ボリュームを再アタッチできるよう候補の AZ に固定される。同一 AZ の容量不足は**別ゾーンにフォールバックできない** — `readyTimeout` 後にロールバックする。
 
-その帰結は **ハードな制約** である: 同一 AZ の容量不足は **別ゾーンへフォールバック
-できない**。候補の AZ に同一ゾーン置換用のスケジュール可能な容量がなければ surge は完了
-できない。placeholder Pod が `Running` にならず `readyTimeout` が発火し、ローテーションは
-`expireAfter` ベースラインへロールバックする
-（[§3.3 *ロールバック挙動*](specification/03-design.md#33-surge-シーケンスv1)）。同一 AZ 不足が
-繰り返されると `noderotation_retry_count` の増大として現れる
-（リスク [R3](specification/07-risks.md#71-リスク)）。
+**何をするか:**
 
-**指針。** ゾーン制約 PV ワークロードを前段に置く各 NodePool では、**使用中の AZ ごとに
-ノード 1 台分の surge ヘッドルームを確保する**:
+- 使用中の AZ ごとに **ノード 1 台分のヘッドルーム** を NodePool の `spec.limits` に確保する
+- 各 AZ で EC2 vCPU クォータに余地があることを確認する（集計値だけでなく AZ ごとに）
+- surge インスタンスシェイプに対するキャパシティ予約を検討する
 
-- NodePool の `requirements` が **使用中のすべての AZ** を許可していることを確認する
-  （ボリュームが複数ゾーンにまたがるなら `topology.kubernetes.io/zone` を 1 ゾーンに
-  絞らない）。
-- NodePool の `spec.limits` リソース予算を、*各* AZ で定常状態のフットプリント＋ノード
-  1 台分の余地が残るよう設定する。コントローラはローテーション開始前に pool 全体の
-  `limits` ヘッドルームを事前チェックするが（§5.2 step 3）、`limits` は **pool 全体の
-  リソース予算であり AZ ごとの台数ではない** — 「`us-east-1a` に予備ノード 1 台」を表現
-  できない。AZ ごとのヘッドルームは運用者の責任である。
-- 使用する **各** AZ で（集計値だけでなく）基盤プロバイダに容量があり、EC2 vCPU クォータ
-  にも余地があることを確認する。
-- クラウドプロバイダが対応していれば、使用中の各 AZ で surge ノードのインスタンス形状に
-  対するキャパシティ予約を検討する。
+**不足の検知方法:**
 
-**不足の検知方法。** 同一 AZ 不足は `readyTimeout` 起因のロールバック
-（`noderotation_completed_total` の `failure` 結果）と `noderotation_retry_count`
-の増大（アラート: `NodeRotationRetryCountHigh`、[§6](#6-アラートprometheusrule)）として
-現れる。このアラートがゾーン制約 PV の NodePool で発火したら、まず AZ ごとの容量不足を
-疑うこと。
+- `noderotation_completed_total{outcome="failure"}` の増加
+- `noderotation_retry_count >= 3`（アラート: `NodeRotationRetryCountHigh`）
+
+このアラートがゾーン PV の pool で発火したら、まず AZ ごとの容量不足を疑う。
 
 ---
 
-## 2. drain のキャリブレーション: `drainEstimate` と `terminationGracePeriod`
+## 2. スループットと tGP の調整
 
-**対象:** レイヤ 2 のスループット予測（`C`）が低すぎるように見える任意の NodePool、
-特に EKS Auto Mode の NodePool（既定の `terminationGracePeriod`（`tGP`）が `24h`）。
+### スループット（ウィンドウ容量 `C`）を上げる
 
-**なぜ重要か。** 混同しやすい 2 つの異なる所要時間がある:
+**いつ:** `ThroughputBelowArrival` や `ThroughputBurstShortfall` の警告が出る、またはウィンドウ内で候補がさばけない。
 
-- `surge.drainEstimate` — **健全で PDB を尊重する drain が実際にかかる時間**、そして
-  `surge.provisioningEstimate` — **健全な surge プロビジョニング**（候補 → 新ノード `Ready`）
-  が実際にかかる時間。これらが 2 つの **スループットのつまみ**である。コントローラはこの和から
-  容量を予測する: 期待ローテーションサービス時間は
-  `t_rot_est = provisioningEstimate + drainEstimate`（ADR-0003）であり、長さ `D` の
-  ウィンドウが許す直列のローテーション開始数は `C = ceil(D / (t_rot_est + cooldownAfter))`
-  である（[§3.2 レイヤ 2](specification/03-design.md#32-候補選定)）。未設定時、`drainEstimate`
-  は `min(tGP, 10m)` に、`provisioningEstimate` は `min(readyTimeout, 5m)` に既定される。
-  いずれも deadline 項や `buffer` を含まない — それらは安全側の上限 `t_rot` のものである。
-- `terminationGracePeriod` — Karpenter が drain を **強制完了させ**、まだ drain し終えて
-  いない pod を kill する deadline。これは **安全側の上限** であってスループットの入力では
-  なく、`C` にはもはや一切現れない。`readyTimeout` はプロビジョニングフェーズの同種の deadline
-  （そこで surge が放棄される）であり、同様に `C` には現れない。
+**スループットを決めるもの:**
 
-#212 以前はモデルが `C` に `tGP` 全量を見込んでいたため、素の Auto Mode
-（`tGP = 24h`、`t_rot ≈ 24h17m`）では 4 時間ウィンドウが `C = 1` を計算し、見かけ上の対処は
-`tGP` を下げることだった。もはやそれはスループットの上げ方ではない。既定の
-`provisioningEstimate = min(15m, 5m) = 5m` と `drainEstimate = min(24h, 10m) = 10m` では
-`t_rot_est = 15m` となり、同じ 4 時間ウィンドウは
-`tGP` によらず `C = ceil(4h / (15m + 10m)) = 10` を計算する。
+```
+C = ceil(D / (provisioningEstimate + drainEstimate + cooldownAfter))
+```
 
-**スループットを上げる。** `C` は `readyTimeout` や `terminationGracePeriod`（放棄／強制 kill の
-deadline）ではなく `surge.provisioningEstimate` と `surge.drainEstimate`（期待される健全な
-プロビジョニングと drain）から予測される。`C` が低すぎるように見えるなら、各見積もりを
-クラスタの実際の時間に設定する — drain は `noderotation_duration_seconds{phase="drain"}`、
-プロビジョニングは `{phase="surge_wait"}` から読める。スループット警告を消すために
-`terminationGracePeriod` を下げては **いけない**。それはもはや `C` を一切上げず、`A` を伸ばす
-ことで `ThroughputBelowArrival` にのみ、しかも間接的に到達するだけである（明示的な
-`ageThreshold` override 下ではそれすらない）。それがするのは、本当に遅い PDB 尊重の drain が
-Karpenter に pod を強制 kill されるまでの猶予を短くすることである。`terminationGracePeriod`
-は通常運用で観測する drain 時間からではなく、インシデントで許容できるダウンタイムから選ぶ —
-その観測値には、この設定が備える裾野は含まれていない。
+| つまみ | 意味 | 設定方法 |
+|--------|------|----------|
+| `surge.provisioningEstimate` | surge ノードが Ready になるまでの期待時間 | `noderotation_duration_seconds{phase="surge_wait"}` から読む |
+| `surge.drainEstimate` | 健全な drain の期待時間 | `noderotation_duration_seconds{phase="drain"}` から読む |
+| `surge.cooldownAfter` | 連続ローテーション間の休止 | PDB が drain を直列化しているなら `0` でも可 |
 
-> **ほぼ連続のスケジュールでも警告は出る。** `RotationSpansNextWindow` は、閉じている区間が
-> `t_rot_est + cooldownAfter` より短ければどれだけ短くても発火する — 日次 `00:00`–`23:59` の
-> ウィンドウは毎深夜 1 分だけ閉じ、ローテーションは実際にそれを跨いでゲートを握る。警告は
-> 正しいが、そのようなスケジュールでは `K · C` の過大評価はごくわずかである。24/7 を意図する
-> なら `00:00`–`24:00` と書くこと。その和集合は決して閉じないため、跨ぐべき次の機会が存在せず
-> この検査は適用されない。
+**スループットを上げないもの:** `terminationGracePeriod`。`C` にはもう現れない。スループット警告のために下げてはいけない。
 
-`RotationSpansNextWindow` 警告が症状の場合、対処は順に: ウィンドウ機会の間隔を広げる;
-`cooldownAfter` を下げる; `provisioningEstimate` または `drainEstimate` がいずれかの実フェーズを
-過大評価しているなら訂正する。`tGP` を下げても **効かない** — この述語は `t_rot_est` により
-評価され、そこにはもう `tGP` は含まれない。
+### `terminationGracePeriod` の選び方
 
-> **`cooldownAfter` は成功後の整定休止のみ。** ウィンドウのスループットを取り戻すために下げても
-> 安全である: 失敗後の休止はもう縮まない（それは別フィールドの `surge.failurePause`、ADR-0004）。
-> PDB が既に drain を直列化している場合（`maxUnavailable` 付き Eviction は、drain したノードの置換が
-> `Ready` になるまで次のノードの eviction をブロックする）、`cooldownAfter` は `0` でもよい。失敗後の
-> 休止は系統的原因下での候補の巡回を抑え、`max(10m, cooldownAfter)` に既定されるので、`cooldownAfter`
-> に黙って追随して下がることはない — 強めたいときはスループットに触れず `failurePause` を上げる。
+**いつ:** Karpenter が drain 中の Pod を強制 kill するまでの猶予をどう決めるか。
 
-**それでも `tGP` を下げる理由。** `terminationGracePeriod` を下げるのは正当な運用判断であり
-続ける。ただしスループットのためではない:
+**基準:** インシデントで許容できるダウンタイムから選ぶ。通常観測する drain 時間からではない（観測値にはこの設定が備える裾野が含まれていない）。
 
-- **`A`（`ageThreshold`）を伸ばす。** `tGP` は deadline 上界
-  `t_rot = readyTimeout + tGP + buffer` の内側にあるので、小さい `tGP` はより大きい `A` を
-  導出し — ノードはより遅く回りチャーンが減る — `ThroughputBelowArrival` が `C·A` を `N·P`
-  と比べるためその 1 つの検査を *間接的に* 緩める。明示的な `ageThreshold` override 下では
-  その経路すら閉じる。
-- **Auto Mode の 21 日ハードキャップが緩む**（`E + tGP ≤ 21d`、
-  [§1.1](specification/01-overview.md#11-背景)）。`tGP = 1h` は `expireAfter` を最大 ~`20d` まで
-  許容し、これは疎な（例: 週次）ウィンドウで lead-time 導出を満たすのに必要なヘッドルーム
-  である。
-- **stuck-drain 判定が厳しくなる**。`noderotation_drain_stuck` は `tGP + buffer` で
-  発火するため、`tGP` が小さいほど詰まった drain を早く表面化できる
-  （[§5](#5-drain-が詰まったときの対処)）。
+**tGP を下げる理由（いずれもスループット目的ではない）:**
 
-**トレードオフ。** `terminationGracePeriod` はインシデントで許容できるダウンタイムから選ぶ —
-本当に遅い PDB 尊重の drain が自発的に終わる程度には長く、21 日キャップと stuck-drain 判定が
-正しく振る舞う程度には短く。`drainEstimate` は健全な drain が実際にどれだけ *かかる* かから
-選ぶ。両者は異なる数値であり、これを混同したことが以前 `C` を使い物にならなくしていた。
+- `ageThreshold` が伸びる → ノードがより遅くローテーションされ、チャーンが減る
+- Auto Mode の 21 日キャップが緩む（`expireAfter + tGP ≤ 21d`）
+- stuck-drain 判定が早くなる（`noderotation_drain_stuck` は `tGP + buffer` で発火）
 
-> `tGP` が未設定（self-managed Karpenter は nil を許容）の場合、drain は Karpenter に
-> 束縛されない。コントローラは stuck-drain アラートと deadline 上界 `t_rot` に固定の
-> フォールバック上限（例: `1h`）を代入する
-> （[§3.2 レイヤ 1 `TGPUnset` 警告](specification/03-design.md#32-候補選定)）。明示的な
-> `drainEstimate` はそのまま使われる — クランプ対象の deadline がないためである。
+導出の詳細は[仕様 §3.2](specification/03-design.md#32-候補選定)を参照。
 
 ---
 
-## 3. `noderotation_*` メトリクスの読み方
+## 3. メトリクスリファレンス
 
-`/metrics` で公開される（[§4.2](specification/04-operations.md#42-観測性)）。以下の名前とラベルは
-コントローラが出力する **正確な** 文字列である。NodePool 単位の系列は **NodePool 削除時に
-クリアされ** — 同様に、pool が統治 `RotationPolicy` を失った（もはやどのポリシーにもマッチしない）
-ときにもクリアされる — ため、reconcile が止まった pool が最後の値を保持し続けることはない。
+`/metrics` で公開。完全なセマンティクスは[仕様 §4.2](specification/04-operations.md#42-観測性)を参照。
 
-| メトリクス | 型 | ラベル | 読み方 |
-|--------|------|--------|------------|
-| `noderotation_candidates` | Gauge | `nodepool` | ローテーション待ちの適格 NodeClaim 数。各ウィンドウ内/後で **0 に向かうべき**。2 ウィンドウにわたり > 0 のままならコントローラが処理に追いついていない（[R2](specification/07-risks.md#71-リスク)）。 |
-| `noderotation_in_progress` | Gauge | `nodepool` | 進行中のローテーション数（v1 は直列なので 0 か 1）。 |
-| `noderotation_completed_total` | Counter | `nodepool`, `outcome` | 累積完了数。`outcome ∈ {success, failure, expired}`。`expired` = graceful なローテーション完了 **前に** 古いノードが Forceful Expiration された（lead-time レースに負けた — [§3.5](specification/03-design.md#35-バックストップ挙動)）。`success` には数えない。 |
-| `noderotation_duration_seconds` | Histogram | `nodepool`, `phase` | フェーズ別レイテンシ。`phase ∈ {surge_wait, drain}`。`surge_wait` 増大 ≈ プロビジョニングが遅い/失敗、`drain` 増大 ≈ eviction が遅い。 |
-| `noderotation_window_active` | Gauge | `nodepool` | `0/1`。pool の **統治ポリシー** のメンテナンスウィンドウ所属。各 pool が自身の `RotationPolicy` ウィンドウを解決するため NodePool ごと（[§5.4](specification/05-implementation.md#54-設定スキーマ)）。 |
-| `noderotation_policy_conflict` | Gauge | `nodepool` | `0/1`。`1` = pool が `RotationPolicy` の競合 — 同一 specificity のセレクタ同点、またはランタイム不正な統治ポリシー（[§5.4](specification/05-implementation.md#54-設定スキーマ)）— で **ローテーションをブロックされている**。重複を解消（またはポリシーを修正）する。pool は `PolicyConflict` Warning イベントも発行する。 |
-| `noderotation_freeze_until_timestamp` | Gauge | `nodepool` | 有効な freeze の Unix タイムスタンプ（`0` = freeze なし）。非ゼロ → ローテーションが **意図的に抑止** されている（[§4](#4-freeze-ワークフロー)）。 |
-| `noderotation_age_threshold_seconds` | Gauge | `nodepool` | 導出された `ageThreshold` `A`（[§3.2](specification/03-design.md#32-候補選定)）。pool ごとに異なる。 |
-| `noderotation_rotation_chances` | Gauge | `nodepool` | 導出しきい値での保証ローテーション回数 `G`。auto 導出では `G = K`。override で下げられる場合がある（override 値も検証対象）。 |
-| `noderotation_window_period_seconds` | Gauge | `nodepool` | 最悪ケースのウィンドウ周期 `P`。v1 では全 pool で同一（ウィンドウはクラスタ全体）。`nodepool` ラベルは将来を見越したもの。 |
-| `noderotation_short_lead_nodes` | Gauge | `nodepool` | **自身の** 刻印済み `expireAfter` で `K` 回を保証できなくなった NodeClaim（[§3.2 レイヤ 3](specification/03-design.md#32-候補選定)）。best-effort でローテーションされるが Forceful Expiration に至りうる。 |
-| `noderotation_drain_stuck` | Gauge | `nodepool` | `0/1`: 進行中の drain が `tGP + buffer` を超過。`1` → 運用者の対処が必要（[§5](#5-drain-が詰まったときの対処)）。 |
-| `noderotation_retry_count` | Gauge | `nodepool` | pool の NodeClaim 全体での最大 `noderotation.io/retry-count`（なければ `0`）。`≥ 3` → **systematic** な失敗（継続的な preemption か同一 AZ 不足、[R3](specification/07-risks.md#71-リスク)）。 |
+NodePool 単位の系列は NodePool 削除時、または統治 `RotationPolicy` を失った時にクリアされる。
 
-**Warning Events。** 非致命的な所見は NodePool / NodeClaim 上の Kubernetes
-`Warning` Event としても表面化されるため
-（[§4.2](specification/04-operations.md#42-観測性)）、`kubectl describe nodepool <name>` で
-メトリクススタックなしに確認できる。Reason には `KBelowTwo`、`AVeryAggressive`、
-`TGPUnset`、`HardCapExceeded`、`DrainEstimateAboveTGP`、`ThroughputBelowArrival`、
-`ThroughputBurstShortfall`、`RotationSpansNextWindow`、`OverrideGBelowK`、`ShortLead` などがある。
+### 主要な運用メトリクス
 
-**reconcile の生存性は警告ログではなくメトリクスで判断する。** Warning Event
-*と* `INFO` レベルの警告**ログ**行はいずれも、条件に入った遷移時にデデュープ
-される。そのため定常状態 — 所見が安定し遷移が起きない状態 — では、まったく健全
-な reconcile ループが多数のパスにわたって**ゼロ行**のログしか出さないことがある。
-「最近警告ログ行が出ていない」を「reconcile が停止した」と読んでは**ならない**
-（実際に過去の誤診断があった）。生存性は、**毎**パス進む controller-runtime の
-`/metrics` メトリクスから判断すること:
+| メトリクス | 型 | 見るべきポイント |
+|-----------|------|-----------------|
+| `noderotation_candidates` | Gauge | 各ウィンドウ後に 0 へ向かうべき。2 ウィンドウ跨いで > 0 → 処理が追いついていない |
+| `noderotation_in_progress` | Gauge | 0 か 1（v1 は pool ごとに直列） |
+| `noderotation_completed_total{outcome}` | Counter | `outcome ∈ {success, failure, expired}`。failure/expired → 調査 |
+| `noderotation_forceful_fallback_total` | Counter | 増加中 → graceful surge がデッドラインに間に合っていない |
+| `noderotation_duration_seconds{phase}` | Histogram | `phase ∈ {surge_wait, drain}`。見積もりの設定に使う |
+| `noderotation_drain_stuck` | Gauge | `1` → 運用者の対処が必要（[§5](#5-drain-が詰まったときの対処)） |
+| `noderotation_retry_count` | Gauge | `≥ 3` → systematic な失敗（preemption か AZ 不足） |
+| `noderotation_short_lead_nodes` | Gauge | 自身の expiry 前に K 回の機会を得られないノード |
 
-- `controller_runtime_reconcile_total{controller="rotation"}` — reconcile ごとに
-  増加。`rate()` が上がっていればループは生きている。
-- `controller_runtime_reconcile_time_seconds_count{controller="rotation"}` —
-  レイテンシヒストグラム経由の同じ毎パスカウント。
-- `workqueue_*`（`name="rotation"` の `workqueue_adds_total`・`workqueue_depth`・
-  `workqueue_work_duration_seconds_*` など）— キューの活動とバックログ。
+### スケジュールとポリシーのメトリクス
 
-デバッグ時にログで毎パスの活動を*見たい*場合は、コントローラのログ詳細度を
-上げる（`--zap-devel`、またはより高い `-v`）。デバッグ詳細度（`V(1)`）では、
-コントローラは追加で、**毎パス・デデュープなしに**現在の所見と、軽量な
-`reconcile` ハートビート行（phase・候補数・claim 数・in-window・所見数）を出力
-する。これは付加的なデバッグ可視性のみであり — `INFO` ログや Warning Event の
-デデュープも、いかなるメトリクスも変更しない。
+| メトリクス | 型 | 用途 |
+|-----------|------|------|
+| `noderotation_window_active` | Gauge | 0/1（pool ごと）— いまウィンドウが開いているか |
+| `noderotation_window_period_seconds` | Gauge | 最悪ケースのウィンドウ間隔 `P`（pool ごと） |
+| `noderotation_age_threshold_seconds` | Gauge | 導出された ageThreshold `A`（pool ごと） |
+| `noderotation_rotation_chances` | Gauge | 保証されるローテーション回数 `G` |
+| `noderotation_throughput_capacity` | Gauge | 予測 `C` — ウィンドウ機会あたりの開始可能数 |
+| `noderotation_t_rot_estimate_seconds` | Gauge | `t_rot_est` — 健全なローテーションの期待時間 |
+| `noderotation_t_rot_bound_seconds` | Gauge | `t_rot` — deadline 側の上限（lead time に効く） |
+| `noderotation_freeze_until_timestamp` | Gauge | 有効な freeze のタイムスタンプ（0 = なし） |
+| `noderotation_policy_conflict` | Gauge | `1` = ポリシー競合で pool がブロックされている |
 
-**surge-less forceful fallback。**
+### 生存性の判断
 
-- **動作。** 統治する `RotationPolicy` で `surge.forcefulFallback.enabled` が設定されている場合、自身のデッドラインまでに graceful な surge を完了できない候補（`deadline − now < t_rot`）は **surge-less** でローテーションされる: コントローラは surge ノードをプロビジョニングせずに、古い `NodeClaim` をウィンドウ内で削除し、Karpenter の voluntary 経路で drain する（PDB は適用され続ける、spec §3.3）。
-- **シグナル。** 各ローテーションは `noderotation_forceful_fallback_total{nodepool}` をインクリメントし、NodePool 上で `ForcefulFallback` Warning イベントを発行する（`kubectl describe nodepool <name>`）。進行中のローテーションには NodePool に `noderotation.io/rotation-mode=forceful-fallback` アノテーションが付与される。
-- **対処。** `noderotation_forceful_fallback_total` が増大し続けるのは graceful な surge がデッドラインとのレース（`deadline − now < t_rot`）にたびたび負けることを意味する — メンテナンスウィンドウを拡大する; `terminationGracePeriod` を下げる（このデッドラインレースの述語そのものである `t_rot` を直接縮小する。トレードオフは[§2](#2-drain-のキャリブレーション-drainestimate-と-terminationgraceperiod)を参照）; `ThroughputBurstShortfall` でフラグされた同期ノード数を削減する。`surge.provisioningEstimate` と `surge.drainEstimate` はここでは**役に立たない** — レイヤ 2 のスループット予測 `t_rot_est` にしか使われず、デッドラインレースには一切関与しない。
+コントローラーの警告ログはデデュープされる — 健全なアイドルループは **0 行** しか出さない。ログが出ないことをストールと判断しないこと。以下を使う:
+
+- `controller_runtime_reconcile_total{controller="rotation"}` — `rate()` が上昇中 = 生存
+- `workqueue_depth{name="rotation"}` — 0 付近に留まるべき
 
 ---
 
 ## 4. freeze ワークフロー
 
-**目的。** 単一の NodePool のローテーションを指定時刻まで抑止する — 例: 業務クリティカルな
-期間 — コントローラをアンインストールせず、`expireAfter` バックストップも失わずに。
+**目的:** ビジネスクリティカルな期間中、特定の NodePool のローテーションを抑止する。
 
-**仕組み。** **NodePool** に freeze アノテーションを RFC3339 タイムスタンプ値で設定する
-（[§3.1](specification/03-design.md#31-メンテナンスウィンドウ)）:
+**設定:**
 
 ```sh
 kubectl annotate nodepool <name> \
   noderotation.io/freeze='2026-12-31T23:59:59Z' --overwrite
 ```
 
-freeze が有効な間、コントローラは:
-
-- その pool で新規ローテーションを **開始しない**;
-- まだ `pending` の進行中ローテーションを **保留する** — drain は未開始なので一時停止は
-  安全。placeholder の（再）作成と `pending → draining` 遷移は中断される;
-- **受動的な記帳は継続する**（保護用 `do-not-disrupt`/cordon マーカーの再表明、
-  surge-claim 識別の永続化）ため、freeze はクラッシュ復旧保証を弱めない;
-- すでに `draining` のローテーションは **完走させる** — drain は途中で安全に中断できない。
-
-freeze が `readyTimeout` を超えて続くと、保留中の `pending` 試行は通常の失敗パスで
-ロールバックする。`noderotation_freeze_until_timestamp` が有効な freeze を報告する
-（`0` = なし）。
-
-freeze ゲートがローテーションにどう作用するかは、freeze が効き始めた時点の
-フェーズに依存する — `pending` の試行は保留され、`draining` のものは完走させる:
-
-```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> Idle
-    Idle --> Idle: freeze active, start suppressed
-    Idle --> Pending: freeze absent, rotation starts
-    Pending --> PendingHeld: freeze becomes active
-    PendingHeld --> Pending: freeze lifted
-    PendingHeld --> RolledBack: readyTimeout elapses while held
-    Pending --> Draining: placeholder Ready
-    Draining --> Completed: drain finishes, freeze cannot abort it
-```
-
-**アドホックではなく GitOps で管理する**（リスク [R5](specification/07-risks.md#71-リスク)）。
-忘れられたアドホック freeze はそのタイムスタンプが過ぎるまで pool のローテーションを
-密かに無効化する。バックストップが `expireAfter` でノードの age に上限を掛け続けるが、graceful な経路は
-止まる。freeze は GitOps リポジトリで宣言してレビューで可視化し、**ソースから削除した
-ときに失効** させること（誰かが解除を思い出したときではなく）。早期に解除するには:
+**解除:**
 
 ```sh
-kubectl annotate nodepool <name> noderotation.io/freeze- # アノテーション削除
+kubectl annotate nodepool <name> noderotation.io/freeze-
 ```
+
+**freeze 中の挙動:**
+
+- 新しいローテーションは開始しない
+- `pending` 中のローテーションは保留される（drain 未開始なので安全に停止可能）
+- `draining` 中のローテーションは完遂する（drain の中断は安全でない）
+- `expireAfter` バックストップは引き続き有効 — freeze でノード寿命は延びない
+
+**監視:** `noderotation_freeze_until_timestamp{nodepool}`（0 = freeze なし）。
+
+**ベストプラクティス:** freeze は ad-hoc な `kubectl` ではなく GitOps で管理する。忘れられた freeze はタイムスタンプが過ぎるまで黙って graceful ローテーションを無効にする。
 
 ---
 
 ## 5. drain が詰まったときの対処
 
-**症状。** ある NodePool で `noderotation_drain_stuck == 1`（アラート:
-`NodeRotationDrainStuck`）。
+**症状:** `noderotation_drain_stuck == 1`（アラート: `NodeRotationDrainStuck`）。
 
-**意味。** 進行中ローテーションが `draining` に入り（コントローラはすでに古い NodeClaim を
-削除済みで、Karpenter が voluntary な PDB 尊重パスでノードを drain している）、その drain が
-`tGP + buffer` を超過した（[§5.2](specification/05-implementation.md#52-reconcile-ループ)）。この gauge は
-毎 reconcile でライブ状態から再計算されるため、drain が終わった瞬間に **自動的にクリア
-される**。
+**何が起きたか:** コントローラーが旧 NodeClaim を削除し、Karpenter が voluntary 経路で drain しているが、`tGP + buffer` を超過した。
 
-**重要 — シリアルゲートは意図的に保持される。** `draining` のローテーションは
-**ロールバックできず**（古い NodeClaim にはすでに `deletionTimestamp` がある）、
-コントローラはこれが詰まっている間 **2 本目のローテーションを開始しない** —
-NodePool 単位のゲートを解放すると 1 本目が半端に drain された状態で 2 ノード目を disrupt
-することになり、`surge.maxUnavailable = 1` に違反する。よって詰まった drain は、それが解消するまで **その
-NodePool の全ローテーションをブロックする**。他の NodePool は影響を
-受けない。
+**重要:** stuck drain はその pool の全ローテーションを意図的にブロックする（`maxUnavailable = 1` を尊重するため）。他の pool は影響を受けない。
 
-**対処は運用者側。** ブロッカーはほぼ常に **満たせない PDB** か Pod の **詰まった
-finalizer** である。判断フロー:
+**判断フロー:**
 
 ```mermaid
 flowchart TD
-    A[noderotation_drain_stuck == 1] --> B{tGP set?}
-    B -->|yes| C[Karpenter force-completes at tGP<br/>the alert is a heads-up, not a hard stop]
-    B -->|no| D[no Karpenter-side force<br/>operator action is the only resolution]
-    C --> E{a PDB shows ALLOWED == 0?}
+    A[drain_stuck == 1] --> B{tGP が設定済み?}
+    B -->|はい| C[Karpenter が tGP で強制完了する — アラートは予告]
+    B -->|いいえ| D[強制手段なし — 運用者が解決する必要あり]
+    C --> E{PDB の ALLOWED == 0?}
     D --> E
-    E -->|yes| F[scale the workload or fix the PDB<br/>so a disruption is allowed]
-    E -->|no| G{a Pod finalizer never clears?}
-    G -->|yes| H[resolve the controller<br/>that owns the finalizer]
-    G -->|no| I[inspect remaining Pods on the node]
-    F --> Z[let the drain complete<br/>do NOT delete annotations or the placeholder]
-    H --> Z
-    I --> Z
+    E -->|はい| F[ワークロードをスケールするか PDB を修正]
+    E -->|いいえ| G{Pod の finalizer が詰まっている?}
+    G -->|はい| H[finalizer を所有するコントローラーを修正]
+    G -->|いいえ| I[ノード上の残留 Pod を調査]
 ```
 
-具体的に進めると:
+**コマンド:**
 
-1. drain 中のノードと NodeClaim を見つける:
+```sh
+# drain 中のノードを特定
+kubectl get nodeclaim -l karpenter.sh/nodepool=<pool> -o wide | grep -i terminating
 
-   ```sh
-   kubectl get nodeclaim -l karpenter.sh/nodepool=<name> \
-     -o wide | grep -i terminating
-   kubectl get node <node> -o yaml | grep -A3 deletionTimestamp
-   ```
+# ノード上の Pod
+kubectl get pods -A --field-selector spec.nodeName=<node> -o wide
 
-2. eviction をブロックしているものを見つける:
+# eviction をブロックしている PDB
+kubectl get pdb -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,ALLOWED:.status.disruptionsAllowed
+```
 
-   ```sh
-   # ノード上に残る Pod
-   kubectl get pods --all-namespaces \
-     --field-selector spec.nodeName=<node> -o wide
-   # PDB と許容される disruption
-   kubectl get pdb --all-namespaces \
-     -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,ALLOWED:.status.disruptionsAllowed,CURRENT:.status.currentHealthy,DESIRED:.status.desiredHealthy
-   ```
-
-   `ALLOWED = 0` の PDB が典型的な原因 — ワークロードの健全レプリカが少なすぎて 1 つも
-   譲れない。コントローラではなく **PDB かワークロードを直す**（PDB が disruption を
-   許すようスケールアップする、または満たし得ない `minAvailable`/`maxUnavailable` を
-   修正する）。
-
-3. **詰まった finalizer** の場合、`metadata.finalizers` が消えない Pod を特定し、その
-   finalizer を所有するコントローラ側で解消する。
-
-4. **`tGP` が設定されている場合**、Karpenter は最終的に `tGP` で **drain を強制完了** する
-   — よって詰まった drain は `tGP` 以内に自己解決し、stuck-drain アラートは *graceful な*
-   drain が終わっていないという予告であって、ノードが永久に詰まっているわけではない。
-   これが `tGP` を束縛しておく実務上の理由である
-   （[§2](#2-drain-のキャリブレーション-drainestimate-と-terminationgraceperiod)）。**`tGP` が未設定**
-   （self-managed Karpenter）の場合、Karpenter 側の強制が **ない** — ブロックする PDB や
-   詰まった finalizer が drain を無期限に保持しうるため、運用者の対処だけが解決手段である。
-
-コントローラのアノテーションや placeholder を削除してローテーションを「こじ開けよう」と
-**しないこと** — ローテーションは NodePool アンカーから再開され
-（[§5.2](specification/05-implementation.md#52-reconcile-ループ)）、ハンドラは冪等である。根本の
-PDB/finalizer を直し、drain を完了させること。
+コントローラーのアノテーションや placeholder を削除して「詰まりを解消」しようとしては**いけない** — ステートマシンは冪等であり、再アサートする。根本の PDB / finalizer を修正すること。
 
 ---
 
 ## 6. アラート（PrometheusRule）
 
-Helm chart は [§4.2](specification/04-operations.md#42-観測性) の 7 アラートを含む **任意の**
-`PrometheusRule` を同梱する。既定では **オフ**（既存インストールや Prometheus Operator の
-ないクラスタに影響しないように）。有効化:
+Helm chart にオプションの `PrometheusRule` が同梱（既定で無効）。有効化:
 
 ```sh
-helm upgrade --install rot charts/node-rotation-controller \
+helm upgrade --install node-rotation-controller charts/node-rotation-controller \
   --set prometheusRule.enabled=true
 ```
 
-| アラート | 式 | 意味 |
-|-------|------------|-------|
-| `NodeRotationCompletedFailureOrExpired` | `increase(noderotation_completed_total{outcome=~"failure\|expired"}[1h]) > 0` | 直近 1 時間でローテーションが失敗、またはノードが force-expire された。 |
-| `NodeRotationCandidatesNotDraining` | `min_over_time(noderotation_candidates[<2·P>]) > 0 and noderotation_candidates offset <2·P> > 0` | 2 ウィンドウ連続で候補がはけていない（[R2](specification/07-risks.md#71-リスク)）。`offset` ガードにより、生成直後の非ゼロ系列が 2 ウィンドウ分の履歴が揃う前に発火するのを防ぐ。 |
-| `NodeRotationStalledInWindow` | window active **かつ** candidates `> 0` **かつ** 完了ゼロ | メンテナンスウィンドウ内でローテーションが詰まっている。 |
-| `NodeRotationDrainStuck` | `noderotation_drain_stuck == 1` | drain が `tGP + buffer` を超えてブロック — [§5](#5-drain-が詰まったときの対処)。 |
-| `NodeRotationShortLeadNodes` | `noderotation_short_lead_nodes > 0` | 刻印済み `expireAfter` で `K` 回を保証できなくなった NodeClaim。 |
-| `NodeRotationRetryCountHigh` | `noderotation_retry_count >= 3` | 同一ローテーションが失敗し続ける — systematic な原因（[R3](specification/07-risks.md#71-リスク)）。 |
-| `NodeRotationForcefulFallback` | `increase(noderotation_forceful_fallback_total[1h]) > 0` | graceful な surge がノードの期限とのレースに負け、surge なしでローテーションされた（[ADR-0001](../reference/adr/0001-window-bounded-forceful-fallback.md)（英語））。1 回の fallback は設計どおりの挙動であるため `severity: info` で同梱する。対処は [§3](#3-noderotation_-メトリクスの読み方) を参照。 |
+| アラート | 発火条件 | 対処 |
+|---------|---------|------|
+| `NodeRotationCompletedFailureOrExpired` | 直近 1h にローテーションが失敗/expired | §1（AZ 容量）と §5（stuck drain）を確認 |
+| `NodeRotationCandidatesNotDraining` | 2 ウィンドウ跨いで候補がさばけない | §2（スループット）を確認 |
+| `NodeRotationStalledInWindow` | ウィンドウ内で候補あり、完了ゼロ | §1 または §5 を確認 |
+| `NodeRotationDrainStuck` | drain が `tGP + buffer` を超過 | §5 に従う |
+| `NodeRotationShortLeadNodes` | ノードが K 回の機会を得られない | `expireAfter` を引き上げるかウィンドウ日を追加 |
+| `NodeRotationRetryCountHigh` | 同じローテーションが 3 回以上失敗 | systematic な原因 — §1 を確認 |
+| `NodeRotationForcefulFallback` | ローテーションが surge-less で実行された | 設計通り。増加が過剰なら §2 で対処 |
 
-**スケジュール依存のレンジを調整する。** 2 つのアラートはウィンドウ周期 `P` とウィンドウ
-長 `D` に依存する。これらのレンジはハードコードではなく **chart の値** である:
+**スケジュール依存のレンジを調整:**
 
-- `prometheusRule.candidatesNotDraining.windowRange` — おおよそ **2 ウィンドウ周期**
-  （`2·P`）に設定する。既定の `8d` は `{Wed, Sat}` スケジュール（`P = 4d`）に合う。
-  週次ウィンドウ（`P = 7d`）なら `14d` に上げる。
-- `prometheusRule.stalledInWindow.completionRange` — おおよそ **ウィンドウ長**（`D`）に
-  設定する。既定の `4h` は `02:00–06:00` ウィンドウに合う。
+- `prometheusRule.candidatesNotDraining.windowRange` → `2·P`（既定 `8d`、`{Wed, Sat}` 向け）
+- `prometheusRule.stalledInWindow.completionRange` → ウィンドウ長 `D`（既定 `4h`）
 
-各アラートの `for` と `severity` も設定可能
-（[`values.yaml`](../../charts/node-rotation-controller/values.yaml) を参照）。
-`min_over_time`/`increase` のレンジは Prometheus subquery を意図的に避けてルールを軽く
-保っている。スケジュールを大きく変える場合は subquery をネストするのではなく記録ウィンドウ
-を広げること。
+全チューニング項目は [`values.yaml`](https://github.com/AkashiSN/node-rotation-controller/blob/main/charts/node-rotation-controller/values.yaml) を参照。
 
 ---
 
-## 7. トラブルシューティング: 症状別インデックス
+## 7. トラブルシューティング
 
-上記の各節は *原因* で構成されている。本表はそれを逆引きにする: **観測した症状** から
-始め、列挙した **シグナル**（メトリクス・`Warning` イベント・[§6](#6-アラートprometheusrule)
-のアラート）で確定し、それを直す節へ飛ぶ。シグナル文字列は
-[§3](#3-noderotation_-メトリクスの読み方) の正確な文字列である。
+**症状**から出発し、**シグナル**で確認し、**修正先**へ飛ぶ。
 
-| 症状（観測されるもの） | 確定方法 | 想定原因 | 参照 |
-|----------------------|---------|---------|------|
-| surge ノードが現れない。placeholder Pod が `Pending` のままでローテーションが `failure` で終わる | `noderotation_duration_seconds{phase="surge_wait"}` の増大、`noderotation_completed_total{outcome="failure"}` | 置換用の **同一 AZ** スケジュール可能容量がない（ゾーン制約 PV のピン） | [§1](#1-ゾーン制約-pv-ワークロード向けの-az-ごとの-surge-ヘッドルーム) |
-| `noderotation_candidates` が 2 ウィンドウにわたり `0` に向かわない | `NodeRotationCandidatesNotDraining`（[R2](specification/07-risks.md#71-リスク)） | ウィンドウに対しスループットが低すぎる、**または** 下記いずれかの原因でローテーションが詰まっている | [§2](#2-drain-のキャリブレーション-drainestimate-と-terminationgraceperiod)、その後で下の行を確認 |
-| **毎ウィンドウ** `ThroughputBurstShortfall` 警告 | `ThroughputBurstShortfall` Warning イベント | `K · C` がプールのノード台数を下回る — 共有 deadline までに同期バッチを回すにはウィンドウが短すぎる（あるいは `provisioningEstimate`/`drainEstimate` が過大） | [§2](#2-drain-のキャリブレーション-drainestimate-と-terminationgraceperiod) |
-| `RotationSpansNextWindow` 警告 | `RotationSpansNextWindow` Warning イベント | `t_rot_est + cooldownAfter` がウィンドウの閉じている区間を超えるため、機会の終端付近で始まったローテーションは次の機会が開くところへ食い込むと予測され、`K · C` は上界として読む必要がある | [§2](#2-drain-のキャリブレーション-drainestimate-と-terminationgraceperiod) |
-| drain が `tGP + buffer` を超えて詰まる | `noderotation_drain_stuck == 1`、`NodeRotationDrainStuck` | 満たせない PDB か詰まった Pod finalizer | [§5](#5-drain-が詰まったときの対処) |
-| `noderotation_in_progress` が `1` のまま新規完了がない | `NodeRotationStalledInWindow` | surge が立ち上がっていない（→ §1）か drain が詰まっている（→ §5） | [§1](#1-ゾーン制約-pv-ワークロード向けの-az-ごとの-surge-ヘッドルーム) / [§5](#5-drain-が詰まったときの対処) |
-| ある NodePool が一切ローテーションせず、候補が固まり開始もしない | `noderotation_policy_conflict == 1`、`PolicyConflict` Warning イベント | 同一 specificity の `RotationPolicy` セレクタ同点、またはランタイム不正な統治ポリシー | [§3](#3-noderotation_-メトリクスの読み方) のメトリクス行、[spec §5.4](specification/05-implementation.md#54-設定スキーマ) |
-| ある NodePool が意図的に見える形でローテーションを止めている | `noderotation_freeze_until_timestamp > 0` | 有効な（忘れられたアドホックかもしれない）freeze | [§4](#4-freeze-ワークフロー) |
-| graceful なローテーション完了前にノードが `expireAfter` に達する | `noderotation_completed_total{outcome="expired"}` | lead-time レースに負けた — ウィンドウ周期に対ししきい値/スループットがきつすぎる | [§2](#2-drain-のキャリブレーション-drainestimate-と-terminationgraceperiod)、[spec §3.5](specification/03-design.md#35-バックストップ挙動) |
-| `noderotation_short_lead_nodes > 0` | `NodeRotationShortLeadNodes`、`ShortLead` Warning イベント | ノード自身の刻印済み `expireAfter` で `K` 回を保証できない | [§2](#2-drain-のキャリブレーション-drainestimate-と-terminationgraceperiod)、[spec §3.2 レイヤ 3](specification/03-design.md#32-候補選定) |
-| ある pool で `noderotation_retry_count >= 3` | `NodeRotationRetryCountHigh`（[R3](specification/07-risks.md#71-リスク)） | **systematic** な失敗: 継続的な preemption か同一 AZ 不足 | [§1](#1-ゾーン制約-pv-ワークロード向けの-az-ごとの-surge-ヘッドルーム) |
-| 「reconcile が止まって見える」 — 最近の警告**ログ**行がない | *これは症状ではない。* `controller_runtime_reconcile_total{controller="rotation"}` が増加し続けているか確認する | 警告ログ/イベントは遷移時にデデュープされる。健全な定常ループは **ゼロ行** のログしか出さない | [§3](#3-noderotation_-メトリクスの読み方)（生存性の判断） |
+| 症状 | シグナル | 修正先 |
+|------|---------|--------|
+| Placeholder Pod が Pending のまま、ローテーションが失敗する | `completed_total{outcome="failure"}`; `retry_count` 増加 | [§1](#1-az-ごとの-surge-ヘッドルームゾーン-pv) — 同一 AZ 容量 |
+| 候補が 2 ウィンドウ跨いでもさばけない | `NodeRotationCandidatesNotDraining` アラート | [§2](#2-スループットと-tgp-の調整) — スループット不足 |
+| `ThroughputBurstShortfall` 警告が毎ウィンドウ出る | NodePool 上の Warning Event | [§2](#2-スループットと-tgp-の調整) — ウィンドウがバッチに対して短い |
+| drain が止まり、新しい完了が出ない | `noderotation_drain_stuck == 1` | [§5](#5-drain-が詰まったときの対処) — PDB or finalizer |
+| `in_progress` が 1 で張り付き | `NodeRotationStalledInWindow` | surge 未着（→ §1）か drain 詰まり（→ §5） |
+| NodePool が一切ローテーションしない、候補が溜まる | `noderotation_policy_conflict == 1` | RotationPolicy のセレクタ重複を修正 |
+| NodePool がいつの間にかローテーション停止 | `freeze_until_timestamp > 0` | 忘れられた freeze — [§4](#4-freeze-ワークフロー) |
+| ノードがコントローラーにもかかわらず expireAfter に到達 | `completed_total{outcome="expired"}` | lead time 不足 — ウィンドウ拡張か tGP 引き下げ |
+| `short_lead_nodes > 0` | `ShortLead` Warning Event | NodePool の `expireAfter` 引き上げかウィンドウ日追加 |
+| `forceful_fallback_total` が増加中 | `ForcefulFallback` Warning Event | スループットが逼迫なら §2 で対処。単発は設計通り |
+| "reconcile が停止したように見える"（ログが出ない） | `controller_runtime_reconcile_total` が上昇中か確認 | 本当の問題ではない — ログは定常状態でデデュープされる |
 
 ---
 
-## 8. コントローラのアップグレードとロールバック
+## 8. アップグレードとロールバック
 
-アップグレード時には 2 つが独立に動く: **コントローラの Deployment**（イメージ）と
-**`RotationPolicy` CRD スキーマ**。両者は安全性の性質が異なる。（chart の機構面 —
-Helm が CRD をどう扱うか — は
-[chart README *Upgrading*](../../charts/node-rotation-controller/README.md#upgrading)
-にある。本節は **運用** 面、すなわち「ローテーションが進行中でも安全か」を扱う。）
+### イメージのアップグレード
 
-**コントローラのイメージのアップグレードはローテーション進行中でも安全。** 永続的な
-ローテーション状態はすべて Kubernetes オブジェクト上にある — NodePool の
-`active-rotation` アンカーと古い NodeClaim の `state` アノテーション、placeholder Pod と
-ノードマーカーは一時的なランタイムオブジェクトであり、失われても冪等なハンドラが再表明する
-（[§5.2](specification/05-implementation.md#52-reconcile-ループ)、[§5.3](specification/05-implementation.md#53-状態モデル)）。
-**外部データストアはなく**、再起動で失われるものはコントローラのメモリ上に存在しない。
-`replicaCount=2` とリーダー選出により、ローリングアップグレードはリーダーを新しい Pod に
-引き継ぎ、新リーダーは **進行中のローテーションをアンカーから再開する** — リーダー交代時の
-再開は検証済みのパスである（[§7.2](specification/07-risks.md#72-検証済み前提)）。
+**ローテーション中でも安全。** 全状態は Kubernetes オブジェクト上にある — ローリングアップグレードで新 Pod にリーダーシップが渡り、`active-rotation` アノテーションから再開する。外部ステートなし、メモリ内の状態喪失なし。
 
-よって `noderotation_in_progress == 1` の状態で `helm upgrade` を実行しても、
-ローテーションを破壊・重複・孤立させることはない。
+事前に静止させたいなら（任意）: 短い [freeze](#4-freeze-ワークフロー) を設定し `noderotation_in_progress` が 0 になるのを待つ。
 
-**任意で先に quiesce する。** ローテーション進行中のアップグレードを避けたいだけなら、
-短い [freeze](#4-freeze-ワークフロー) を設定して `noderotation_in_progress` が `0` に
-なるのを待つ: `draining` のローテーションは自然に完走し、`pending` のものは保留される。
-これは運用をきれいに保つためのもので、正しさの要件ではない。
+### CRD スキーマ変更
 
-**CRD スキーマ変更には順序が必要。** Helm は CRD を **アップグレードしない** — chart は
-CRD を `crds/` から同梱し、これはインストール専用である（chart README の注記参照）。
-新しい chart バージョンが `RotationPolicy` のフィールドを追加する場合、それに依存する
-コントローラをロールアウトする **前に CRD を適用する**:
+Helm は CRD をアップグレードしない。フィールドが追加されたリリースへのアップグレード時は CRD を先に適用:
 
 ```sh
 kubectl apply -f charts/node-rotation-controller/crds/
 helm upgrade --install node-rotation-controller charts/node-rotation-controller ...
 ```
 
-インストール済み CRD がまだ知らないフィールドを設定した `RotationPolicy` は決して効かないが、
-*どう* 失敗するかはクライアントによる。CRD スキーマは structural であり
-`x-kubernetes-preserve-unknown-fields` を持たないため、リクエストが strict な field validation を
-要求しない限り、API サーバは未知のフィールドを **prune する**: `kubectl apply` は要求するので
-そのまま拒否されるが、field validation をサーバ既定のままにするクライアント — Helm の apply も
-その 1 つ — では、**フィールドが黙って落とされたままオブジェクトが受理される**。危険なのは後者で、
-ポリシーは適用されたように見えるのに、コントローラはその設定なしで動く。CRD を先に適用すれば
-どちらも避けられる。
+| リリース | スキーマ変更 | 対処 |
+|---------|-------------|------|
+| v0.6.1 | なし | なし |
+| v0.6.0 | `surge.failurePause`, `surge.drainEstimate`, `surge.provisioningEstimate` 追加 | `crds/` を先に適用 |
+| v0.5.0 | `surge.forcefulFallback` 追加 | `crds/` を先に適用 |
+| v0.4.0 | なし | なし |
+| v0.3.0 | `RotationPolicy` CRD 導入 | 初回インストール |
 
-**どのリリースが CRD を変更したか。** 表は新しい順である。現在使っているバージョンを
-見つけ、それより上の行をすべて読むこと: そのうち 1 つでもスキーマを変更していれば、
-`helm upgrade` の前に上記の `kubectl apply` を一度実行する必要がある。
+### v0.6.0 の動作変更
 
-| リリース | `RotationPolicy` スキーマの変更 | このリリースへ上げるときの作業 |
-| --- | --- | --- |
-| `v0.6.1` | なし（chart のみ: コントローラの Deployment に optional な `priorityClassName` を追加） | なし |
-| `v0.6.0` | `surge.failurePause`、`surge.drainEstimate`、`surge.provisioningEstimate` を追加（いずれも追加のみで optional。未設定時はコントローラが解決するため、スキーマ既定値は持たない） | 先に `crds/` を適用する |
-| `v0.5.0` | `surge.forcefulFallback` を追加（追加のみ、既定は `enabled: false`） | 先に `crds/` を適用する |
-| `v0.4.0` | なし | なし |
-| `v0.3.0` | `RotationPolicy`（`noderotation.io/v1alpha1`）の初出 | 最初のリリース — `helm install` が `crds/` から CRD を作成する |
+`cooldownAfter` は失敗後の休止を兼ねなくなった。それは `surge.failurePause`（既定 `max(10m, cooldownAfter)`）になった。`cooldownAfter` を 10m 未満に下げていた場合、アップグレードで失敗後休止が 10m に戻る。旧値を維持するには `failurePause` を明示的に設定する。
 
-フィールドの追加は、既存の `RotationPolicy` オブジェクトを無効にはしない:
-`surge.forcefulFallback` を設定していないポリシーは古い CRD に対しても検証を通り、
-コントローラはそれを off として扱う。新しいスキーマを適用して初めて得られるのは、
-そのフィールドを設定して **永続させられる** ことである — 適用前は、上記のとおり
-拒否されるか黙って落とされるかのいずれかになる。
+### v0.6.0 の values スキーマ変更
 
-`v0.6.0` の変更のうち 1 つはスキーマではなく挙動の変更であり、CRD の適用では
-カバーされない: `cooldownAfter` はもはや *失敗した* 試行のあとのポーズを兼ねない
-（ADR-0004）。そのポーズは `surge.failurePause` になり、未設定のポリシーでは
-`max(10m, cooldownAfter)` に解決される。ローテーションを速めるために
-`cooldownAfter` を `10m` 未満に下げていた場合、それに引きずられて短くなっていた
-失敗後のポーズはアップグレードで `10m` に戻る。従来の値を保ちたければ
-`surge.failurePause` を明示的に設定すること。
-
-**chart の values スキーマ変更もアップグレードを壊しうる。** 上記の CRD とは別に、
-chart の `values.schema.json` は `helm install`/`helm upgrade` 時に Helm の values を
-検証する。chart `0.6.0` 以降、`rotationPolicies[].spec` サブツリーは **シール** される
-（`additionalProperties: false`、issue #219）: `spec` 配下の未知のキー — `surge`、
-`matchNodeRequirements`、`forcefulFallback`、`prePull`、各 `maintenanceWindows` エントリ、
-各 `nodePoolSelector.matchExpressions` エントリの配下を含む — は、黙って落とされる
-のではなく **コマンドが失敗する**。この変更より前の chart はそうしたキーを受理し、
-CRD の structural スキーマに prune させていたため、`surge.readyTimout: 15m` のような
-typo もきれいにインストールされ、どこにもエラーが出ないまま既定値が効いたままになっていた。
-そのようなキーを持つインストール — typo、あるいは機能の実装を先取りして追加したキー — が
-あると、シール後の chart への最初の `helm upgrade` は該当キーを名指しするハードエラーになる。
-**アップグレード前に検知する** には、自分の values に対して新しい chart をレンダリングする:
+chart が `rotationPolicies[].spec` サブツリーを封印した — 以前は黙って捨てられたタイポがアップグレード時にハードエラーになる。**事前にドライラン:**
 
 ```sh
-helm template rot charts/node-rotation-controller -f your-values.yaml >/dev/null
+helm template node-rotation-controller charts/node-rotation-controller -f your-values.yaml >/dev/null
 ```
 
-きれいにレンダリングできればアップグレードはスキーマを通過する; 非ゼロ終了なら該当パスに
-`additional properties '<key>' not allowed`（あるいは失敗した値の制約）が出力される —
-そのキーを修正または削除してからアップグレードする。
+### ロールバック
 
-**ロールバック。** **イメージ** を戻すのは対称で同じく安全 — 古いコントローラも同じ
-オブジェクト上の状態から再開する。本当の危険は **CRD スキーマ変更をまたいだ** ロール
-バックである: 新スキーマ向けに書かれた `RotationPolicy` は古いコントローラの reconcile 時
-検証に通らないことがあり、コントローラはこれを **conflict** として扱う —
-`noderotation_policy_conflict == 1` を立て、`PolicyConflict` Warning イベントを発行し、
-**推測せずにその pool のローテーションを拒否する**
-（[spec §5.4](specification/05-implementation.md#54-設定スキーマ)）。その pool のローテーションは止まるが、
-**`expireAfter` バックストップは終始ノードの age に上限を掛け続ける** — 無制限に走るものはない。
-きれいにロールバックするには、影響を受ける `RotationPolicy` オブジェクトも古いコントローラ
-が受け付けるスキーマへ戻すこと。
+イメージのロールバックは安全（同じオブジェクト上の状態から旧コントローラーが再開）。**CRD 変更を跨ぐ**ロールバックは、コントローラーがポリシーを不正とみなす場合がある（`noderotation_policy_conflict == 1`）。その pool のローテーションが停止するが `expireAfter` バックストップは引き続き有効。`RotationPolicy` オブジェクトも合わせて旧スキーマに戻すこと。
 
 ---
 
-## 9. 大規模クラスタでのコントローラのサイジング（Pod キャッシュ）
+## 9. 大規模クラスタでのサイジング
 
-**対象:** 大規模クラスタ — おおよそ **10k+ Pod**。
+**いつ:** **10k+ Pods** のクラスタ。
 
-**なぜ重要か。** コントローラは **クラスタ全体の Pod 可視性** を必要とする: surge の
-placeholder は候補ノード上の再スケジュール可能な Pod requests の総和に合わせてサイズが決まり、それらの
-Pod は任意の名前空間に存在しうる（[spec §3.3](specification/03-design.md#33-surge-シーケンスv1)）。
-そのため controller-runtime の informer は **クラスタ内の全 Pod をキャッシュ** し、
-コントローラのメモリフットプリントは総 Pod 数に比例する — これは reconcile パスのスキャン
-最適化では **減らない**。コストはスキャンではなくキャッシュにあるからである
-（[`docs/reference/perf/pod-cache-scalability.md`](../reference/perf/pod-cache-scalability.md)、issue #80）。
+コントローラーはクラスタ内の全 Pod をキャッシュする（placeholder のサイジングにクロスネームスペースの可視性が必要なため）。メモリは Pod 数にスケール:
 
-**指針。** コントローラ Deployment のメモリ `requests`/`limits` を総 Pod 数から決める。
-以下の実測フットプリントは **保守的な下限** として扱うこと（実際にキャッシュされる
-`corev1.Pod` は full status・conditions・`managedFields` を持ち、より重い）:
-
-| クラスタ Pod 数 | キャッシュフットプリント（下限） |
-|----------------|------------------------------|
-| ~1k | ~3.7 MB |
+| Pod 数 | キャッシュフットプリント（下限） |
+|--------|-------------------------------|
+| ~1k | ~4 MB |
 | ~10k | ~37 MB |
-| ~50k | ~185 MB — 実運用では **数百 MB〜約 1 GB を見込む** |
+| ~50k | ~185 MB — 実運用では 500 MB〜1 GB を見込む |
 
-reconcile の **CPU** は問題にならない: 50k Pod の全スキャンは ~105 µs で、ローテーション
-パスあたり数回しか走らず、reconcile のネットワークラウンドトリップを大きく下回る。soak で
-キャッシュメモリの逼迫が顕在化した場合、それは controller-runtime のキャッシュスコープの
-別課題であり、独立に追跡される — perf ノートの記録済みフォローアップ（`spec.nodeName`
-フィールドインデックス。CPU/レイテンシの改善だがキャッシュは **縮小しない**）を参照。
+CPU は問題にならない — 50k Pod のスキャンは呼び出しあたり ~105 µs。
+
+Deployment の memory `requests`/`limits` をこれに合わせて設定する。ベンチマーク詳細は [perf note](reference/perf/pod-cache-scalability.md) を参照。

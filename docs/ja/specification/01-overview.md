@@ -2,109 +2,132 @@
 
 ## 1.1 背景
 
-Karpenter（および Karpenter ベースの EKS Auto Mode）ではノードの disruption を 2 種類に分類している。
+::: tip このセクションの説明
+Karpenter の Forceful Expiration は予測不能なタイミングで発動し、Disruption Budgets やプリプロビジョニングを無視する。本コントローラーは、そのローテーションをより早い段階で制御されたメンテナンスウィンドウ内に移動させ、voluntary パスを使用する。
+:::
 
-| 分類 | 例 | NodePool Disruption Budgets | 代替ノードの事前起動 | PDB |
-|------|-----|------------------------------|-----------------------|-----|
-| Graceful | Drift, Consolidation | 適用される | する（make-before-break）| 厳密に尊重 |
-| **Forceful** | **Expiration**, Spot Interruption | **適用されない** | **しない** | 尊重されるが `terminationGracePeriod` でキャップ |
+Karpenter（および EKS Auto Mode）はノードの disruption を2つに分類する：
 
-Expiration が意図的に Forceful とされているのは、AMI パッチやセキュリティ更新を Budgets / PDB の誤設定で無期限延期させない設計思想に基づく。これは Karpenter 公式 design [`forceful-expiration.md`](https://github.com/kubernetes-sigs/karpenter/blob/main/designs/forceful-expiration.md) に明文化されており、同 design は「**運用者が独自に graceful rotation を実装する**」ことも妥当な解の一つとして列挙している。
+| カテゴリ | 例 | Budgets 適用? | プリプロビジョニング? | PDB |
+|----------|------|------------------|------------------|-----|
+| Graceful | Drift, Consolidation | あり | あり | 厳格に尊重 |
+| **Forceful** | **Expiration**, Spot | **なし** | **なし** | `tGP` で制限 |
 
-EKS Auto Mode はさらに **21 日のノード最大寿命**を、ユーザが*短縮*はできても*除去*はできない制約として追加している — ノードは「最大 21 日の寿命を持ち、その後自動的に置き換えられる」（[EKS Auto Mode ユーザーガイド](https://docs.aws.amazon.com/eks/latest/userguide/automode.html)）。ノードの真の終端は `expireAfter` の失効時点に最大 `terminationGracePeriod` の drain を**加えた**時点であるため、この上限は両者の**合計**に対する制約として課される: `expireAfter + terminationGracePeriod ≤ 21d`（AWS は「expireAfter と NodePool の terminationGracePeriod の合計値は 21 日を超えることはできません」と明記 — [AWS builders.flash, 2025-04](https://aws.amazon.com/jp/builders-flash/202504/dive-deep-eks-node-automated-update/)）。参考までに Auto Mode のデフォルトは `expireAfter` 336h（≈14d）、`terminationGracePeriod` 24h（[Create a Node Pool](https://docs.aws.amazon.com/eks/latest/userguide/create-node-pool.html)）。
+- **Expiration が Forceful である理由:** AMI パッチやセキュリティ更新が設定ミスの budgets や PDB によって無期限に遅延しないようにするため。上流の [`forceful-expiration.md`](https://github.com/kubernetes-sigs/karpenter/blob/main/designs/forceful-expiration.md) に記載。「オペレーターが独自の graceful ローテーションを実装する」が許容されるソリューションパスとして明示されている。
+- **EKS Auto Mode の制約:** **21日間の最大ノード寿命**（短縮は可能だが削除は不可）。`expireAfter + terminationGracePeriod ≤ 21d` が強制される（[AWS builders.flash, 2025-04](https://aws.amazon.com/jp/builders-flash/202504/dive-deep-eks-node-automated-update/)）。デフォルト値: `expireAfter` 336h（≈14日）、`terminationGracePeriod` 24h（[Create a Node Pool](https://docs.aws.amazon.com/eks/latest/userguide/create-node-pool.html)）。
 
-現実的な帰結として、運用中のクラスタでは **PDB を厳しくしてもノードは必ず予測不能なタイミングで Force drain される**。Karpenter は drain 開始の **後から** 代替ノードを立ち上げるため、`request == limit` のような厳しい capacity 要件を持つレイテンシ敏感なワークロードでは、強制的な Pod Pending のウィンドウが生じ、ピーク業務時間帯と衝突しうる。
+**実際の影響:** 非自明なクラスターでは、PDB 設定に関係なくノードが予測不能なタイミングで強制ドレインされる。Karpenter はドレイン開始 *後に* のみ代替ノードのプロビジョニングを開始する。レイテンシに敏感なワークロード（`request == limit`）では、ビジネスのピーク時間に衝突しうる Pod Pending ウィンドウが生じる。
 
-## 1.2 ゴール
+## 1.2 目標
 
-| # | ゴール |
-|---|--------|
-| G1 | age 閾値（メンテナンススケジュールと目標ローテーション回数から NodePool ごとに導出 — §3.2）に達した `NodeClaim` をメンテナンスウィンドウ内で voluntary 経路で先回りローテーションし、**Forceful Expiration を実質発火させない** |
-| G2 | 代替の NodePool-owned ノードを先に追加して `Ready` を待ってから旧 `NodeClaim` を delete することで（ノードレベルの surge / make-before-break。Pod レベルの順序付けは PDB に委譲 — §3.3）、**Pod Pending のウィンドウをなくす** |
-| G3 | 業務影響の少ない時間帯にローテーションを **閉じ込める**（曜日 / 時刻 / タイムゾーン設定） |
-| G4 | 既存の保護機構（PDB、`topologySpreadConstraints`、preStop、Pod Readiness Gate、ALB slow start）と **共存して成立** する。置き換えない |
+| # | 目標 |
+|---|------|
+| G1 | Forceful Expiration の発動を防止 |
+| G2 | Pod Pending ウィンドウの排除 |
+| G3 | ローテーションをビジネスセーフな時間帯に限定 |
+| G4 | 既存の保護機構との共存 |
 
-## 1.3 非ゴール
+- **G1:** メンテナンスウィンドウ内に age threshold（NodePool ごとに導出、§3.2）に近づいた `NodeClaim` を voluntary disruption パスで置換する。
+- **G2:** NodePool 所有の代替ノードを先に追加し、`Ready` になるのを待ってから古いノードを削除（ノードレベルの surge / make-before-break）。Pod レベルの順序制御は PDB に委譲（§3.5）。
+- **G3:** 設定可能なメンテナンスウィンドウ（曜日 / 時刻 / タイムゾーン）。
+- **G4:** PDB、`topologySpreadConstraints`、preStop hooks、Pod Readiness Gates、ALB slow start — すべて有効なまま維持し、置換しない。
 
-| # | 非ゴール | 理由 |
-|---|----------|------|
-| N1 | Karpenter Consolidation / Drift の置き換え | Karpenter の自律最適化は引き続き有効。本コントローラは Expiration 経路のみ肩代わり |
-| N2 | Spot Interruption への対応 | 2 分の hard limit がある AWS インフラ側イベント。[AWS Node Termination Handler](https://github.com/aws/aws-node-termination-handler) を使う |
-| N3 | アプリケーションの warm-up 責務 | JVM のウォームアップ、コネクションプール初期化等は `readinessProbe` / `readinessGate` / ALB slow start の領分。本コントローラは **ノード** の orchestration を提供し、アプリは自分の readiness を自分で表現する |
-| N4 | `expireAfter == 0` 化、21 日 hard cap の解除 | Auto Mode の hard cap は回避不能。`expireAfter` はコントローラ停止時の **バックストップ** として意図的に残す |
-| N5 | OS パッチ起因のノード再起動 | スコープ外。[kured](https://github.com/kubereboot/kured) を使う |
+## 1.3 非目標
+
+| # | 非目標 | 根拠 |
+|---|----------|-----------|
+| N1 | Consolidation / Drift の置換 | Expiration パスのみを引き継ぐ |
+| N2 | Spot 中断の処理 | 2分のハードリミット; [AWS NTH](https://github.com/aws/aws-node-termination-handler) を使用 |
+| N3 | アプリケーション側のウォームアップ | `readinessProbe` / `readinessGate` / ALB slow start の責務 |
+| N4 | `expireAfter == 0` や 21日制限のバイパス | バイパス不可; backstop として保持 |
+| N5 | OS パッチリブートのオーケストレーション | スコープ外; [kured](https://github.com/kubereboot/kured) を参照 |
 
 ## 1.4 用語
 
-| 用語 | 定義 |
-|------|------|
-| **NodeClaim** | Karpenter v1 CRD。実インスタンス（EC2 等）に 1:1 対応 |
-| **surge** | 旧ノードを抜く前に新ノードを立ち上げて `Ready` 化する make-before-break 戦略 |
-| **placeholder（Pod）** | NodePool 所有の代替キャパシティを誘発するためにコントローラが作成する低優先度の "pause" Pod — Karpenter が新ノードを起動する（または scheduler が既存の空きキャパへ bin-pack する）ことでこれを収容する。単独の `NodeClaim` は作らない（§3.3）|
-| **メンテナンスウィンドウ** | コントローラがローテーションを **開始してよい** 曜日・時間帯の **和集合**（1 つ以上）。ウィンドウ終端を跨いだ進行中のローテーションは完遂させる |
-| **freeze（凍結）** | `noderotation.io/freeze` annotation で設定する NodePool 単位のローテーション保留。開始 *のみ* をゲートするウィンドウとは異なり、進行中の `pending` ローテーションも期限切れまで保留する（§3.1）|
-| **age 閾値** | `creationTimestamp` からの経過時間がこの値を超えた `NodeClaim` を候補とする値。スケジュールと目標ローテーション回数（`minRotationChances`）から NodePool ごとに **導出**、直接指定しない（§3.2）。実際のノード単位トリガは各 NodeClaim 自身の `spec.expireAfter` デッドラインに基づき、`ageThreshold` はその age 換算の代表値（§3.2）|
-| **candidate（候補）** | 選定条件（§3.2）をすべて満たし、ローテーション対象として適格な `NodeClaim` |
-| **governing policy（統治ポリシー）** | ある NodePool に対しセレクタの specificity で勝ち、そのスケジュール・`minRotationChances`・`surge` 設定を供給する `RotationPolicy`（§5.4）|
-| **バックストップ** | コントローラが停止しても Karpenter 標準の `expireAfter`（Forceful Expiration）が最終的にノードを置換する安全装置。意図的に残す |
-| **voluntary / forceful 経路** | Karpenter の 2 つの disruption 分類（§1.1）。**voluntary 経路**（Consolidation、Drift、およびコントローラ自身の `NodeClaim` delete）は PDB を尊重する。**forceful 経路**（`expireAfter`、Spot Interruption）は PDB を `terminationGracePeriod` までしか尊重しない。本コントローラは常に voluntary 経路を通す |
-| **forceful fallback** | opt-in のウィンドウ有界モード（`surge.forcefulFallback`、既定 off。ADR-0001）。surge **なしで** 失効の迫った `NodeClaim` をウィンドウ内に削除する — voluntary 経路のままなので PDB は適用される（§3.3）|
+### 基本概念
 
-**記号** — §3〜§5 で頻出。完全な導出と「ノード単位か NodePool テンプレートか」の権威ある区別（§3.2 の表の **取得元** 列）は §3.2 を参照。
+- **NodeClaim:** Karpenter v1 CRD; 基盤インスタンス（例: EC2）との 1:1 表現
+- **surge:** 代替ノードを作成し `Ready` になるのを待ってから古いノードをドレイン（make-before-break）
+- **placeholder (Pod):** コントローラーが NodePool 所有の代替キャパシティを誘導するために作成する低優先度の "pause" Pod — Karpenter が新しいノードをプロビジョニング（またはスケジューラーが既存の空きにビンパック）。スタンドアロン `NodeClaim` は使用しない（§3.3）
+- **メンテナンスウィンドウ:** コントローラーがローテーションを *開始* できる曜日/時刻の範囲の **和集合**。進行中のローテーションはウィンドウの境界を超えて完了する
+- **freeze:** NodePool ごとの保留（`noderotation.io/freeze` アノテーション）。進行中の `pending` ローテーションさえ一時停止（§3.1）— ウィンドウ（*開始* のみゲート）とは異なる
+- **age threshold:** `NodeClaim` がローテーション候補になる `creationTimestamp` からの経過時間。スケジュールと目標ローテーション回数（`minRotationChances`）から NodePool ごとに **導出**（§3.2）
+- **candidate:** すべての選定条件（§3.2）を満たし、ローテーション対象となる `NodeClaim`
+- **governing policy:** 指定の NodePool に対してセレクタの specificity で勝利する `RotationPolicy`（§5.4）
+- **backstop:** Karpenter のネイティブな `expireAfter`（Forceful Expiration）。安全ネットとして保持
 
-| 記号 | 意味 |
-|------|------|
-| `E` | `expireAfter` — Forceful Expiration までの NodeClaim の寿命（ノード単位・権威: `NodeClaim.spec.expireAfter`） |
-| `tGP` | `terminationGracePeriod` — Karpenter が drain を保持できる上限 |
-| `P` | 最悪ウィンドウ周期 — 連続するメンテナンスウィンドウ機会の最大ギャップ（§3.1） |
-| `t_rot` | 1 ノードのローテーション所要時間の上限 = `readyTimeout + tGP + buffer`。deadline 上界（`leadTime`・`A`・`G`・§3.3・§5.2）であり、レイヤ 2 では**使わない** |
-| `drainEstimate` | 健全で PDB を尊重する drain の期待所要時間（`surge.drainEstimate`）。未設定 ⇒ `min(tGP, 10m)`。レイヤ 2 予測のみ（§3.2） |
-| `provisioningEstimate` | 期待される surge プロビジョニング（候補 → Ready）の所要時間（`surge.provisioningEstimate`）。未設定 ⇒ `min(readyTimeout, 5m)`。レイヤ 2 予測のみ（§3.2、ADR-0003） |
-| `t_rot_est` | 期待ローテーションサービス時間 = `provisioningEstimate + drainEstimate`。レイヤ 2 のスループット分母（§3.2）。deadline 項も `buffer` も含まない — それらは `t_rot` のもの |
-| `K` | `minRotationChances` — 失効前に保証したいローテーション回数（下限 1） |
-| `leadTime` | deadline のどれだけ前に選定するか = `K·P + t_rot` |
-| `A` | `ageThreshold` — ノードが候補になる age。導出は `A = E − (K·P + t_rot)` |
-| `G` | スケジュールが実際に保証するローテーション回数。auto 導出では `G = K`、明示的な `ageThreshold` override 時は再計算 |
-| `D` | メンテナンスウィンドウ長 — 単一のウィンドウ機会の長さ（§3.2 レイヤ 2）|
-| `gap` | 連続するウィンドウ機会の間でウィンドウ和集合が**閉じている**最短の区間（§3.2 レイヤ 2）|
-| `m` | `surge.maxUnavailable` — NodePool ごとの同時ローテーション数。v1 は `1` 固定（§3.2 レイヤ 2）|
-| `C` | ウィンドウ機会あたりの処理容量 — 1 回のウィンドウ機会で開始できるローテーション数。`C = m · ceil(D / (t_rot_est + cooldownAfter))`（§3.2 レイヤ 2）|
-| `N` | NodePool のノード台数 — レイヤ 2 のスループット検証でのみ使い、ノード単位の導出には用いない（§3.2）|
+### Disruption パス
 
-> `cooldownAfter`・`drainEstimate`・`provisioningEstimate`・`readyTimeout` は導出記号ではなく設定フィールド（§5.4）である。`readyTimeout` は `t_rot`（deadline 上界）に効き、`drainEstimate` と `provisioningEstimate` は `t_rot_est`（予測）に効き、`cooldownAfter`（成功後の整定休止、gate A）は `C` に効く。`buffer` も `t_rot` に効くが設定フィールドではなく、コントローラの検出ラグを覆う固定のコントローラ定数（`4·shortRequeue = 2m`）であり（§3.2）、deadline 側のみに効く（`t_rot_est` には効かない）。`failurePause`（失敗後の休止、gate B、§4.4、ADR-0004）も設定フィールドだが導出記号には一切効かない — 開始ゲート専用である。
+- **voluntary パス:** Consolidation、Drift、および本コントローラーの `NodeClaim` 削除 — PDB を尊重
+- **forceful パス:** `expireAfter`、Spot Interruption — `terminationGracePeriod` までのみ PDB を尊重
+- **forceful fallback:** オプトイン、ウィンドウ内限定モード（`surge.forcefulFallback`、デフォルト off; ADR-0001）。リスクのある `NodeClaim` を surge **なし** でウィンドウ内に削除 — voluntary パス経由（PDB 適用、§3.3）
 
-## 1.5 Karpenter エコシステムでの位置付け
+### シンボル
 
-本コントローラは Karpenter 公式の設計方針と整合している。Karpenter 本体の挙動を変えるのではなく、その **上のレイヤ** で動作する。
+§3–§5 で使用。完全な導出は §3.2 を参照。
 
-### Karpenter 本体に同等機能が組み込まれない理由
+| シンボル | 意味 |
+|--------|---------|
+| `E` | `expireAfter` — Forceful Expiration までの NodeClaim 寿命 |
+| `tGP` | `terminationGracePeriod` — ドレイン上限 |
+| `P` | 最悪ケースのウィンドウ周期（連続する発生間の最大ギャップ、§3.1） |
+| `t_rot` | ローテーション所要時間上限 = `readyTimeout + tGP + buffer` |
+| `t_rot_est` | 期待ローテーションサービス時間 = `provisioningEstimate + drainEstimate`（layer-2 のみ） |
+| `K` | `minRotationChances` — 保証するローテーション機会（下限 1） |
+| `leadTime` | ノードを選定する先行時間 = `K·P + t_rot` |
+| `A` | `ageThreshold` — 導出式 `A = E − (K·P + t_rot)` |
+| `G` | スケジュールが実際に保証するローテーション回数 |
+| `D` | メンテナンスウィンドウの長さ（単一発生） |
+| `gap` | 連続する発生間の最短閉鎖区間 |
+| `m` | `surge.maxUnavailable` — NodePool あたりの同時ローテーション数（v1 では `1` 固定） |
+| `C` | 発生あたりのウィンドウ容量 = `m · ceil(D / (t_rot_est + cooldownAfter))` |
+| `N` | NodePool ノード数（layer-2 スループットチェックのみ） |
 
-[`forceful-expiration.md`](https://github.com/kubernetes-sigs/karpenter/blob/main/designs/forceful-expiration.md) は Expiration を Forceful に保つ判断を記録しており、graceful な expiration を求めるユーザに対し以下 3 オプションを提示している。
+::: details シンボル補足 — クリックで展開
 
-1. （upstream 推奨）Expiration は Forceful のまま
-2. NodePool ごとに `expirationPolicy: Forceful | Graceful` を追加
-3. **「運用者が独自に graceful rotation を実装する」**
+- **`drainEstimate`:** 期待される正常な PDB 準拠ドレイン時間（`surge.drainEstimate`）; 未設定 ⇒ `min(tGP, 10m)`。Layer-2 予測のみ
+- **`provisioningEstimate`:** 期待される surge プロビジョニング時間（`surge.provisioningEstimate`）; 未設定 ⇒ `min(readyTimeout, 5m)`。Layer-2 予測のみ（ADR-0003）
+- **`cooldownAfter`:** 成功後の安定化待機（gate A）。`C` に影響するが `t_rot` には含まれない
+- **`failurePause`:** 失敗後の試行間一時停止（gate B、§4.4、ADR-0004）。導出シンボルには影響しない
+- **`buffer`:** 固定コントローラー定数（`4·shortRequeue = 2m`）。検出遅延をカバー。`t_rot` のみに影響 — `t_rot_est` やオペレーター設定には **含まれない**
+- **`readyTimeout`:** `t_rot` に影響する設定フィールド
 
-本コントローラは Option 3 に該当する。upstream がユーザ側実装を妥当な解として明示的に位置付けている以上、同等機能が Karpenter 本体に取り込まれて本プロジェクトが不要になるリスクは低い。
+:::
 
-### Disruption Budgets では不十分な理由
+## 1.5 Karpenter エコシステムにおける位置づけ
 
-`NodePool.spec.disruption.budgets` は `schedule + duration` をサポートし、表面的にはメンテナンスウィンドウに見える。実際には 2 つの構造的制約 — 下表の 2 つの ✗ 行 — がある（1 行目の要件（△）は不格好な方法でしか実現できない）。
+本コントローラーは Karpenter の **上位レイヤー** で動作する。Karpenter の動作を変更しない。
 
-| 要件 | Karpenter 単体で実現可能か |
-|------|----------------------------|
-| ウィンドウ内のみ disruption を許可、ウィンドウ外は拒否 | △ ブラックリスト方式のみ可能（ウィンドウ外を複数 budget で `nodes: "0"` に設定する。重複する budget は **最小値が採用される** 仕様のため）— [Discussion #1079](https://github.com/kubernetes-sigs/karpenter/discussions/1079) 参照 |
-| 上記を **Expiration** にも適用 | ✗ Budgets は Drift / Consolidation のみが対象、**Expiration には適用されない** |
-| Expiration 時に surge 置換 | ✗ Expiration は Forceful で代替ノードの事前起動なし |
+### 上流が吸収しない理由
 
-本コントローラは下 2 行を埋め、1 行目の実現も大幅に簡単にする。
+[`forceful-expiration.md`](https://github.com/kubernetes-sigs/karpenter/blob/main/designs/forceful-expiration.md) は Expiration を forceful に保つ意図的な決定を記録し、3つの選択肢を提示している：
+
+1. （上流推奨）Expiration を forceful のまま維持
+2. NodePool ごとの `expirationPolicy: Forceful | Graceful` フィールドを追加
+3. **「オペレーターが独自の graceful ローテーションを実装する」**
+
+本コントローラーは選択肢 3。上流による吸収のリスクは低い。
+
+### Disruption Budgets が不十分な理由
+
+| 要件 | 達成可能? |
+|-------------|-------------|
+| ウィンドウ内のみ disruption を許可 | △ 煩雑 |
+| ウィンドウを Expiration に適用 | ✗ |
+| Expiration 中の surge | ✗ |
+
+- **△ 煩雑:** ブラックリスト方式のみ（ウィンドウ外に複数 budgets で `nodes: "0"` を設定）。アルゴリズムは重複する budgets の *最小値* を取る — [Discussion #1079](https://github.com/kubernetes-sigs/karpenter/discussions/1079) 参照
+- **✗ Budgets は Expiration に適用されない** — Consolidation/Drift のみ
+- **✗ プリプロビジョニングなし** — Expiration は forceful
+
+本コントローラーは第2・第3のギャップを埋め、第1を大幅に簡素化する。
 
 ### 隣接プロジェクト
 
-| プロジェクト | スコープ | 重複度 |
-|------------|---------|--------|
-| Karpenter NodePool Disruption Budgets | Drift / Consolidation のレート制御 | 補完関係、Expiration には適用外 |
-| [kured](https://github.com/kubereboot/kured) | OS パッチ起因のノード再起動 | なし。NodeClaim を操作しない |
-| [AWS Node Termination Handler](https://github.com/aws/aws-node-termination-handler) | Spot 中断 / Scheduled Event | なし。トリガが異なる |
-| [descheduler](https://github.com/kubernetes-sigs/descheduler) | Pod 再配置 | なし。ノードを操作しない |
-| EKS Node Auto Repair (AWS マネージド) | 故障 Node 置換 | なし。期限切れ駆動ではない |
+| プロジェクト | スコープ | 重複 |
+|---------|-------|---------|
+| Karpenter Disruption Budgets | Drift/Consolidation のレート制限 | 補完的 |
+| [kured](https://github.com/kubereboot/kured) | OS パッチ用リブート | なし |
+| [AWS NTH](https://github.com/aws/aws-node-termination-handler) | Spot / スケジュールイベント | なし |
+| [descheduler](https://github.com/kubernetes-sigs/descheduler) | Pod リバランス | なし |
+| EKS Node Auto Repair | 異常ノードの置換 | なし |

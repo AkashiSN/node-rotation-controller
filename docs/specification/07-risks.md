@@ -4,52 +4,157 @@
 
 | # | Risk | Mitigation |
 |---|------|------------|
-| R1 | Controller pod crashes / leader loss | `replicas=2` with leader election; the `expireAfter` backstop is retained; failure metrics alert |
-| R2 | Maintenance window too short to drain all candidates | The §3.2 throughput check warns up front; alert when `noderotation_candidates` stays above zero for two consecutive windows; consider `maxUnavailable > 1` in a later version |
-| R3 | Surge NodeClaim cannot be launched (capacity / AZ shortage / NodePool `limits` resource budget exhausted) | The controller pre-checks NodePool `limits` resource-budget headroom before starting (§5.2) and warns if the placeholder's requests won't fit; ready-timeout triggers rollback otherwise; NodePool should already permit multi-AZ / multi-instance-type. **Zonal caveat:** the surge node is pinned to the candidate's AZ for zonal-PV rebind (§3.3 *Stateful and zonal workloads*), so a same-AZ capacity shortage cannot fall back to another zone — keep per-AZ surge headroom for NodePools fronting zonal-PV workloads |
-| R4 | Drain blocks on a misconfigured PDB | Karpenter's `terminationGracePeriod` ultimately forces drain; PDB review is the application owner's responsibility |
-| R5 | Forgotten freeze during business-critical period | The freeze annotation is meant to be managed declaratively (e.g., via GitOps) rather than ad-hoc |
-| R6 | Verification gap when test clusters routinely turn over (e.g., nightly shutdown) | Disable shutdown for a soak period that exceeds the age threshold to validate end-to-end rotation |
+| R1 | Controller crash / leader loss | `replicas=2` + leader election; backstop retained; failure alerts |
+| R2 | Window too short for all candidates | §3.2 throughput check warns; alert on sustained candidates |
+| R3 | Surge capacity unavailable (AZ shortage / limits) | Pre-check headroom (§5.2); `readyTimeout` rollback; multi-AZ / multi-instance-type |
+| R4 | Drain blocks on misconfigured PDB | `terminationGracePeriod` forces drain; PDB review is app owner's responsibility |
+| R5 | Forgotten freeze during critical period | Manage declaratively (GitOps) rather than ad-hoc |
+| R6 | Test clusters routinely turn over | Disable shutdown for a soak exceeding `ageThreshold` |
+
+- **R3 zonal caveat:** surge is pinned to the candidate's AZ (§3.7). A same-AZ shortage cannot fall back to another zone — keep per-AZ headroom for zonal-PV NodePools.
 
 ## 7.2 Validated Assumptions
 
-| Assumption | Status | Evidence |
-|------------|--------|----------|
-| A standalone (non-NodePool-owned) `NodeClaim` is *provisionable* on EKS Auto Mode | **Validated** — K8s 1.35, `karpenter.sh/v1` (2026-05-29) | A NodeClaim with only `nodeClassRef` (managed `eks.amazonaws.com/NodeClass`) + `requirements` reached `Ready` (real EC2, node registered) in ~30s; admission accepted it (`--dry-run=server`); graceful finalizer-driven deletion confirmed |
-| The §3.3 **placeholder-Pod surge** induces a NodePool-owned replacement and completes make-before-break | **Validated** — EKS Auto Mode, K8s 1.33, `karpenter.sh/v1` (2026-06-22) | A low-priority placeholder Pod induced a new NodePool-owned surge `NodeClaim` that reached `Ready` (~30s) **before** the old `NodeClaim` was deleted; deleting it drained the old node via the voluntary path and the workload rescheduled onto the surge node; `noderotation_completed_total{outcome="success"}` incremented |
-| Same-AZ surge lets the EBS CSI driver re-attach a **zonal EBS volume** (zonal-PV rebind, §3.3) | **Validated** — EKS Auto Mode (2026-06-22) | A StatefulSet's gp3 PVC bound in `us-west-2a`; across rotations the `matchNodeRequirements` zone parity kept every surge node in `us-west-2a`, so the **same** PV re-attached (not reprovisioned) and the sentinel data survived |
-| A surge that misses `readyTimeout` **rolls back cleanly** (§3.2 / §5.2, R3) | **Validated** — EKS Auto Mode (2026-06-22) | With `readyTimeout` set below node-ready time the attempt timed out → the induced surge claim was reaped, the placeholder deleted, the candidate node uncordoned/unfrozen and the candidate **retained** (not rotated), `retry-count` incremented, `noderotation_completed_total{outcome="failure"}` incremented |
-| NodePool `limits` exhaustion **gates** the surge before it starts (§5.2 step 3) | **Validated** — EKS Auto Mode (2026-06-22) | With `spec.limits.cpu` leaving no headroom, an eligible candidate (`noderotation_candidates=1`) did not surge — the controller logged `insufficient limits headroom; cannot surge`, `noderotation_in_progress` stayed 0 and no replacement node was created |
-| The required `karpenter.sh/nodepool` selector **confines** surge binding AND provisioning to the candidate's pool (§3.3) | **Validated** — EKS Auto Mode (2026-06-22) | A second, out-of-scope NodePool held a same-AZ node with ~1.7 cpu free (ample for the ~1 cpu placeholder); the nrc-poc surge still stayed in nrc-poc — surge `NodeClaim` `karpenter.sh/nodepool=nrc-poc`, placeholder bound a `pool=poc` node, and the other pool's `NodeClaim` list was unchanged (no absorb, no provision there) |
-| Explicit `NodeClaim` deletion drains the old node via Karpenter's **voluntary, PDB-respecting** path (§3.3) | **Validated** — EKS Auto Mode (2026-06-22) | A blocking PDB (`minAvailable=2`, 2 replicas) **stalled** the drain — both replicas pinned to the old node, old `NodeClaim` lingering — where a forceful path would evict immediately; relaxing to `minAvailable=1` let the replicas migrate one at a time and the rotation completed |
-| The controller applies `karpenter.sh/do-not-disrupt` to **both** surge nodes and removes it on completion (§3.3) | **Validated** — EKS Auto Mode (2026-06-22) | During the surge both the old candidate node and the new surge host carried `karpenter.sh/do-not-disrupt=true` plus the controller's `do-not-disrupt-owned` marker; the unfreeze removed both on completion (that it does not block `expireAfter` is documented Karpenter behavior, not retested) |
-| A force-expiry **caught mid-pending** records `outcome="expired"`, not success/failure (§5.2) | **Validated** — EKS Auto Mode (2026-06-22) | Freezing the pool and deleting a pending candidate's `NodeClaim` drove `abortPendingExpiry`: `state=expired`, the pool anchor cleared, no surge left behind, `noderotation_completed_total{outcome="expired"}` incremented |
-| `expireAfter` stays a **backstop** the controller's lead time wins against (R6) | **Validated** (by construction + observed) — EKS Auto Mode (2026-06-22) | The candidate retained `expireAfter=336h` while the controller rotated at `ageThreshold=5m` with `noderotation_rotation_chances=13` and `noderotation_short_lead_nodes=0`; a scaled soak of 3 consecutive rotations turned every node over at ~5m (`completed_total{outcome="success"}` +3, no `expired`/`failure`, `short_lead_nodes` 0 throughout), far inside the backstop. The full multi-hour *tight-race* soak (a daily window forces a large `expireAfter`, so that shape never races) is validated separately under a sub-daily window — see the two 2026-07-15 rows below |
-| The placeholder **bin-packs onto pre-existing same-pool spare** instead of inducing a new node (capacity-absorb path, §3.3) | **Validated** — EKS Auto Mode (2026-06-23) | With a *young* (sub-`ageThreshold`, so non-candidate) same-AZ spare node holding ~1970m free, the candidate's 250m placeholder was scheduled **straight onto it** (`Successfully assigned`, no `FailedScheduling`) and **no new `NodeClaim` was induced** — the pool's claim count held at 2 for the whole rotation (never 3); the `surge-for` marker landed on the **pre-existing** spare (the surge target), the drained candidate Pod re-landed on the reserved headroom, the pool collapsed to one node, and `noderotation_completed_total{outcome="success"}` incremented. (Forcing this path is non-obvious: the spare must be young — a near-deadline spare is soft-excluded (§3.3, issue #96) so Karpenter wins the provision race — and the workloads must carry no mutual Pod anti-affinity, which is symmetric and would block the drained Pod from re-landing on the spare; separate the two nodes by sizing instead.) |
-| A new leader **resumes an in-flight rotation purely from annotations** (§5.1) | **Validated** — EKS Auto Mode (2026-06-23) | Mid-rotation (`state=pending`, `surge-claim`/`started-at` stamped) the leader Pod was killed; a new replica took the Lease and continued the **same** rotation — identical `surge-claim` and `started-at`, advancing pending→draining→complete — with no in-memory state and without restarting the rotation |
-| An in-flight rotation **completes past the window boundary**, and no new rotation starts post-boundary (§3.1) | **Validated** — EKS Auto Mode (2026-06-23) | A rotation started in-window (`state=pending`); closing the window (`maintenanceWindows` edit + controller restart) did **not** abort it — the in-flight rotation still completed — while a second eligible candidate (`noderotation_candidates=1`, `noderotation_window_active=0`) did not start, `noderotation_in_progress=0` |
-| The placeholder is the **preemption victim** (negative-priority, `preemptionPolicy: Never`, bare Pod) and sustained higher-priority pressure ends in a **`readyTimeout`-bounded rollback** (§3.3) | **Validated** — EKS Auto Mode (2026-06-23) | A higher-priority Pod preempted the placeholder (`Preempted` event); the placeholder never preempts others to make room (`preemption: not eligible due to preemptionPolicy=Never`) and, being a bare Pod, never re-pends (only the controller recreates it). With a higher-priority blocker holding the only same-AZ spare and new nodes blocked by `limits`, the placeholder stayed `Pending` until `readyTimeout` → clean rollback: candidate retained + uncordoned, surge reaped, `noderotation_completed_total{outcome="failure"}` +1, `retry-count=1` |
-| Karpenter **honors** `do-not-disrupt` against voluntary (Drift) disruption (§3.3, #95) | **Validated** — EKS Auto Mode (2026-06-23) | A node carrying `karpenter.sh/do-not-disrupt=true` (the value the controller applies) and made `Drifted=True` via a NodePool `spec.template` change was **not** replaced for >3 min; removing the annotation let Karpenter immediately drift-replace it (make-before-break). Complements the "applies" row above — the controller's annotation is honored mid-surge (that it does not block `expireAfter` is documented Karpenter behavior, not retested) |
-| Window-bounded **surge-less forceful fallback** deletes an at-risk `NodeClaim` in-window via the voluntary path when a graceful surge cannot finish before its deadline (§3.3, ADR-0001, #156) | **Validated** — EKS Auto Mode, K8s 1.36 (2026-07-04) | A synchronized 12-node batch (one shared **fixed** 2h `expireAfter`) with `N=12 > K·C=2` rotated as a graceful + forceful **mix**: the first 6 gracefully (placeholder surge), then the surplus 6 **surge-less** once inside `t_rot` of the shared deadline — NodePool anchor `noderotation.io/rotation-mode=forceful-fallback` while in flight, a `Warning`/`ForcefulFallback` Event per claim (*"…surge-less: a graceful surge cannot complete before its deadline; deleting in-window via the voluntary path (PDBs apply)"*), **no placeholder Pod** for the forceful candidates (the `surge_wait` histogram counted only the 6 graceful), `noderotation_forceful_fallback_total` climbed cleanly **`0→6`** (one per surge-less rotation, controller `restartCount=0` throughout); the PDB (`minAvailable=11`) held throughout (voluntary path), and **zero** `expired` backstop outcomes. `expireAfter` was never patched — forceful was induced purely by the batch throughput shortfall (trick-free) |
-| Rotation consumes candidates in **earliest-deadline order** (`creationTimestamp + expireAfter`, then `creationTimestamp`, then `Name`) (§3.2, #157) | **Validated** — EKS Auto Mode, K8s 1.36 (2026-07-04) | The 12-node batch shared one `creationTimestamp` (hence one deadline), so ordering degraded to the `Name` tiebreak and the claims were consumed exactly ascending: `2rvd5 < 6ssql < dtkgz < fswsg < gxsfs < krcdc < nkfbh < pdfwl < s7l9r < vvsqr < w9kx7 < wcmwr` |
-| An operator's `karpenter.sh/do-not-disrupt` **excludes** a node from rotation candidate selection (§3.2, #170) | **Validated** — EKS Auto Mode, K8s 1.36 (2026-07-04) | Annotating a not-in-flight candidate's Node `karpenter.sh/do-not-disrupt=true` (operator-owned — no controller `do-not-disrupt-owned` marker) dropped `noderotation_candidates{nodepool="nodepool-ff"}` **4→3** and that node was never chosen (its `NodeClaim` kept, no `deletionTimestamp`); **removing** the annotation let the gauge climb back — exclusion confirmed both directions (a reconcile nudge is needed because a frozen idle pool reconciles slowly) |
-| A multi-hour **tight-race** soak under a sub-daily window: the controller's `leadTime` consistently beats a genuinely racing `expireAfter`, with `surge.forcefulFallback` armed and never firing (R6, §3.2, issue #118) | **Validated** — EKS Auto Mode, K8s 1.36, 12h unattended (2026-07-15) | With `expireAfter E=2h12m` fixed for the whole run (never patched) against a derived `leadTime=1h12m` (48 windows/day, `P=30m`, `K=2`, `t_rot=12m`) — a genuine race, unlike a daily-window `expireAfter` measured in weeks — a steady 5-node pool completed **71/71 rotations gracefully** (make-before-break, ≈12m cadence — 60 inside the 12h observation window, exactly the forecast ~5.0/h, plus 11 more at the unchanged cadence during the attended epilogue period) with **`outcome="expired"` staying 0** for the full run. Per-rotation margin (deadline − completion) stayed positive throughout: min 68.3m, median 70.3m, max 71.2m (n=71). `noderotation_forceful_fallback_total` stayed **0** on the pool despite `surge.forcefulFallback.enabled: true` the entire run — the fallback was armed but never needed (quiescence). Zero `failure`, zero `policy_conflict`, `short_lead_nodes=0` across 909 scrapes, the six derived schedule gauges held exact at all 909 scrapes, the scraper's `seq` was contiguous (0 gaps, 0 restarts), and the controller pod held `restartCount=0` for the full run. Full record: `test/e2e/eks-automode/VALIDATION.md` |
-| Window-bounded **forceful fallback fires deterministically** when a claim crosses `E − t_rot` with a graceful surge no longer schedulable, isolated to a single bounded claim (§3.3, ADR-0001, issue #118) | **Validated** — EKS Auto Mode, K8s 1.36 (2026-07-15) | A separate, single-node mini-pool was created already frozen (Scenario E's mechanism) so its one claim aged into candidacy without starting; released under an attended, fail-closed script that computed the release instant from the claim's actual `creationTimestamp` and its `expireAfter` deadline. Once released, the graceful surge no longer fit inside the remaining time to the deadline, so the controller took the surge-less branch: `noderotation_forceful_fallback_total` on that pool went **0→1** with a `ForcefulFallback` Warning Event; the claim deleted **56s** after release — 10m04s ahead of its own deadline, inside the `tGP + Buffer = 7m` drain bound; the continuous placeholder ledger recorded **no placeholder Pod at any point** for that claim, the defining signature of the surge-less path; `expired` stayed 0; the main soak pool's own rotation cadence was unaffected throughout (no fallback/expired/failure there, no completion gap exceeding `P + t_rot`). Confirms, isolated to one bounded claim, the same graceful↔surge-less branch mechanics the synchronized 12-node batch validated above |
+::: tip Validation summary
+**Validated (20+ scenarios):** core surge, same-AZ zonal-PV rebind, rollback, limits gating, multi-pool confinement, PDB drain, do-not-disrupt markers, force-expiry detection, capacity-absorb, placeholder preemption, window-boundary, leader-change resume, forceful fallback, earliest-deadline ordering, operator opt-out, and a 12-hour tight-race soak.
 
-> **Why this is recorded as a capability, not the surge mechanism.** The standalone-NodeClaim result proves Karpenter will honor a controller-created NodeClaim, which de-risks the project. But the surge design (§3.3) deliberately does **not** use it: a standalone node is unowned by any NodePool, so pods would persist on a node outside NodePool accounting/expiry/drift/budgets, breaking intentional NodePool separation. It is kept as a documented **fallback** should the placeholder approach prove unworkable.
->
-> **Current validation status (PoC scope):** the primary placeholder-Pod surge mechanism, new-provision path, same-AZ zonal-PV rebind, `readyTimeout` rollback + cleanup, NodePool `limits` gating, multi-NodePool confinement, voluntary PDB-respecting drain, `do-not-disrupt` markers on both surge nodes, `expired` force-expiry outcome, a scaled R6 soak, the capacity-absorb path, placeholder preemption (victim + `readyTimeout`-bounded rollback), window-boundary start/stop, leader-change resume, and `do-not-disrupt` honored against voluntary disruption are recorded in the Validated rows above.
->
-> The post-v0.4 additions — window-bounded **surge-less forceful fallback** (#156), **earliest-deadline** candidate ordering (#157), and **`do-not-disrupt` exclusion** from candidate selection (#170) — are recorded in the three 2026-07-04 rows, exercised end-to-end on real EKS as a graceful + forceful mix with `expireAfter` held fixed (trick-free).
->
-> The full multi-hour **tight-race `expireAfter` soak** (issue #118) — a 12h unattended run under a sub-daily window where `leadTime` genuinely races `expireAfter`, plus an attended epilogue isolating the forceful-fallback boundary to a single bounded claim — is recorded in the two 2026-07-15 rows above; full detail in `test/e2e/eks-automode/VALIDATION.md`.
->
-> Still open on real cloud: a genuine same-AZ **capacity shortage (ICE)** driving rollback (stood in for by a short `readyTimeout`, since it is not deterministically inducible on demand) — tracked in issue #109. RBAC sufficiency and `karpenter.sh/v1` CRD decode are implicitly exercised — the controller creates/patches/deletes the surge objects and reconciles real `NodeClaim`s without error.
+**Open:** genuine same-AZ capacity shortage (ICE) driving rollback on real cloud (issue #109).
+:::
+
+### Core mechanism
+
+| Assumption | Status | Date |
+|------------|--------|------|
+| Standalone `NodeClaim` is provisionable on Auto Mode | Validated | 2026-05-29 |
+| Placeholder-Pod surge completes make-before-break | Validated | 2026-06-22 |
+| Same-AZ surge lets EBS re-attach (zonal-PV rebind) | Validated | 2026-06-22 |
+| `readyTimeout` miss rolls back cleanly | Validated | 2026-06-22 |
+| NodePool `limits` exhaustion gates surge | Validated | 2026-06-22 |
+| Required `karpenter.sh/nodepool` confines surge to pool | Validated | 2026-06-22 |
+| Explicit `NodeClaim` deletion drains via voluntary path (PDBs) | Validated | 2026-06-22 |
+| `do-not-disrupt` applied to both nodes, removed on completion | Validated | 2026-06-22 |
+| Force-expiry mid-pending records `expired` (not success/failure) | Validated | 2026-06-22 |
+
+### Advanced scenarios
+
+| Assumption | Status | Date |
+|------------|--------|------|
+| Capacity-absorb path (bin-pack onto spare, no new node) | Validated | 2026-06-23 |
+| Leader-change resumes purely from annotations | Validated | 2026-06-23 |
+| In-flight rotation completes past window boundary | Validated | 2026-06-23 |
+| Placeholder is preemption victim; hostile preemption → rollback | Validated | 2026-06-23 |
+| `do-not-disrupt` honored against Drift | Validated | 2026-06-23 |
+
+### Post-v0.4 additions
+
+| Assumption | Status | Date |
+|------------|--------|------|
+| Forceful fallback (12-node batch, graceful + surge-less mix) | Validated | 2026-07-04 |
+| Earliest-deadline candidate ordering | Validated | 2026-07-04 |
+| Operator `do-not-disrupt` excludes from selection | Validated | 2026-07-04 |
+
+### Soak tests
+
+| Assumption | Status | Date |
+|------------|--------|------|
+| 12h tight-race soak: 71/71 graceful, 0 expired, 0 failure | Validated | 2026-07-15 |
+| Forceful fallback fires deterministically for bounded claim | Validated | 2026-07-15 |
+
+::: details Full validation evidence — click to expand
+
+#### Standalone NodeClaim (capability, not the surge mechanism)
+
+A NodeClaim with only `nodeClassRef` + `requirements` reached `Ready` (~30s, real EC2); admission accepted `--dry-run=server`; graceful finalizer-driven deletion confirmed. K8s 1.35, `karpenter.sh/v1` (2026-05-29).
+
+#### Placeholder-Pod surge (2026-06-22)
+
+A low-priority placeholder induced a NodePool-owned surge `NodeClaim` that reached `Ready` (~30s) before the old was deleted; drain followed the voluntary path; workload rescheduled onto surge node; `noderotation_completed_total{outcome="success"}` incremented.
+
+#### Same-AZ zonal-PV rebind (2026-06-22)
+
+StatefulSet gp3 PVC in `us-west-2a`; `matchNodeRequirements` kept every surge node in `us-west-2a`; the same PV re-attached (not reprovisioned); sentinel data survived.
+
+#### Timeout rollback (2026-06-22)
+
+`readyTimeout` set below node-ready time → timeout → surge claim reaped, placeholder deleted, candidate retained + uncordoned, `outcome="failure"` incremented.
+
+#### Limits gating (2026-06-22)
+
+`spec.limits.cpu` with no headroom: eligible candidate not surged; logged `insufficient limits headroom; cannot surge`; `in_progress` stayed 0.
+
+#### Multi-pool confinement (2026-06-22)
+
+Second pool with same-AZ spare: surge stayed in the candidate's pool (`karpenter.sh/nodepool=nrc-poc`); other pool unchanged.
+
+#### PDB-respecting drain (2026-06-22)
+
+Blocking PDB (`minAvailable=2`, 2 replicas) stalled drain; relaxing to `minAvailable=1` let migration complete one at a time.
+
+#### `do-not-disrupt` markers (2026-06-22)
+
+Both old and surge nodes carried `do-not-disrupt=true` + `do-not-disrupt-owned`; unfreeze removed both on completion.
+
+#### Force-expiry detection (2026-06-22)
+
+Froze pool + deleted pending candidate → `state=expired`, anchor cleared, no surge left behind, `outcome="expired"` incremented.
+
+#### Capacity-absorb path (2026-06-23)
+
+Young same-AZ spare with ~1970m free absorbed the 250m placeholder (no new NodeClaim induced); pool stayed at 2 claims throughout; `outcome="success"` incremented.
+
+#### Leader-change resume (2026-06-23)
+
+Mid-rotation leader killed; new replica took Lease and continued the same rotation from annotations — same `surge-claim`, same `started-at`, completed without restart.
+
+#### Window-boundary behavior (2026-06-23)
+
+Rotation started in-window; closing window did not abort it; second eligible candidate did not start (`window_active=0`).
+
+#### Placeholder preemption (2026-06-23)
+
+Higher-priority Pod preempted placeholder; placeholder never preempts (`preemptionPolicy=Never`); with limits blocking re-provision, stayed Pending until `readyTimeout` → clean rollback.
+
+#### `do-not-disrupt` vs Drift (2026-06-23)
+
+Drifted node with `do-not-disrupt=true` was not replaced for >3 min; removing annotation triggered immediate drift-replace.
+
+#### Forceful fallback — 12-node batch (2026-07-04)
+
+12 nodes, fixed 2h `expireAfter`, `N=12 > K·C=2`: first 6 gracefully, surplus 6 surge-less. `rotation-mode=forceful-fallback` while in flight; `ForcefulFallback` Warning Events; no placeholder for forceful candidates; `noderotation_forceful_fallback_total` climbed `0→6`; PDB held throughout; zero `expired`.
+
+#### Earliest-deadline ordering (2026-07-04)
+
+12-node batch shared one `creationTimestamp` → ordering degraded to Name tiebreak: claims consumed exactly ascending (`2rvd5 < 6ssql < dtkgz < ...`).
+
+#### Operator `do-not-disrupt` exclusion (2026-07-04)
+
+Annotating a candidate's Node `do-not-disrupt=true` (no owned marker) dropped `candidates` gauge 4→3; removing restored it.
+
+#### 12h tight-race soak (2026-07-15)
+
+`E=2h12m`, `leadTime=1h12m`, 48 windows/day, 5-node pool. 71/71 rotations gracefully (~12m cadence). Min margin 68.3m, median 70.3m, max 71.2m. Zero `expired`, zero `failure`, `forceful_fallback_total=0` (armed but never needed). Controller `restartCount=0`, 909 scrapes, contiguous `seq`. Full record: `test/e2e/eks-automode/VALIDATION.md`.
+
+#### Forceful fallback boundary (2026-07-15)
+
+Separate single-node pool, released after aging past candidacy. Graceful surge no longer fit → surge-less branch: `forceful_fallback_total` 0→1; claim deleted 56s after release (10m04s ahead of deadline); no placeholder at any point; `expired` stayed 0.
+
+:::
+
+### Open item
+
+A genuine same-AZ **capacity shortage (ICE)** driving rollback — stood in for by a short `readyTimeout` (not deterministically inducible on demand). Tracked in issue #109.
+
+### Notes
+
+- The standalone `NodeClaim` result de-risks the project but is **not** the surge mechanism (§3.3 — standalone nodes break NodePool accounting)
+- RBAC sufficiency and `karpenter.sh/v1` CRD decode are implicitly exercised by all scenarios
 
 ## 7.3 Open Questions
 
-1. **Holiday-aware scheduling** (skip rotation if `Sat` falls on a holiday). The v1 design intentionally ignores holidays
-2. **Pre-pull image source provisioning** for v2 — whether to use the standard Karpenter NodeClass image-pulling capability or a dedicated Job
-3. **Multi-cloud verification** (AKS NAP, GKE) before claiming compatibility beyond EKS Auto Mode
+1. **Holiday-aware scheduling** — skip rotation if a window day falls on a holiday. v1 intentionally ignores holidays.
+2. **Pre-pull image source** — whether to use Karpenter NodeClass image-pulling or a dedicated Job (v2).
+3. **Multi-cloud verification** — AKS NAP, GKE testing before claiming compatibility beyond EKS Auto Mode.
 
-> Resolved by the `RotationPolicy` CRD (issue #119): *CRD-based policy migration when NodePools need divergent rotation policy* and *per-NodePool maintenance window vs a single cluster-wide window* — both delivered by the per-NodePool `RotationPolicy` (§5.4).
+::: tip Resolved
+*CRD-based policy migration* and *per-NodePool maintenance window* — both delivered by the `RotationPolicy` CRD (issue #119, §5.4).
+:::

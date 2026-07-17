@@ -55,8 +55,9 @@ describe('the policy form reads as a form', () => {
     // early a node is picked, and the surge group the mechanics of one rotation.
     expect(groups[0].fields).toEqual(['Timezone', 'Window start', 'Window end'])
     expect(groups[0].fields.length + groups[1].fields.length + groups[2].fields.length).toBe(10)
-    // …and the weekday enum, which is a checkbox grid rather than a single field.
-    expect(w0.findAll('.sim-group')[0].findAll('.sim-days-grid label')).toHaveLength(7)
+    // …and the weekday enum, which is a dropdown rather than a single field.
+    // The dropdown menu renders only when open; the toggle button is always present.
+    expect(w0.findAll('.sim-group')[0].findAll('.sim-days-dropdown')).toHaveLength(1)
     expect(groups[1].fields).toEqual(['minRotationChances (K)', 'ageThreshold'])
     expect(groups[2].fields).toEqual([
       'provisioningEstimate', 'drainEstimate', 'readyTimeout', 'cooldownAfter', 'Forceful fallback',
@@ -71,7 +72,7 @@ describe('the policy form reads as a form', () => {
     try {
       const w = mount(PolicyInput, { props: { yaml: DEFAULT_POLICY_YAML } })
       const groups = groupsOf(w)
-      expect(groups[0].legend).toContain('メンテナンス窓')
+      expect(groups[0].legend).toContain('メンテナンスウィンドウ')
       expect(groups[0].fields).toContain('タイムゾーン')
       // The Go field names stay identifiers in both locales — they are what you type in the
       // YAML, and a translated `cooldownAfter` would be a lie about the schema.
