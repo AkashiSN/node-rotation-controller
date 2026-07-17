@@ -15,7 +15,7 @@
 # checksum lock is later enabled) — never reintroduce a free-floating install.
 registries:
   - type: standard
-    ref: v4.526.0
+    ref: v4.538.0 # renovate: depName=aquaproj/aqua-registry
   # Local registry for tools the standard registry does not carry (controller-gen).
   # Trusted via aqua-policy.yaml (allowed by the Makefile aqua-tools target).
   - name: local
@@ -34,7 +34,7 @@ packages:
   - name: kubernetes-sigs/controller-runtime/setup-envtest@v0.24.1
   # gopls is a go_install package: aqua builds it from source with the pinned
   # Go toolchain above.
-  - name: golang.org/x/tools/gopls@v0.22.0
+  - name: golang.org/x/tools/gopls@v0.23.0
   - name: golangci/golangci-lint@v2.12.2
   # controller-gen generates the RotationPolicy CRD manifests and zz_generated
   # deepcopy from the api/ kubebuilder markers (`make manifests` / `make generate`,
@@ -44,20 +44,20 @@ packages:
     registry: local
     version: v0.21.0
   # --- KWOK e2e harness tooling (test/e2e/kwok, issue #92) ---
-  - name: kubernetes-sigs/kind@v0.31.0
-  - name: ko-build/ko@v0.18.0
+  - name: kubernetes-sigs/kind@v0.32.0
+  - name: ko-build/ko@v0.19.1
   # kustomize releases carry a `kustomize/` tag prefix; pin the full tag (aqua
   # only auto-applies version_prefix when resolving "latest", not an exact pin).
-  - name: kubernetes-sigs/kustomize@kustomize/v5.6.0
+  - name: kubernetes-sigs/kustomize@kustomize/v5.8.1
   # helm is pinned to the v4 line — the version CI already used de-facto
   # (azure/setup-helm installed latest). The chart, values.schema.json, and the
   # helm-unittest v1.1.1 plugin all render/pass under it.
-  - name: helm/helm@v4.2.2
+  - name: helm/helm@v4.2.3
   # kubectl tracks the controller's Kubernetes client minor (k8s.io/api v0.36 ->
-  # 1.36); one minor ahead of the kind v0.31.0 node (v1.35) is within skew policy.
+  # 1.36), matching the kind node's Kubernetes minor (v1.36) — within skew policy.
   - name: kubernetes/kubernetes/kubectl@v1.36.2
   # --- Ephemeral EKS Auto Mode PoC tooling (test/e2e/eks-automode, issue #93) ---
-  - name: hashicorp/terraform@v1.15.6
+  - name: hashicorp/terraform@v1.15.8
   # awscli authenticates to AWS, logs Docker in to ECR, and writes the cluster
   # kubeconfig for the PoC (issue #106). v2 line.
-  - name: aws/aws-cli@2.35.9
+  - name: aws/aws-cli@2.36.1

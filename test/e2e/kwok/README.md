@@ -17,7 +17,7 @@ v1 "no cloud-provider API dependency" invariant.
 
 | Component | Version (pinned) | Source |
 |-----------|------------------|--------|
-| kind node image | `kindest/node:v1.35.0` (digest) | `kind.yaml` (matches `kind v0.31.0`) |
+| kind node image | `kindest/node:v1.36.1` (digest) | `kind.yaml` (matches `kind v0.32.0`) |
 | KWOK controller | `v0.5.2` | `github.com/kubernetes-sigs/kwok` kustomize + stages |
 | Karpenter KWOK cloudprovider | the **exact** tag in the repo's `go.mod` (`sigs.k8s.io/karpenter`, currently `v1.13.0`) | built with `ko` from a throwaway module — see below |
 | node-rotation-controller | the PR-built image | this repo's Helm chart (`charts/`) |
