@@ -71,7 +71,7 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.5
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         with:
-          aqua_version: v2.62.0
+          aqua_version: v2.62.1
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
@@ -108,7 +108,7 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.5
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         with:
-          aqua_version: v2.62.0
+          aqua_version: v2.62.1
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
@@ -133,7 +133,7 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.5
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.infra == 'true'
         with:
-          aqua_version: v2.62.0
+          aqua_version: v2.62.1
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
@@ -180,7 +180,7 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.5
         if: needs.changes.outputs.docs == 'true'
         with:
-          aqua_version: v2.62.0
+          aqua_version: v2.62.1
           policy_allow: "true"
       - name: Cache Go + aqua tools
         if: needs.changes.outputs.docs == 'true'
@@ -215,7 +215,7 @@ jobs:
       - uses: aquaproj/aqua-installer@v4.0.5
         if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         with:
-          aqua_version: v2.62.0
+          aqua_version: v2.62.1
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
