@@ -15,7 +15,7 @@
 # checksum lock is later enabled) — never reintroduce a free-floating install.
 registries:
   - type: standard
-    ref: v4.538.1 # renovate: depName=aquaproj/aqua-registry
+    ref: v4.539.0 # renovate: depName=aquaproj/aqua-registry
   # Local registry for tools the standard registry does not carry (controller-gen).
   # Trusted via aqua-policy.yaml (allowed by the Makefile aqua-tools target).
   - name: local
@@ -61,4 +61,4 @@ packages:
   - name: hashicorp/terraform@v1.15.8
   # awscli authenticates to AWS, logs Docker in to ECR, and writes the cluster
   # kubeconfig for the PoC (issue #106). v2 line.
-  - name: aws/aws-cli@2.36.1
+  - name: aws/aws-cli@2.36.4
