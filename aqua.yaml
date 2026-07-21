@@ -61,4 +61,4 @@ packages:
   - name: hashicorp/terraform@v1.15.8
   # awscli authenticates to AWS, logs Docker in to ECR, and writes the cluster
   # kubeconfig for the PoC (issue #106). v2 line.
-  - name: aws/aws-cli@2.36.1
+  - name: aws/aws-cli@2.36.4
