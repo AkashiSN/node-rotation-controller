@@ -15,7 +15,7 @@
 # checksum lock is later enabled) — never reintroduce a free-floating install.
 registries:
   - type: standard
-    ref: v4.539.0 # renovate: depName=aquaproj/aqua-registry
+    ref: v4.542.0 # renovate: depName=aquaproj/aqua-registry
   # Local registry for tools the standard registry does not carry (controller-gen).
   # Trusted via aqua-policy.yaml (allowed by the Makefile aqua-tools target).
   - name: local
