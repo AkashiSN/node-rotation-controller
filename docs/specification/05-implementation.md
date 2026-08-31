@@ -153,12 +153,18 @@ advance(np, name):
       delete(placeholder(name))
       for node in nodes_with(surge-for=name):
           unfreeze(node)
-      if np[active-rotation-state] == draining:
-          annotate(np, last-rotation-at=now)
+      # ONE conflict-checked write, only-if active-rotation == name. It reads the
+      # outcome from the same fresh copy it is validated against, stamps
+      # last-rotation-at when that copy says draining, clears the anchor, and
+      # reports whether THIS pass released it. A pass holding a stale cached np
+      # loses the race and emits nothing (§5.2).
+      won, rotated := release_anchor(np, name)
+      if not won:                            # an earlier pass already completed it
+          return Requeue(1m)
+      if rotated:
           emit_metrics(success, duration)
       else:
           emit_metrics(expired); alert
-      clear(np, anchor)
       return Requeue(1m)
 
   switch cand.state:
@@ -236,11 +242,13 @@ advance(np, name):
 Each state handler **re-asserts** its phase's desired state rather than performing one-shot actions:
 - `pending` re-asserts freeze, cordon, placeholder existence on every pass
 - `draining` re-issues idempotent `delete` if `deletionTimestamp` is missing (crash between state write and delete)
+- completion re-runs its cleanup but **claims the rotation with a conditional write**: the anchor's release and the success/expired outcome are both decided from the fresh read that write is validated against, so a pass that arrives on a cached NodePool whose anchor was already released does the idempotent cleanup and emits nothing
 
 ### Observability skews (accepted in v1)
 
 - **Mirror-to-delete gap:** a crash there followed by force-expiry records `success` (surge was reserved — practical outcome matches)
-- **Metric emission:** completion emits before clearing anchor (at-least-once on crash); failure emits after state write (at-most-once on crash). Alert rules using `increase(...)` tolerate both
+- **Metric emission (completion):** emitted after the anchor-releasing write and only by the pass that performed it, so the counter, the histogram, the completion line and the Event fire once per released anchor. A crash between the write and the emission drops it (at-most-once)
+- **Metric emission (claim-scoped):** `failure` and the two `expired` rewrites follow a NodeClaim write that is conflict-checked but does **not** conditionally claim the transition — it rewrites the terminal state instead of vetoing when the durable state already names it. `abortPendingExpiry` and `advanceFailed` rewrite `expired` idempotently; `failPending` also increments `retry-count`, which is not. A stale re-entry therefore duplicates the emission, and for `failPending` the durable retry count with it. Alert rules using `increase(...)` tolerate both skews
 
 ## 5.3 State Model
 

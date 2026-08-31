@@ -153,12 +153,17 @@ advance(np, name):
       delete(placeholder(name))
       for node in nodes_with(surge-for=name):
           unfreeze(node)
-      if np[active-rotation-state] == draining:
-          annotate(np, last-rotation-at=now)
+      # active-rotation == name のときだけ書く、conflict チェック付きの単一書き込み。
+      # 検証対象と同じ最新コピーから結果を判定し、そのコピーが draining なら
+      # last-rotation-at を刻み、anchor をクリアし、解放したのが「このパス」か
+      # どうかを返す。古いキャッシュの np を持つパスは競争に負け、何も発行しない（§5.2）
+      won, rotated := release_anchor(np, name)
+      if not won:                            # 先行パスが既に完了させている
+          return Requeue(1m)
+      if rotated:
           emit_metrics(success, duration)
       else:
           emit_metrics(expired); alert
-      clear(np, anchor)
       return Requeue(1m)
 
   switch cand.state:
@@ -236,11 +241,13 @@ advance(np, name):
 各状態ハンドラーはフェーズの望ましい状態を **再アサート** する（ワンショットアクションではない）:
 - `pending` は各パスで freeze、cordon、placeholder 存在を再アサート
 - `draining` は `deletionTimestamp` がない場合に冪等な `delete` を再発行（状態書き込みと delete 間のクラッシュ）
+- 完了はクリーンアップを再実行するが、ローテーションの完了は **条件付き書き込みで主張する**: anchor の解放と success/expired の判定はどちらもその書き込みが検証される最新の読み取りから決まる。したがって、すでに解放済みの anchor をキャッシュ経由で見たパスは冪等なクリーンアップだけを行い、何も発行しない
 
 ### オブザーバビリティのスキュー（v1 で許容）
 
 - **ミラーから delete 間のギャップ:** そこでのクラッシュ後に force-expiry が発生すると `success` と記録（surge は確保済み — 実質的結果は一致）
-- **メトリクス発行:** 完了は anchor クリア前に発行（クラッシュ時 at-least-once）; 失敗は状態書き込み後に発行（クラッシュ時 at-most-once）。`increase(...)` を使用するアラートルールは両方を許容
+- **メトリクス発行（完了）:** anchor 解放の書き込み後に、その書き込みを行ったパスだけが発行する。カウンター・ヒストグラム・完了ログ・Event は解放された anchor 1 つにつき 1 回発火する。書き込みと発行の間でクラッシュすると発行は失われる（at-most-once）
+- **メトリクス発行（claim スコープ）:** `failure` と 2 つの `expired` の書き換えが続く NodeClaim 書き込みは、conflict チェックはされるが遷移を条件付きで **主張しない** — 永続状態が既に終端遷移を示していても veto せず、終端状態を書き換える。`abortPendingExpiry` と `advanceFailed` の `expired` 書き換えは冪等だが、`failPending` は `retry-count` もインクリメントするため冪等ではない。したがって古いビューでの再入は発行を二重化し、`failPending` では永続的な retry count も二重に進める。`increase(...)` を使用するアラートルールはどちらのスキューも許容
 
 ## 5.3 状態モデル
 

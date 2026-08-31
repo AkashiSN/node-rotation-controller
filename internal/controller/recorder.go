@@ -9,9 +9,18 @@ import "time"
 //
 // The surface is split by emission shape:
 //   - Completion counters (Success/Expired/Failure) fire once at a decision
-//     point. Emission is intentionally not transactional with the annotation
-//     writes — spec §5.2 documents the at-least-once / at-most-once skews the
-//     alert rules (built on increase(...)) tolerate.
+//     point, after the annotation write that makes the decision durable.
+//     completeOrAbort additionally OWNS its emission: the write releasing the
+//     NodePool anchor is conditional on the same fresh read that decides the
+//     outcome, so a later pass reading a stale cached NodePool re-runs the
+//     cleanup and counts nothing (issue #304). The claim-scoped emissions
+//     (failPending's Failure, abortPendingExpiry's and advanceFailed's Expired)
+//     have no such ownership yet: their NodeClaim writes ARE conflict-checked,
+//     but they rewrite the terminal state instead of vetoing when the durable
+//     state already names that transition, so a stale re-entry re-emits — and in
+//     failPending's case increments retry-count a second time. Emission is not
+//     transactional with the write either way — spec §5.2 documents the crash
+//     skew the alert rules (built on increase(...)) tolerate.
 //   - ObservePool sets the per-NodePool gauges that reflect current state; they
 //     are recomputed and re-set on every reconcile so they reset correctly (a
 //     resolved drain stops alerting, a successful pool reports zero retries).

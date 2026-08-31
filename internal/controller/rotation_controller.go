@@ -1110,6 +1110,23 @@ func (r *RotationReconciler) advanceExpired(ctx context.Context, pool *karpv1.No
 // completeOrAbort runs the completion side effects after the old NodeClaim is
 // gone. The mirror decides the outcome: draining → success + cooldown; absent →
 // expired + alert, no cooldown (spec §5.2).
+//
+// Both the outcome and the right to announce it come from the single write that
+// releases the anchor, never from the NodePool this handler was called with. That
+// copy is an informer-cache read, and completion is exactly when reconciles pile
+// up on the pool — the old NodeClaim's delete and the surge node reaching Ready
+// both enqueue it — so a pass can arrive here after an earlier pass already
+// completed the rotation, on a cached pool whose anchor still looks set. Deciding
+// from that copy counted one rotation twice and logged the completion line twice
+// (issue #304). Deciding inside patchPoolIf, from the read the write itself is
+// validated against, makes the counter, the histogram, the line and the Event
+// fire once per released anchor.
+//
+// The cost is that a controller dying between the write and the emissions below
+// drops them, where the previous ordering would have re-emitted on recovery. That
+// is the trade the drain histogram already made for the same reason: a lost count
+// understates truthfully, a duplicate reports a rotation that never happened, and
+// a crash in that window is far rarer than the cache lag this replaces.
 func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.NodePool, name string) (ctrl.Result, error) {
 	// Recover the surge node for the completion line BEFORE unfreezeNodes strips its
 	// surge-for marker (#228). "" on the surge-less forceful-fallback path.
@@ -1121,70 +1138,83 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 		return ctrl.Result{}, err
 	}
 	r.warn().ClearPlaceholderPending(pool.Name, name)
-	if pool.Annotations[annotations.ActiveRotationState] == annotations.StateDraining {
-		r.recorder().Success(pool.Name) // emit before releasing the gate (at-least-once)
-		// drain phase complete: draining-at → finalization (§4.2). Guarded so a
-		// rotation that reached draining before this anchor existed is uncounted
-		// rather than mis-anchored. Read the anchor's fields before the patch below
-		// erases them, but observe the histogram and log only after it lands.
-		drain, hasDrain := time.Duration(0), false
-		kv := []any{"nodeclaim", name, "mode", rotationMode(pool)}
-		if surgeNode != "" {
-			kv = append(kv, "surgeNode", surgeNode)
+
+	// released: this pass is the one that cleared the anchor, so the emissions
+	// below are its own. rotated: the mirror says the rotation reached draining
+	// (success + cooldown) rather than force-expiring out of pending.
+	var released, rotated, hasDrain, hasSurgeWait bool
+	var drain, surgeWait time.Duration
+	var mode string
+	if err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
+		// RetryOnConflict re-runs this against a newer read, so every value it
+		// produces is reset here and derived from that read alone.
+		released, rotated, hasDrain, hasSurgeWait = false, false, false, false
+		if m[annotations.ActiveRotation] != name {
+			return false // an earlier pass already completed this rotation
 		}
-		// surge_wait was carried forward from the transition (#228); absent on the
-		// surge-less forceful-fallback path, which has no surge phase.
-		surgeWait, hasSurgeWait := parseDuration(pool.Annotations[annotations.SurgeWait])
-		if hasSurgeWait {
-			kv = append(kv, "surgeWait", surgeWait.Round(time.Second).String())
+		released = true
+		mode = rotationMode(m)
+		rotated = m[annotations.ActiveRotationState] == annotations.StateDraining
+		if rotated {
+			// drain phase complete: draining-at → finalization (§4.2). Guarded so a
+			// rotation that reached draining before this anchor existed is uncounted
+			// rather than mis-anchored.
+			if drainingAt, ok := parseTime(m[annotations.DrainingAt]); ok {
+				drain, hasDrain = r.now().Sub(drainingAt), true
+			}
+			// surge_wait was carried forward from the transition (#228); absent on the
+			// surge-less forceful-fallback path, which has no surge phase.
+			surgeWait, hasSurgeWait = parseDuration(m[annotations.SurgeWait])
+			m[annotations.LastRotationAt] = rfc3339(r.now()) // the cooldown starts here
 		}
-		if drainingAt, ok := parseTime(pool.Annotations[annotations.DrainingAt]); ok {
-			drain, hasDrain = r.now().Sub(drainingAt), true
-			kv = append(kv, "drain", drain.Round(time.Second).String())
-		}
-		// total = surge_wait + drain: the whole rotation on one line, but only when
-		// both phases are known — never a partial sum mislabelled as the total.
-		if hasSurgeWait && hasDrain {
-			kv = append(kv, "total", (surgeWait + drain).Round(time.Second).String())
-		}
-		if err := r.patchPool(ctx, pool, func(m map[string]string) {
-			m[annotations.LastRotationAt] = rfc3339(r.now())
-			clearRotationAnchorFields(m)
-		}); err != nil {
-			return ctrl.Result{}, err
-		}
-		// Observed only after the anchor-clearing write lands: a failed patch
-		// re-enters completeOrAbort with draining-at still set, and an observation
-		// placed before it would take a second, strictly-larger sample (same
-		// draining-at anchor, a later now) on every retry — inflating the histogram
-		// with a duration no rotation took. A controller that dies between the write
-		// and this line drops one sample instead; for a histogram that is the correct
-		// trade — a missing sample lowers _count truthfully, a phantom sample reports
-		// a duration that never occurred. The Success counter deliberately keeps its
-		// at-least-once placement above — a lost count is worse than a duplicated one.
-		if hasDrain {
-			r.recorder().ObserveDuration(pool.Name, PhaseDrain, drain)
-		}
-		log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation complete", kv...)
-		if r.Events != nil {
-			r.Events.Eventf(pool, nil, corev1.EventTypeNormal, reasonRotationCompleted, actionRotateNode,
-				"NodeClaim %s rotated", name)
-		}
-	} else {
+		clearRotationAnchorFields(m)
+		return true
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	switch {
+	case !released:
+		return ctrl.Result{RequeueAfter: longRequeue}, nil
+	case !rotated:
 		r.recorder().Expired(pool.Name, name) // vanished out of pending — nothing rotated
-		if err := r.clearAnchor(ctx, pool); err != nil {
-			return ctrl.Result{}, err
-		}
+		return ctrl.Result{RequeueAfter: longRequeue}, nil
+	}
+
+	r.recorder().Success(pool.Name)
+	if hasDrain {
+		r.recorder().ObserveDuration(pool.Name, PhaseDrain, drain)
+	}
+	kv := []any{"nodeclaim", name, "mode", mode}
+	if surgeNode != "" {
+		kv = append(kv, "surgeNode", surgeNode)
+	}
+	if hasSurgeWait {
+		kv = append(kv, "surgeWait", surgeWait.Round(time.Second).String())
+	}
+	if hasDrain {
+		kv = append(kv, "drain", drain.Round(time.Second).String())
+	}
+	// total = surge_wait + drain: the whole rotation on one line, but only when
+	// both phases are known — never a partial sum mislabelled as the total.
+	if hasSurgeWait && hasDrain {
+		kv = append(kv, "total", (surgeWait + drain).Round(time.Second).String())
+	}
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation complete", kv...)
+	if r.Events != nil {
+		r.Events.Eventf(pool, nil, corev1.EventTypeNormal, reasonRotationCompleted, actionRotateNode,
+			"NodeClaim %s rotated", name)
 	}
 	return ctrl.Result{RequeueAfter: longRequeue}, nil
 }
 
 // ── Start-gate helpers ─────────────────────────────────────────────────────
 
-// rotationMode names how the in-flight rotation is replacing its node: the
-// surge-less fallback stamps the anchor, everything else is the default surge.
-func rotationMode(pool *karpv1.NodePool) string {
-	if m := pool.Annotations[annotations.RotationMode]; m != "" {
+// rotationMode names how the in-flight rotation is replacing its node, read from
+// a NodePool's annotations: the surge-less fallback stamps the anchor, everything
+// else is the default surge.
+func rotationMode(anns map[string]string) string {
+	if m := anns[annotations.RotationMode]; m != "" {
 		return m
 	}
 	return "surge"
@@ -1619,11 +1649,12 @@ func (r *RotationReconciler) clearAnchor(ctx context.Context, pool *karpv1.NodeP
 
 // clearRotationAnchorFields deletes every NodePool annotation scoped to a single
 // in-flight rotation. It is the ONE place the anchor's field set is enumerated, so
-// the success clear (completeOrAbort), the two failure clears (failPending and
-// advanceFailed's torn-write repair) and the abort/reap clear (clearAnchor) can
-// never drift — a field added to the anchor is cleared on every end path by
-// editing this alone. It leaves the post-rotation anchors last-rotation-at /
-// last-failure-at untouched; the caller writes those in the same update.
+// the completion clear (completeOrAbort, both outcomes), the two failure clears
+// (failPending and advanceFailed's torn-write repair) and the reap clear
+// (clearAnchor) can never drift — a field added to the anchor is cleared on
+// every end path by editing this alone. It leaves the post-rotation anchors
+// last-rotation-at / last-failure-at untouched; the caller writes those in the
+// same update.
 func clearRotationAnchorFields(m map[string]string) {
 	delete(m, annotations.ActiveRotation)
 	delete(m, annotations.ActiveRotationState)
@@ -1636,6 +1667,25 @@ func clearRotationAnchorFields(m map[string]string) {
 // retry-on-conflict (each attempt re-reads the latest object), reflecting the
 // result back into pool.
 func (r *RotationReconciler) patchPool(ctx context.Context, pool *karpv1.NodePool, mutate func(map[string]string)) error {
+	return r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
+		mutate(m)
+		return true
+	})
+}
+
+// patchPoolIf is patchPool with a veto: mutate runs against the freshly read
+// annotations and reports whether the result should be written. Returning false
+// skips the Update; either way pool ends up holding the fresh object.
+//
+// The veto is what makes a conditional write possible. The reconciler reads its
+// NodePool through the informer cache, so the annotations a handler was called
+// with may already be behind the API server; only the read inside this loop is
+// authoritative, and only a write that succeeds against it proves the caller was
+// the one that made the transition (issue #304). A caller whose fresh read no
+// longer shows the state it is acting on vetoes its write and learns it lost the
+// race; a caller whose read is itself stale cannot write at all — its Update
+// carries the stale resourceVersion and conflicts, so RetryOnConflict re-reads.
+func (r *RotationReconciler) patchPoolIf(ctx context.Context, pool *karpv1.NodePool, mutate func(map[string]string) bool) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var fresh karpv1.NodePool
 		if err := r.Get(ctx, client.ObjectKeyFromObject(pool), &fresh); err != nil {
@@ -1644,7 +1694,10 @@ func (r *RotationReconciler) patchPool(ctx context.Context, pool *karpv1.NodePoo
 		if fresh.Annotations == nil {
 			fresh.Annotations = map[string]string{}
 		}
-		mutate(fresh.Annotations)
+		if !mutate(fresh.Annotations) {
+			*pool = fresh
+			return nil
+		}
 		if err := r.Update(ctx, &fresh); err != nil {
 			return err
 		}
