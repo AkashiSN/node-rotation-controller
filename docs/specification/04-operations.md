@@ -91,6 +91,7 @@ Warning-level conditions surfaced via `kubectl describe`:
 | NodePool | `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `DrainEstimateAboveTGP`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK` | Schedule finding active |
 | NodeClaim | `ShortLead` | Claim can't guarantee `K` chances |
 | NodePool | `ForcefulFallback` | Surge-less rotation begins |
+| NodePool | `StaticNodePool` | `spec.replicas` set — surge can never rotate the pool (§3.3) |
 | NodePool | `RotationStarted` | Candidate picked (`Normal`) |
 | NodePool | `RotationCompleted` | Old NodeClaim finalized (`Normal`) |
 | NodeClaim | `RotationFailed` | `readyTimeout` expired; rolled back |

@@ -233,6 +233,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 | drain が止まり、新しい完了が出ない | `noderotation_drain_stuck == 1` | [§5](#5-drain-が詰まったときの対処) — PDB or finalizer |
 | `in_progress` が 1 で張り付き | `NodeRotationStalledInWindow` | surge 未着（→ §1）か drain 詰まり（→ §5） |
 | NodePool が一切ローテーションしない、候補が溜まる | `noderotation_policy_conflict == 1` | RotationPolicy のセレクタ重複を修正 |
+| NodePool が一切ローテーションせず、試行も起きない | NodePool 上の `StaticNodePool` Warning Event | プールが `spec.replicas`（static capacity）を設定しており surge ではローテーションできない。Karpenter は既存 NodePool への `spec.replicas` の追加・削除を禁じているため、ワークロードを dynamic な NodePool へ移すか、ポリシーのセレクタからこのプールを外す |
 | NodePool がいつの間にかローテーション停止 | `freeze_until_timestamp > 0` | 忘れられた freeze — [§4](#4-freeze-ワークフロー) |
 | ノードがコントローラーにもかかわらず expireAfter に到達 | `completed_total{outcome="expired"}` | lead time 不足 — ウィンドウ拡張か tGP 引き下げ |
 | `short_lead_nodes > 0` | `ShortLead` Warning Event | NodePool の `expireAfter` 引き上げかウィンドウ日追加 |

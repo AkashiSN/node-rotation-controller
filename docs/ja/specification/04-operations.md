@@ -91,6 +91,7 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | NodePool | `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `DrainEstimateAboveTGP`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK` | スケジュール finding がアクティブ |
 | NodeClaim | `ShortLead` | claim が `K` 回を保証できない |
 | NodePool | `ForcefulFallback` | surge なしローテーション開始 |
+| NodePool | `StaticNodePool` | `spec.replicas` が設定されており surge では絶対にローテーションできない（§3.3） |
 | NodePool | `RotationStarted` | 候補選定（`Normal`） |
 | NodePool | `RotationCompleted` | 旧 NodeClaim ファイナライズ（`Normal`） |
 | NodeClaim | `RotationFailed` | `readyTimeout` 超過; ロールバック |

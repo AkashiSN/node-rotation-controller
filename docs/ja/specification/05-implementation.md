@@ -52,7 +52,9 @@ Reconciler は `NodePool` をキーとし、以下を watch:
 flowchart TD
     entry(["Reconcile (NodePool)"]) --> q1{"active-rotation<br/>anchor セット?"}
     q1 -->|yes| adv["advance(): 進行中の<br/>ローテーションを1ステップ進める (§5.3)"]
-    q1 -->|no| q2{"開始ゲート通過?<br/>ウィンドウ内、未 freeze、<br/>cooldown + failure-pause 経過"}
+    q1 -->|no| q1b{"spec.replicas あり?<br/>(static capacity)"}
+    q1b -->|yes| stat["StaticNodePool を警告;<br/>Requeue (1m)"]
+    q1b -->|no| q2{"開始ゲート通過?<br/>ウィンドウ内、未 freeze、<br/>cooldown + failure-pause 経過"}
     q2 -->|no| rq["Requeue (1m)"]
     q2 -->|yes| pick["earliest-deadline の適格候補を選択"]
     pick --> q3{"候補<br/>あり?"}
@@ -62,6 +64,12 @@ flowchart TD
     q4 -->|yes| anchor["active-rotation anchor を書き込み<br/>(conflict-checked, only-if-absent)"]
     anchor --> adv
 ```
+
+### static capacity ゲート（ステップ 1a）
+
+`spec.replicas` を設定した NodePool は surge を完了できない（§3.3）ため、ローテーションを開始しない。そのパスは 1 度だけ警告し（`StaticNodePool`、§4.3）、requeue する。
+
+このゲートは in-flight の `advance()` の**後**、すべての開始ゲートの前に置かれる。このゲートが存在しなかった頃に書かれた anchor（旧バージョンのコントローラによるもの。Karpenter 自体は稼働中の NodePool への `spec.replicas` 追加を拒否する）でも、そのローテーションは完了まで進む — そうしないと cordon されたノードと placeholder が行き場を失って残る。`advance()` の失敗リトライ分岐は新しい試行にあたるため static プールでは別途閉じてあり、エスカレートするバックオフごとに無駄な試行を繰り返す代わりに anchor を解放する。
 
 ### 開始ゲート（ステップ 2）
 
@@ -123,6 +131,12 @@ reconcile_nodepool(np):
   # ── 1. 進行中のローテーションを先に駆動（シリアル: NodePool あたり最大 1）
   if name := np[active-rotation]:
       return advance(np, name)
+
+  # ── 1a. static capacity ゲート（§3.3）: replica 固定のプールに surge は使えない。
+  #        advance() の後なので、in-flight のローテーションは完了まで進む。
+  if np.spec.replicas is set:
+      warn_once(np, StaticNodePool)
+      return Requeue(1m)
 
   # ── 2. 開始ゲート
   start_gates(np) :=
@@ -219,7 +233,10 @@ advance(np, name):
           emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
-      if start_gates(np) and elapsed(cand.failed-at) >= escalated_backoff(cand)
+      # リトライは新しい試行: このパスが上位にある step 1a の static ゲート
+      # （anchor により先に advance() へ入る）も通過する必要がある。
+      if start_gates(np) and np.spec.replicas is unset
+         and elapsed(cand.failed-at) >= escalated_backoff(cand)
          and surge_headroom(np, cand):
           annotate(cand, state=pending)
           return advance(np, name)

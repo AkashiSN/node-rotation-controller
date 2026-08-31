@@ -52,7 +52,9 @@ A periodic self-requeue remains the backstop for window edges, freeze releases, 
 flowchart TD
     entry(["Reconcile (NodePool)"]) --> q1{"active-rotation<br/>anchor set?"}
     q1 -->|yes| adv["advance(): drive in-flight<br/>rotation one step (§5.3)"]
-    q1 -->|no| q2{"start gates pass?<br/>in window, not frozen,<br/>cooldown + failure-pause elapsed"}
+    q1 -->|no| q1b{"spec.replicas set?<br/>(static capacity)"}
+    q1b -->|yes| stat["warn StaticNodePool;<br/>Requeue (1m)"]
+    q1b -->|no| q2{"start gates pass?<br/>in window, not frozen,<br/>cooldown + failure-pause elapsed"}
     q2 -->|no| rq["Requeue (1m)"]
     q2 -->|yes| pick["pick earliest-deadline eligible candidate"]
     pick --> q3{"candidate<br/>found?"}
@@ -62,6 +64,12 @@ flowchart TD
     q4 -->|yes| anchor["write active-rotation anchor<br/>(conflict-checked, only-if-absent)"]
     anchor --> adv
 ```
+
+### Static capacity gate (step 1a)
+
+A NodePool with `spec.replicas` set can never complete a surge (§3.3), so no rotation is started for it: the pass warns once (`StaticNodePool`, §4.3) and requeues.
+
+The gate sits **after** the in-flight `advance()` and before every start gate, so an anchor written before the gate existed (by an earlier controller version — Karpenter itself rejects adding `spec.replicas` to a running NodePool) still drives that rotation to completion instead of stranding a cordoned node and a placeholder. `advance()`'s failed-retry branch is a new attempt and is closed on a static pool separately, so it releases the anchor rather than retrying the doomed attempt once per escalated backoff.
 
 ### Start gates (step 2)
 
@@ -123,6 +131,12 @@ reconcile_nodepool(np):
   # ── 1. Drive in-flight rotation first (serial: at most one per NodePool)
   if name := np[active-rotation]:
       return advance(np, name)
+
+  # ── 1a. Static capacity gate (§3.3): surge cannot serve a fixed-replica pool.
+  #        After advance(), so an in-flight rotation still completes.
+  if np.spec.replicas is set:
+      warn_once(np, StaticNodePool)
+      return Requeue(1m)
 
   # ── 2. Start gates
   start_gates(np) :=
@@ -220,7 +234,10 @@ advance(np, name):
           emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
-      if start_gates(np) and elapsed(cand.failed-at) >= escalated_backoff(cand)
+      # A retry is a NEW attempt: it must also clear the step-1a static gate,
+      # which this path sits above (the anchor entered advance() first).
+      if start_gates(np) and np.spec.replicas is unset
+         and elapsed(cand.failed-at) >= escalated_backoff(cand)
          and surge_headroom(np, cand):
           annotate(cand, state=pending)
           return advance(np, name)

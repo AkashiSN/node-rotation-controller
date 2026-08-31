@@ -49,3 +49,7 @@ docs/.vitepress/cache/
 # time, never committed.
 docs/public/simulator.wasm
 docs/public/wasm_exec.js
+
+# A worktree symlink to the main checkout's install is not a directory, so the
+# "node_modules/" pattern above does not match it.
+node_modules

@@ -233,6 +233,7 @@ Start from what you **see**, confirm with the **signal**, then jump to the **fix
 | Drain hangs, no new completions | `noderotation_drain_stuck == 1` | [§5](#5-handling-a-stuck-drain) — PDB or finalizer |
 | `noderotation_in_progress` stuck at 1 | `NodeRotationStalledInWindow` | Surge not landing (→ §1) or drain stuck (→ §5) |
 | NodePool never rotates, candidates accumulate | `noderotation_policy_conflict == 1` | Fix the RotationPolicy selector overlap |
+| NodePool never rotates, no attempt is ever made | `StaticNodePool` Warning Event on the NodePool | The pool sets `spec.replicas` (static capacity), which surge cannot rotate. Karpenter forbids adding or removing `spec.replicas` on an existing NodePool, so migrate the workload to a dynamic NodePool or drop this one from the policy selector |
 | NodePool stopped rotating quietly | `noderotation_freeze_until_timestamp > 0` | Forgotten freeze — [§4](#4-the-freeze-workflow) |
 | Nodes reach `expireAfter` despite the controller | `noderotation_completed_total{outcome="expired"}` | Lead time too tight — widen windows or lower tGP |
 | `noderotation_short_lead_nodes > 0` | `ShortLead` Warning Event | Raise `expireAfter` on the NodePool or add window days |
