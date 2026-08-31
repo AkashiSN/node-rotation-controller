@@ -9,9 +9,12 @@ import "time"
 //
 // The surface is split by emission shape:
 //   - Completion counters (Success/Expired/Failure) fire once at a decision
-//     point. Emission is intentionally not transactional with the annotation
-//     writes — spec §5.2 documents the at-least-once / at-most-once skews the
-//     alert rules (built on increase(...)) tolerate.
+//     point, after the annotation write that makes the decision durable and only
+//     for the pass that performed it — a later pass reading a stale cached object
+//     must not count the same outcome again (issue #304). Emission is still not
+//     transactional with that write: spec §5.2 documents the at-most-once skew a
+//     crash in between leaves, which the alert rules (built on increase(...))
+//     tolerate.
 //   - ObservePool sets the per-NodePool gauges that reflect current state; they
 //     are recomputed and re-set on every reconcile so they reset correctly (a
 //     resolved drain stops alerting, a successful pool reports zero retries).

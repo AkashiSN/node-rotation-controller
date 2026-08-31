@@ -236,11 +236,12 @@ advance(np, name):
 Each state handler **re-asserts** its phase's desired state rather than performing one-shot actions:
 - `pending` re-asserts freeze, cordon, placeholder existence on every pass
 - `draining` re-issues idempotent `delete` if `deletionTimestamp` is missing (crash between state write and delete)
+- completion re-runs its cleanup but **claims the rotation with a conditional write**: the anchor's release and the success/expired outcome are both decided from the fresh read that write is validated against, so a pass that arrives on a cached NodePool whose anchor was already released does the idempotent cleanup and emits nothing
 
 ### Observability skews (accepted in v1)
 
 - **Mirror-to-delete gap:** a crash there followed by force-expiry records `success` (surge was reserved — practical outcome matches)
-- **Metric emission:** completion emits before clearing anchor (at-least-once on crash); failure emits after state write (at-most-once on crash). Alert rules using `increase(...)` tolerate both
+- **Metric emission:** completion emits after the anchor-releasing write and only for the pass that performed it, so the counter, the histogram, the completion line and the Event fire once per released anchor (a crash between write and emission drops them — at-most-once); failure emits after its state write (at-most-once on crash). Alert rules using `increase(...)` tolerate both
 
 ## 5.3 State Model
 
