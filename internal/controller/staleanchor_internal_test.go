@@ -2,11 +2,17 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	karpapis "sigs.k8s.io/karpenter/pkg/apis"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -70,6 +76,76 @@ func TestRotationCompletionIsCountedOnceOnAStaleAnchorRead(t *testing.T) {
 	}
 	if e := drain(evs); len(e) != 1 {
 		t.Errorf("want exactly 1 RotationCompleted Event, got %d: %v", len(e), e)
+	}
+}
+
+// The test above enters stale and finds the truth on the inner read. The other
+// half of the compare-and-swap is the inner read that is ITSELF stale: its Update
+// then carries a resourceVersion older than the release it did not see, so the
+// API server rejects it and RetryOnConflict re-runs the mutation against a newer
+// read. This drives exactly that — the first anchor-releasing Update is answered
+// with a Conflict after another pass has completed the rotation underneath — and
+// pins the two properties the retry depends on: the closure's per-attempt state
+// is reset (it must not carry `released` over from the losing attempt) and a lost
+// race emits nothing at all.
+func TestCompletionEmitsNothingWhenTheAnchorIsReleasedUnderneathIt(t *testing.T) {
+	pool := withTGP(testNodePool(map[string]string{
+		annotations.ActiveRotation:      "nc-old",
+		annotations.ActiveRotationState: annotations.StateDraining,
+		annotations.DrainingAt:          rfc(testNow.Add(-4 * time.Minute)),
+	}))
+	rec := &fakeRecorder{}
+	evs := events.NewFakeRecorder(16)
+
+	// The interceptor plays the other pass: on the first anchor-releasing Update it
+	// completes the rotation itself, then answers with the Conflict the API server
+	// would return for the now-stale resourceVersion.
+	first := true
+	funcs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			p, ok := obj.(*karpv1.NodePool)
+			if !ok || !first || p.Annotations[annotations.ActiveRotation] != "" {
+				return c.Update(ctx, obj, opts...)
+			}
+			first = false
+			var won karpv1.NodePool
+			if err := c.Get(ctx, client.ObjectKeyFromObject(p), &won); err != nil {
+				return err
+			}
+			won.Annotations[annotations.LastRotationAt] = rfc(testNow)
+			clearRotationAnchorFields(won.Annotations)
+			if err := c.Update(ctx, &won); err != nil {
+				return err
+			}
+			return apierrors.NewConflict(
+				schema.GroupResource{Group: karpapis.Group, Resource: "nodepools"}, p.Name,
+				errors.New("simulated stale resourceVersion"))
+		},
+	}
+	r := newFlakyReconciler(t, rec, funcs, pool) // nc-old already finalized away
+	r.Events = evs
+
+	all := passes(t, r, getPool(t, r))
+
+	if rec.success != 0 {
+		t.Errorf("the pass that lost the anchor counted %d successes, want 0", rec.success)
+	}
+	if rec.expired != 0 {
+		t.Errorf("the pass that lost the anchor counted %d expiries, want 0", rec.expired)
+	}
+	if got := countDurations(rec, PhaseDrain); got != 0 {
+		t.Errorf("drain observed %d times by the losing pass, want 0", got)
+	}
+	if got := countLines(all, "rotation complete"); got != 0 {
+		t.Errorf(`"rotation complete" logged %d times by the losing pass, want 0`, got)
+	}
+	if e := drain(evs); len(e) != 0 {
+		t.Errorf("the losing pass emitted %d Events, want none: %v", len(e), e)
+	}
+	// The winner's completion stands untouched.
+	if got := getPool(t, r).Annotations; got[annotations.LastRotationAt] != rfc(testNow) ||
+		got[annotations.ActiveRotation] != "" {
+		t.Errorf("the winning pass's completion must survive the retry, got %v", got)
 	}
 }
 
