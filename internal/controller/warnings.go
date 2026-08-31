@@ -24,10 +24,12 @@ const (
 	actionResolvePolicy    = "ResolvePolicy"
 	actionReapRotation     = "ReapRotation"
 	actionForcefulFallback = "RotateSurgeless"
+	actionEvaluateNodePool = "EvaluateNodePool"
 	reasonShortLead        = "ShortLead"
 	reasonPolicyConflict   = "PolicyConflict"
 	reasonGovernanceLost   = "GovernanceLost"
 	reasonForcefulFallback = "ForcefulFallback"
+	reasonStaticNodePool   = "StaticNodePool"
 )
 
 // warningEmitter surfaces non-fatal schedule findings and per-node short-lead
@@ -51,6 +53,7 @@ type poolWarnState struct {
 	shortLead    map[string]bool   // last-warned short-lead NodeClaim names
 	conflict     string            // last-warned policy-conflict detail ("" = none)
 	noCandidate  string            // last-logged no-candidate reason key ("" = none)
+	staticPool   bool              // already warned that the pool is static capacity
 	phPending    map[string]string // NodeClaim name → last-logged "reason|message"
 }
 
@@ -155,6 +158,44 @@ func (w *warningEmitter) EmitConflict(ctx context.Context, pool *karpv1.NodePool
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation policy conflict", "detail", detail)
 	if w.events != nil {
 		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonPolicyConflict, actionResolvePolicy, "%s", detail)
+	}
+}
+
+// EmitStaticNodePool logs and emits a Warning Event on a Karpenter static
+// capacity NodePool (spec.replicas set), which the surge mechanism cannot rotate
+// (issue #302): the placeholder is pinned to its own NodePool by a required node
+// affinity, and Karpenter's provisioner does not consider static NodePools for
+// pending pods, so the placeholder can never be scheduled. Deduplicated on the
+// transition into the state — reconcileNodePool re-evaluates every longRequeue,
+// and the condition holds until an operator changes the NodePool or the policy's
+// selector, so an undeduplicated Event would repeat for as long as it is true.
+func (w *warningEmitter) EmitStaticNodePool(ctx context.Context, pool *karpv1.NodePool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.poolStateLocked(pool.Name)
+	if s.staticPool {
+		return // already warned and still static — no re-fire
+	}
+	s.staticPool = true
+	var replicas int64
+	if pool.Spec.Replicas != nil {
+		replicas = *pool.Spec.Replicas
+	}
+	msg := fmt.Sprintf("NodePool %s sets spec.replicas (Karpenter static capacity), which the surge rotation cannot serve: the surge placeholder is pinned to this NodePool and Karpenter's provisioner does not consider static NodePools for pending pods, so no rotation can ever complete. No rotation will be started for this NodePool; remove spec.replicas or exclude it from the RotationPolicy selector. Its nodes remain subject to Karpenter's forceful expiration.", pool.Name)
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
+		"static NodePool cannot be rotated by surge; not starting a rotation", "replicas", replicas)
+	if w.events != nil {
+		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonStaticNodePool, actionEvaluateNodePool, "%s", msg)
+	}
+}
+
+// ClearStaticNodePool resets the static-capacity dedup state once the NodePool is
+// dynamic again, so a pool that is made static a second time re-fires its Event.
+func (w *warningEmitter) ClearStaticNodePool(pool string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if s := w.state[pool]; s != nil {
+		s.staticPool = false
 	}
 }
 

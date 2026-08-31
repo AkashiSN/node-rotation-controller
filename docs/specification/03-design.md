@@ -200,6 +200,12 @@ A single reconcile cycle handles **one** node: serial per NodePool (`maxUnavaila
 
 A standalone `NodeClaim` produces an **unowned** node outside NodePool accounting, expiry, drift, and disruption budgets — breaking intentional NodePool separation.
 
+### Static capacity NodePools are out of scope (issue #302)
+
+A NodePool with `spec.replicas` set (Karpenter **static capacity**) maintains a fixed node count and is **never considered by the provisioner** when a Pod is pending. The placeholder pins `karpenter.sh/nodepool` to the candidate's own pool as a structural invariant, so on a static pool it can be neither absorbed by another pool nor provisioned for — every attempt would stall until `readyTimeout` and consume one of the node's guaranteed chances.
+
+The controller therefore **refuses to start a rotation** on a static NodePool and says so once via a `StaticNodePool` Warning Event (§4.3, gate in §5.2). Those nodes remain subject to Karpenter's forceful expiration. Surge-less replacement driven by replica reconciliation is **not part of v1**.
+
 ### The placeholder Pod
 
 | Property | Value |

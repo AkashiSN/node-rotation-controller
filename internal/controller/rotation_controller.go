@@ -515,6 +515,24 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		return r.advance(ctx, pool, name, res)
 	}
 
+	// ── 1a. Static capacity gate (issue #302, spec §5.2): a NodePool with
+	//        spec.replicas set keeps a fixed node count and is never considered by
+	//        Karpenter's provisioner when a pod is pending. The surge placeholder
+	//        pins karpenter.sh/nodepool to the candidate's own pool as a structural
+	//        invariant (internal/surge/placeholder.go), so on a static pool it can
+	//        neither be absorbed by another pool nor induce a new NodeClaim: every
+	//        attempt would stall until readyTimeout and burn one of the node's
+	//        guaranteed rotation chances. Refuse to start and say so once, rather
+	//        than rediscovering it once per maintenance window. Like the fatal
+	//        feasibility gate below, this gates only the START — an in-flight
+	//        rotation (step 1) is already past here and runs to completion, so a
+	//        pool made static mid-rotation is never left cordoned and half-rotated.
+	if staticPool(pool) {
+		r.warn().EmitStaticNodePool(ctx, pool)
+		return ctrl.Result{RequeueAfter: longRequeue}, nil
+	}
+	r.warn().ClearStaticNodePool(pool.Name)
+
 	// ── 1b. Fatal feasibility gate (spec §3.2 layer 1): a schedule that cannot
 	//        guarantee the configured rotation chances (A ≤ 0, override G < 1,
 	//        K < 1, no windows) must NOT start a new rotation — the §2.2 invariant
@@ -708,6 +726,14 @@ func reconcilePhase(pool *karpv1.NodePool) string {
 		return st
 	}
 	return annotations.StatePending
+}
+
+// staticPool reports whether the NodePool is a Karpenter static capacity pool:
+// spec.replicas maintains a fixed number of nodes rather than scaling to pod
+// demand, and such a pool is excluded from the provisioner's candidates for a
+// pending pod — which is exactly what the surge placeholder is (issue #302).
+func staticPool(pool *karpv1.NodePool) bool {
+	return pool.Spec.Replicas != nil
 }
 
 // firstFatal returns the first Fatal finding (spec §3.2 layer 1), if any. Used to
