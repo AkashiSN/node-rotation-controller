@@ -247,7 +247,7 @@ advance(np, name):
 
 - **ミラーから delete 間のギャップ:** そこでのクラッシュ後に force-expiry が発生すると `success` と記録（surge は確保済み — 実質的結果は一致）
 - **メトリクス発行（完了）:** anchor 解放の書き込み後に、その書き込みを行ったパスだけが発行する。カウンター・ヒストグラム・完了ログ・Event は解放された anchor 1 つにつき 1 回発火する。書き込みと発行の間でクラッシュすると発行は失われる（at-most-once）
-- **メトリクス発行（claim スコープ）:** `failure` と 2 つの `expired` の書き換えは、自身の NodeClaim 状態書き込みの後に発行される。この書き込みは冪等だが conflict チェックは **していない** — クラッシュに対しては at-most-once だが、古いキャッシュのビューでの再入では二重発行があり得る。`increase(...)` を使用するアラートルールはどちらのスキューも許容
+- **メトリクス発行（claim スコープ）:** `failure` と 2 つの `expired` の書き換えが続く NodeClaim 書き込みは、conflict チェックはされるが遷移を条件付きで **主張しない** — 永続状態が既に終端遷移を示していても veto せず、終端状態を書き換える。`abortPendingExpiry` と `advanceFailed` の `expired` 書き換えは冪等だが、`failPending` は `retry-count` もインクリメントするため冪等ではない。したがって古いビューでの再入は発行を二重化し、`failPending` では永続的な retry count も二重に進める。`increase(...)` を使用するアラートルールはどちらのスキューも許容
 
 ## 5.3 状態モデル
 

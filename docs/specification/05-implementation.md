@@ -248,7 +248,7 @@ Each state handler **re-asserts** its phase's desired state rather than performi
 
 - **Mirror-to-delete gap:** a crash there followed by force-expiry records `success` (surge was reserved — practical outcome matches)
 - **Metric emission (completion):** emitted after the anchor-releasing write and only by the pass that performed it, so the counter, the histogram, the completion line and the Event fire once per released anchor. A crash between the write and the emission drops it (at-most-once)
-- **Metric emission (claim-scoped):** `failure` and the two `expired` rewrites are emitted after their own NodeClaim state write, which is idempotent but **not** conflict-checked — at-most-once across a crash, and a re-entry on a stale cached view can still emit twice. Alert rules using `increase(...)` tolerate both skews
+- **Metric emission (claim-scoped):** `failure` and the two `expired` rewrites follow a NodeClaim write that is conflict-checked but does **not** conditionally claim the transition — it rewrites the terminal state instead of vetoing when the durable state already names it. `abortPendingExpiry` and `advanceFailed` rewrite `expired` idempotently; `failPending` also increments `retry-count`, which is not. A stale re-entry therefore duplicates the emission, and for `failPending` the durable retry count with it. Alert rules using `increase(...)` tolerate both skews
 
 ## 5.3 State Model
 

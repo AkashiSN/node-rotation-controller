@@ -15,8 +15,10 @@ import "time"
 //     outcome, so a later pass reading a stale cached NodePool re-runs the
 //     cleanup and counts nothing (issue #304). The claim-scoped emissions
 //     (failPending's Failure, abortPendingExpiry's and advanceFailed's Expired)
-//     have no such ownership yet: their writes are idempotent but not
-//     conflict-checked, so a stale re-entry can still emit twice. Emission is not
+//     have no such ownership yet: their NodeClaim writes ARE conflict-checked,
+//     but they rewrite the terminal state instead of vetoing when the durable
+//     state already names that transition, so a stale re-entry re-emits — and in
+//     failPending's case increments retry-count a second time. Emission is not
 //     transactional with the write either way — spec §5.2 documents the crash
 //     skew the alert rules (built on increase(...)) tolerate.
 //   - ObservePool sets the per-NodePool gauges that reflect current state; they
