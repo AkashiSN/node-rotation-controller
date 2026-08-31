@@ -20,7 +20,7 @@
 互換性の契約は **安定した `karpenter.sh/v1` CRD サーフェス — 特定の Karpenter コントローラーマイナーではない。** これは **EKS Auto Mode** にとって重要であり、管理されている正確な Karpenter マイナーバージョンをユーザーに公開しないため。
 
 - **ランタイムターゲット:** 互換性のある `karpenter.sh/v1` `NodePool`/`NodeClaim` API を提供する任意のクラスター
-- **ビルド/テストベースライン:** [`go.mod`](../../go.mod) にバンドルされた `sigs.k8s.io/karpenter` Go モジュールバージョン（現在 `v1.13.0`）。これは型付き Go API を固定するものであり、ランタイム要件 **ではない**
+- **ビルド/テストベースライン:** [`go.mod`](../../go.mod) にバンドルされた `sigs.k8s.io/karpenter` Go モジュールバージョン（現在 `v1.14.0`）。これは型付き Go API を固定するものであり、ランタイム要件 **ではない**
 - **インタラクション境界:** Kubernetes API オブジェクト（`NodeClaim`/`NodePool` CRD、およびコア `Node`/`Pod`）のみ。Karpenter 内部やクラウドプロバイダー API は使用しない
 - **ランタイム強制:** 起動時の preflight（§5.1）がクラスターが `karpenter.sh/v1` を提供しないか RBAC が読み取れない場合に即座に失敗
 
@@ -41,6 +41,7 @@
 | `NodePool.spec.template.spec.requirements` | placeholder 要件の複製（§3.3） |
 | `NodePool.spec.template.spec.taints` | placeholder の tolerations（§3.3） |
 | `NodePool.spec.limits` | surge ヘッドルームチェック（§3.2, §5.2） |
+| `NodePool.spec.replicas` | static capacity の検出（§3.3, §5.2） |
 | `NodePool.status.resources` | ヘッドルーム用のプロビジョニング済みフットプリント |
 | label `karpenter.sh/nodepool` | ノード/placeholder をプールに紐付け |
 | annotation `karpenter.sh/do-not-disrupt` | surge ペアの freeze（§3.3） |

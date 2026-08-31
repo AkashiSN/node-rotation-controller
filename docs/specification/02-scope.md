@@ -20,7 +20,7 @@
 The compatibility contract is the **stable `karpenter.sh/v1` CRD surface — not a specific Karpenter controller minor.** This matters for **EKS Auto Mode**, which does not expose the exact managed Karpenter minor to users.
 
 - **Runtime target:** any cluster serving a compatible `karpenter.sh/v1` `NodePool`/`NodeClaim` API
-- **Build/test baseline:** the bundled `sigs.k8s.io/karpenter` Go module version in [`go.mod`](../../go.mod) (currently `v1.13.0`). This pins the typed Go API, **not** a runtime requirement
+- **Build/test baseline:** the bundled `sigs.k8s.io/karpenter` Go module version in [`go.mod`](../../go.mod) (currently `v1.14.0`). This pins the typed Go API, **not** a runtime requirement
 - **Interaction boundary:** solely through Kubernetes API objects (`NodeClaim`/`NodePool` CRDs, plus core `Node`/`Pod`). No Karpenter internals, no cloud-provider API
 - **Runtime enforcement:** a startup preflight (§5.1) fails fast when the cluster does not serve `karpenter.sh/v1` or RBAC cannot read it
 
@@ -41,6 +41,7 @@ The controller depends only on the following public `karpenter.sh/v1` fields:
 | `NodePool.spec.template.spec.requirements` | Placeholder requirement replication (§3.3) |
 | `NodePool.spec.template.spec.taints` | Placeholder tolerations (§3.3) |
 | `NodePool.spec.limits` | Surge headroom check (§3.2, §5.2) |
+| `NodePool.spec.replicas` | Static capacity detection (§3.3, §5.2) |
 | `NodePool.status.resources` | Provisioned footprint for headroom |
 | label `karpenter.sh/nodepool` | Pairing nodes/placeholder to pool |
 | annotation `karpenter.sh/do-not-disrupt` | Freeze surge pair (§3.3) |

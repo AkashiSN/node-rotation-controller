@@ -204,7 +204,9 @@ ageThreshold (A) = E − (K·P + t_rot)
 
 `spec.replicas` を設定した NodePool（Karpenter の **static capacity**）はノード数を固定に保ち、Pod が pending になっても **provisioner の候補に入らない**。placeholder は構造的な不変条件として `karpenter.sh/nodepool` を候補自身のプールに固定するため、static プールでは他プールに吸収されることもプロビジョニングされることもなく、試行のたびに `readyTimeout` まで滞留してノードの保証チャンスを 1 回消費するだけになる。
 
-したがってコントローラは static NodePool でのローテーション開始を**拒否**し、`StaticNodePool` Warning Event（§4.3、ゲートは §5.2）で 1 度だけ通知する。それらのノードは Karpenter の forceful expiration の対象のまま残る。replica 収束に置換を任せる surge-less なローテーションは **v1 の対象ではない**。
+したがってコントローラは static NodePool でのローテーション開始を**拒否**し、`StaticNodePool` Warning Event（§4.3、ゲートは §5.2）で 1 度だけ通知する。それらのノードは Karpenter の forceful expiration の対象のまま残る。
+
+Karpenter は既存 NodePool の static と dynamic の**相互移行を拒否する**（`spec.replicas` に対する CEL ルール）。したがって対処はフィールドをその場で編集することではなく、ワークロードを dynamic な NodePool へ移すか、この NodePool を RotationPolicy のセレクタから外すことである。replica 収束に置換を任せる surge-less なローテーションは **v1 の対象ではない**。
 
 ### placeholder Pod
 

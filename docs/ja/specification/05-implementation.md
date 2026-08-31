@@ -69,7 +69,7 @@ flowchart TD
 
 `spec.replicas` を設定した NodePool は surge を完了できない（§3.3）ため、ローテーションを開始しない。そのパスは 1 度だけ警告し（`StaticNodePool`、§4.3）、requeue する。
 
-このゲートは in-flight の `advance()` の**後**、すべての開始ゲートの前に置かれる。ローテーション実行中に static 化されたプールでも、そのローテーションは完了まで進む — そうしないと cordon されたノードと placeholder が行き場を失って残る。
+このゲートは in-flight の `advance()` の**後**、すべての開始ゲートの前に置かれる。このゲートが存在しなかった頃に書かれた anchor（旧バージョンのコントローラによるもの。Karpenter 自体は稼働中の NodePool への `spec.replicas` 追加を拒否する）でも、そのローテーションは完了まで進む — そうしないと cordon されたノードと placeholder が行き場を失って残る。`advance()` の失敗リトライ分岐は新しい試行にあたるため static プールでは別途閉じてあり、エスカレートするバックオフごとに無駄な試行を繰り返す代わりに anchor を解放する。
 
 ### 開始ゲート（ステップ 2）
 
@@ -233,7 +233,10 @@ advance(np, name):
           emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
-      if start_gates(np) and elapsed(cand.failed-at) >= escalated_backoff(cand)
+      # リトライは新しい試行: このパスが上位にある step 1a の static ゲート
+      # （anchor により先に advance() へ入る）も通過する必要がある。
+      if start_gates(np) and np.spec.replicas is unset
+         and elapsed(cand.failed-at) >= escalated_backoff(cand)
          and surge_headroom(np, cand):
           annotate(cand, state=pending)
           return advance(np, name)

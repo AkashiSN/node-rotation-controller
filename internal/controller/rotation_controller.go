@@ -525,8 +525,12 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	//        guaranteed rotation chances. Refuse to start and say so once, rather
 	//        than rediscovering it once per maintenance window. Like the fatal
 	//        feasibility gate below, this gates only the START — an in-flight
-	//        rotation (step 1) is already past here and runs to completion, so a
-	//        pool made static mid-rotation is never left cordoned and half-rotated.
+	//        rotation (step 1) is already past here and runs to completion. That
+	//        matters for an anchor written before this gate existed (an earlier
+	//        controller version; Karpenter itself rejects adding spec.replicas to
+	//        a running NodePool), which would otherwise be stranded with a
+	//        cordoned node and an orphaned placeholder. advanceFailed's retry
+	//        branch sits above this gate too and closes on static separately.
 	if staticPool(pool) {
 		r.warn().EmitStaticNodePool(ctx, pool)
 		return ctrl.Result{RequeueAfter: longRequeue}, nil
@@ -1092,9 +1096,16 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	// A re-entry is a NEW attempt, so it must pass EVERYTHING a fresh start would.
+	// A re-entry is a NEW attempt, so it must pass EVERYTHING a fresh start would —
+	// including the static capacity gate (issue #302), which step 1a applies to a
+	// fresh start but which this path sits above: the anchor sends the reconcile
+	// into advance() at step 1 before that gate is reached. A static pool whose
+	// anchor was written by an earlier controller version would otherwise retry
+	// the one attempt that can never succeed, once per escalated backoff, forever.
+	// Closing it here drops through to the repair branch below, which releases the
+	// anchor and preserves the failure pause.
 	open, _ := decide.StartGate(r.gateInputs(pool, res, now))
-	if open &&
+	if open && !staticPool(pool) &&
 		now.Sub(failedAt) >= selection.EscalatedBackoff(retry, res.retryBackoff) &&
 		headroomOK {
 		if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {

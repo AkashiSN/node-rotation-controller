@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -18,6 +20,9 @@ import (
 // count itself is immaterial to the gate — any non-nil spec.replicas is static.
 func withReplicas(p *karpv1.NodePool) *karpv1.NodePool {
 	p.Spec.Replicas = new(int64(2))
+	if p.UID == "" {
+		p.UID = "pool-uid-1"
+	}
 	return p
 }
 
@@ -91,10 +96,13 @@ func TestStaticNodePoolWarnsOncePerTransition(t *testing.T) {
 	}
 }
 
-// Dropping spec.replicas makes the pool dynamic again: the rotation starts, and a
-// pool that becomes static once more warns again rather than staying silent on
-// the stale dedup entry.
-func TestStaticNodePoolClearsWhenReplicasRemoved(t *testing.T) {
+// Karpenter rejects a transition between static and dynamic on an existing
+// NodePool (a CEL rule on spec.replicas), so the only way out of the condition is
+// to delete the pool and create a dynamic one. A pool deleted and recreated under
+// the same name is a different object that must get its own warning — and the
+// recreate may never surface a NotFound reconcile for Forget to act on, so the
+// dedup cannot be keyed on the name alone.
+func TestStaticNodePoolWarnsAgainForARecreatedPool(t *testing.T) {
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode))
 	pool := withReplicas(withTGP(testNodePool(nil)))
 	rec := events.NewFakeRecorder(16)
@@ -104,52 +112,107 @@ func TestStaticNodePoolClearsWhenReplicasRemoved(t *testing.T) {
 	step(t, r, pool)
 	drain(rec)
 
-	dynamic := getPool(t, r)
-	dynamic.Spec.Replicas = nil
-	dynamic.Spec.Template.Spec.TerminationGracePeriod = pool.Spec.Template.Spec.TerminationGracePeriod
-	if err := r.Update(context.Background(), dynamic); err != nil {
-		t.Fatalf("update pool: %v", err)
+	// Deleted and recreated under the same name, with no reconcile in between to
+	// observe the NotFound.
+	if err := r.Delete(context.Background(), getPool(t, r)); err != nil {
+		t.Fatalf("delete pool: %v", err)
 	}
-	step(t, r, dynamic)
-
-	if got := getPool(t, r).Annotations[annotations.ActiveRotation]; got != "nc-old" {
-		t.Fatalf("a pool that is no longer static must rotate, anchor = %q", got)
+	recreated := withReplicas(withTGP(testNodePool(nil)))
+	recreated.UID = types.UID("pool-uid-2")
+	if err := r.Create(context.Background(), recreated); err != nil {
+		t.Fatalf("recreate pool: %v", err)
 	}
-
-	// Static again, with the rotation it started meanwhile cleared away: the
-	// warning is a new occurrence and must re-fire.
-	again := getPool(t, r)
-	again.Annotations = nil
-	again.Spec.Replicas = pool.Spec.Replicas
-	if err := r.Update(context.Background(), again); err != nil {
-		t.Fatalf("update pool: %v", err)
-	}
-	step(t, r, again)
+	step(t, r, recreated)
 
 	if got := countEvents(drain(rec), reasonStaticNodePool); got != 1 {
-		t.Errorf("a pool that becomes static again emitted %d Events, want 1", got)
+		t.Errorf("a recreated static NodePool emitted %d Events, want 1", got)
 	}
 }
 
-// The gate blocks only the START of a rotation. A pool that becomes static while
-// one is in flight must still drive it to completion — the alternative is a
-// cordoned node and a placeholder left behind with no path forward.
-func TestStaticNodePoolDoesNotBlockInFlightRotation(t *testing.T) {
-	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
-		ncAnn(annotations.State, annotations.StatePending, annotations.StartedAt, rfc(testNow.Add(-time.Minute))))
+// The gate blocks only the START of a rotation. An anchor written before this
+// gate existed — by an earlier controller version, since Karpenter does not allow
+// a pool to become static while it is running — must still be driven to a
+// terminal outcome with its markers cleaned up, not stranded with a cordoned node
+// and an orphaned placeholder.
+func TestStaticNodePoolDrivesAnInFlightRotationToCompletion(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(),
+		ncAnn(annotations.State, annotations.StatePending, annotations.StartedAt, rfc(testNow.Add(-2*time.Minute))))
+	surgeClaim := testClaim("nc-new", time.Hour, ncNode(surgeNode))
+	pool := withReplicas(withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"})))
+	oldNode := testK8sNode(candNode, true, map[string]string{
+		karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old",
+	}, true)
+	rec := &fakeRecorder{}
+	r := newReconciler(t, testNow, rec, pool, cand, surgeClaim, oldNode,
+		testK8sNode(surgeNode, true, nil, false), placeholderPod(surgeNode, corev1.PodRunning))
+	r.Events = events.NewFakeRecorder(16)
+
+	// The surge is already Ready: this pass drains.
+	step(t, r, pool)
+
+	if got := getPool(t, r).Annotations[annotations.ActiveRotationState]; got != annotations.StateDraining {
+		t.Fatalf("active-rotation-state: got %q, want draining", got)
+	}
+	c := getClaimOrNil(t, r, "nc-old")
+	if c == nil || c.DeletionTimestamp == nil {
+		t.Fatal("the old NodeClaim must be deleted on a pool that turned static under an in-flight rotation")
+	}
+
+	// Karpenter finalizes the drained claim; the next pass completes the rotation.
+	c.Finalizers = nil
+	if err := r.Update(context.Background(), c); err != nil {
+		t.Fatalf("finalize claim: %v", err)
+	}
+	step(t, r, getPool(t, r))
+
+	p := getPool(t, r)
+	if p.Annotations[annotations.ActiveRotation] != "" || p.Annotations[annotations.ActiveRotationState] != "" {
+		t.Errorf("the anchor must be released at completion, got %v", p.Annotations)
+	}
+	if p.Annotations[annotations.LastRotationAt] == "" {
+		t.Error("last-rotation-at must be stamped on success")
+	}
+	if rec.success != 1 {
+		t.Errorf("success counted %d times, want 1", rec.success)
+	}
+	if placeholderExists(t, r) {
+		t.Error("the placeholder must be cleaned up at completion")
+	}
+	if n := getNodeObj(t, r, surgeNode); n.Annotations[annotations.SurgeFor] != "" {
+		t.Errorf("the surge node must be unfrozen, got %v", n.Annotations)
+	}
+}
+
+// advanceFailed treats a re-entry as a NEW attempt, and it runs above the step-1a
+// gate because the anchor sends the reconcile into advance() first. On a static
+// pool it must not hand the claim back to pending: that is the doomed placeholder
+// attempt this gate exists to prevent, repeated once per escalated backoff.
+func TestStaticNodePoolBlocksTheFailedRetry(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncAnn(
+		annotations.State, annotations.StateFailed,
+		annotations.FailedAt, rfc(testNow.Add(-2*time.Hour)),
+		annotations.RetryCount, "1"))
 	pool := withReplicas(withTGP(testNodePool(map[string]string{
 		annotations.ActiveRotation:      "nc-old",
-		annotations.ActiveRotationState: annotations.StatePending,
+		annotations.ActiveRotationState: annotations.StateFailed,
 	})))
 	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false))
 	r.Events = events.NewFakeRecorder(16)
 
 	step(t, r, pool)
 
-	if !placeholderExists(t, r) {
-		t.Error("an in-flight rotation must keep advancing on a pool that turned static")
+	if got := getClaimOrNil(t, r, "nc-old"); got == nil || got.Annotations[annotations.State] != annotations.StateFailed {
+		t.Errorf("a failed claim on a static pool must not re-enter pending, got %v", got.Annotations)
 	}
-	if got := getPool(t, r).Annotations[annotations.ActiveRotation]; got != "nc-old" {
-		t.Errorf("the in-flight anchor must survive, got %q", got)
+	if placeholderExists(t, r) {
+		t.Error("no placeholder may be created for the retry")
+	}
+	// The repair branch releases the anchor, so the pool falls through to the
+	// step-1a gate on the next pass instead of retrying forever.
+	if got := getPool(t, r).Annotations[annotations.ActiveRotation]; got != "" {
+		t.Errorf("the anchor must be released, got %q", got)
+	}
+	if got := getPool(t, r).Annotations[annotations.LastFailureAt]; got == "" {
+		t.Error("the failure pause anchor must be preserved by the repair branch")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -53,7 +54,7 @@ type poolWarnState struct {
 	shortLead    map[string]bool   // last-warned short-lead NodeClaim names
 	conflict     string            // last-warned policy-conflict detail ("" = none)
 	noCandidate  string            // last-logged no-candidate reason key ("" = none)
-	staticPool   bool              // already warned that the pool is static capacity
+	staticPool   types.UID         // UID of the NodePool already warned as static ("" = none)
 	phPending    map[string]string // NodeClaim name → last-logged "reason|message"
 }
 
@@ -165,23 +166,26 @@ func (w *warningEmitter) EmitConflict(ctx context.Context, pool *karpv1.NodePool
 // capacity NodePool (spec.replicas set), which the surge mechanism cannot rotate
 // (issue #302): the placeholder is pinned to its own NodePool by a required node
 // affinity, and Karpenter's provisioner does not consider static NodePools for
-// pending pods, so the placeholder can never be scheduled. Deduplicated on the
-// transition into the state — reconcileNodePool re-evaluates every longRequeue,
-// and the condition holds until an operator changes the NodePool or the policy's
-// selector, so an undeduplicated Event would repeat for as long as it is true.
+// pending pods, so the placeholder can never induce the replacement capacity.
+// Deduplicated on the NodePool's UID rather than a bare flag: Karpenter rejects
+// a transition between static and dynamic on an existing NodePool (a CEL rule on
+// spec.replicas), so the only way out of the condition is to delete the pool and
+// create a dynamic one. A delete and recreate under the same name may never
+// surface a NotFound reconcile for Forget to act on, and the new object must
+// still get its own warning.
 func (w *warningEmitter) EmitStaticNodePool(ctx context.Context, pool *karpv1.NodePool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	s := w.poolStateLocked(pool.Name)
-	if s.staticPool {
-		return // already warned and still static — no re-fire
+	if s.staticPool == pool.UID {
+		return // already warned for this NodePool — no re-fire
 	}
-	s.staticPool = true
+	s.staticPool = pool.UID
 	var replicas int64
 	if pool.Spec.Replicas != nil {
 		replicas = *pool.Spec.Replicas
 	}
-	msg := fmt.Sprintf("NodePool %s sets spec.replicas (Karpenter static capacity), which the surge rotation cannot serve: the surge placeholder is pinned to this NodePool and Karpenter's provisioner does not consider static NodePools for pending pods, so no rotation can ever complete. No rotation will be started for this NodePool; remove spec.replicas or exclude it from the RotationPolicy selector. Its nodes remain subject to Karpenter's forceful expiration.", pool.Name)
+	msg := fmt.Sprintf("NodePool %s sets spec.replicas (Karpenter static capacity), which the surge rotation cannot serve: the surge placeholder is pinned to this NodePool and Karpenter's provisioner does not consider static NodePools for pending pods, so no replacement capacity can be induced. No rotation will be started for this NodePool. Karpenter does not allow spec.replicas to be added to or removed from an existing NodePool, so the options are to migrate the workload to a dynamic NodePool or to exclude this one from the RotationPolicy selector. Its nodes remain subject to Karpenter's forceful expiration.", pool.Name)
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
 		"static NodePool cannot be rotated by surge; not starting a rotation", "replicas", replicas)
 	if w.events != nil {
@@ -189,13 +193,14 @@ func (w *warningEmitter) EmitStaticNodePool(ctx context.Context, pool *karpv1.No
 	}
 }
 
-// ClearStaticNodePool resets the static-capacity dedup state once the NodePool is
-// dynamic again, so a pool that is made static a second time re-fires its Event.
+// ClearStaticNodePool resets the static-capacity dedup state for a NodePool that
+// is not static, so a dynamic pool recreated as a static one under the same name
+// warns again.
 func (w *warningEmitter) ClearStaticNodePool(pool string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if s := w.state[pool]; s != nil {
-		s.staticPool = false
+		s.staticPool = ""
 	}
 }
 

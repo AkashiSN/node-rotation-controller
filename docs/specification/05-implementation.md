@@ -69,7 +69,7 @@ flowchart TD
 
 A NodePool with `spec.replicas` set can never complete a surge (§3.3), so no rotation is started for it: the pass warns once (`StaticNodePool`, §4.3) and requeues.
 
-The gate sits **after** the in-flight `advance()` and before every start gate, so a pool made static while a rotation is in flight still drives that rotation to completion — the alternative leaves a cordoned node and a placeholder with no path forward.
+The gate sits **after** the in-flight `advance()` and before every start gate, so an anchor written before the gate existed (by an earlier controller version — Karpenter itself rejects adding `spec.replicas` to a running NodePool) still drives that rotation to completion instead of stranding a cordoned node and a placeholder. `advance()`'s failed-retry branch is a new attempt and is closed on a static pool separately, so it releases the anchor rather than retrying the doomed attempt once per escalated backoff.
 
 ### Start gates (step 2)
 
@@ -234,7 +234,10 @@ advance(np, name):
           emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
-      if start_gates(np) and elapsed(cand.failed-at) >= escalated_backoff(cand)
+      # A retry is a NEW attempt: it must also clear the step-1a static gate,
+      # which this path sits above (the anchor entered advance() first).
+      if start_gates(np) and np.spec.replicas is unset
+         and elapsed(cand.failed-at) >= escalated_backoff(cand)
          and surge_headroom(np, cand):
           annotate(cand, state=pending)
           return advance(np, name)
