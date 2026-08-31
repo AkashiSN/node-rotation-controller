@@ -155,7 +155,7 @@ func TestStaticNodePoolDrivesAnInFlightRotationToCompletion(t *testing.T) {
 	}
 	c := getClaimOrNil(t, r, "nc-old")
 	if c == nil || c.DeletionTimestamp == nil {
-		t.Fatal("the old NodeClaim must be deleted on a pool that turned static under an in-flight rotation")
+		t.Fatal("the old NodeClaim must be deleted for an already-static pool carrying a pre-gate anchor")
 	}
 
 	// Karpenter finalizes the drained claim; the next pass completes the rotation.
@@ -201,7 +201,11 @@ func TestStaticNodePoolBlocksTheFailedRetry(t *testing.T) {
 
 	step(t, r, pool)
 
-	if got := getClaimOrNil(t, r, "nc-old"); got == nil || got.Annotations[annotations.State] != annotations.StateFailed {
+	got := getClaimOrNil(t, r, "nc-old")
+	if got == nil {
+		t.Fatal("the failed claim must still exist")
+	}
+	if got.Annotations[annotations.State] != annotations.StateFailed {
 		t.Errorf("a failed claim on a static pool must not re-enter pending, got %v", got.Annotations)
 	}
 	if placeholderExists(t, r) {
