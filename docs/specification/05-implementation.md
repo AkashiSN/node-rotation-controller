@@ -186,8 +186,13 @@ advance(np, name):
       if cand.deletionTimestamp != nil:      # force-expiry caught
           delete(placeholder(name))
           for node in nodes_with(surge-for=name): unfreeze(node)
-          annotate(cand, state=expired, clear=[started-at, surge-claim])
-          emit_metrics(expired); alert
+          # ONE conflict-checked write, only-if the claim is not already expired,
+          # reporting whether THIS pass made the transition. found is false when
+          # the claim finalized away first: nothing was written, so the anchor is
+          # left set and release_anchor above counts the abort instead (§5.2).
+          found, won := mark_expired(cand, clear=[started-at, surge-claim])
+          if not found: return Requeue(30s)
+          if won: emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
       annotate(cand, state=pending)
@@ -198,6 +203,8 @@ advance(np, name):
           for node in nodes_with(surge-for=name): unfreeze(node)
           annotate(cand, state=failed, failed-at=now, retry-count+=1,
                    clear=[started-at, surge-claim])
+          # the alert reports the retry-count this write produced, never the
+          # caller's cached copy of it
           emit_metrics(failure); alert
           annotate(np, last-failure-at=now, clear=anchor)
           return Requeue(1m)
@@ -230,8 +237,9 @@ advance(np, name):
 
   case failed:
       if cand.deletionTimestamp != nil:
-          annotate(cand, state=expired)
-          emit_metrics(expired); alert
+          found, won := mark_expired(cand)   # same conditional write as above
+          if not found: return Requeue(30s)
+          if won: emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
       # A retry is a NEW attempt: it must also clear the step-1a static gate,
@@ -260,12 +268,14 @@ Each state handler **re-asserts** its phase's desired state rather than performi
 - `pending` re-asserts freeze, cordon, placeholder existence on every pass
 - `draining` re-issues idempotent `delete` if `deletionTimestamp` is missing (crash between state write and delete)
 - completion re-runs its cleanup but **claims the rotation with a conditional write**: the anchor's release and the success/expired outcome are both decided from the fresh read that write is validated against, so a pass that arrives on a cached NodePool whose anchor was already released does the idempotent cleanup and emits nothing
+- the two transitions into `expired` claim their transition the same way, on the NodeClaim: a pass that arrives on a cached claim whose terminal state was already written cleans up, releases the anchor, and emits nothing
 
 ### Observability skews (accepted in v1)
 
 - **Mirror-to-delete gap:** a crash there followed by force-expiry records `success` (surge was reserved — practical outcome matches)
 - **Metric emission (completion):** emitted after the anchor-releasing write and only by the pass that performed it, so the counter, the histogram, the completion line and the Event fire once per released anchor. A crash between the write and the emission drops it (at-most-once)
-- **Metric emission (claim-scoped):** `failure` and the two `expired` rewrites follow a NodeClaim write that is conflict-checked but does **not** conditionally claim the transition — it rewrites the terminal state instead of vetoing when the durable state already names it. `abortPendingExpiry` and `advanceFailed` rewrite `expired` idempotently; `failPending` also increments `retry-count`, which is not. A stale re-entry therefore duplicates the emission, and for `failPending` the durable retry count with it. Alert rules using `increase(...)` tolerate both skews
+- **Metric emission (claim-scoped):** both transitions into `expired` — `abortPendingExpiry` and `advanceFailed`'s deletion branch — claim the transition with a conditional NodeClaim write, so `expired` is announced once by the pass that made it. That matches `advanceExpired`, which never re-announces a claim already terminal. A claim that finalized away before the write is left anchored so completion owns the outcome instead, and the reported retry count comes from the write that produced it
+- **`failed` state regression (open, issue #307):** `failure` is not claimed that way, and duplicate emission is not the exposure: `failPending` deletes `started-at`, so a pass re-entering on a stale `pending` view re-stamps it and the `readyTimeout` check no longer fires. What the re-entry does instead is rewrite the durable `failed` state back to `pending` with a fresh deadline, bypassing the escalated backoff that only `advanceFailed` enforces while `retry-count` keeps its incremented value. It needs both the pool and the claim view to lag; it is a state defect rather than a counting one, and is tracked separately
 
 ## 5.3 State Model
 
@@ -343,12 +353,12 @@ stateDiagram-v2
 | `pending` | each reconcile | `pending` | re-assert freeze + cordon; persist `surge-claim`; recreate placeholder if missing (held during freeze) |
 | `pending` | `surge_ready` | `draining` | freeze surge target; write `draining-at` + `surge-wait`; delete old NodeClaim |
 | `pending` | `readyTimeout` | `failed` | reap surge claim; delete placeholder; unfreeze; write `state=failed` + `last-failure-at`; clear anchor |
-| `pending` | force-expiring | `expired` | delete placeholder; unfreeze; write `state=expired`; emit expired; clear anchor |
+| `pending` | force-expiring | `expired` | delete placeholder; unfreeze; **claim** `state=expired` (conditional); emit expired once; clear anchor |
 | `draining` | no `deletionTimestamp` | `draining` | re-issue delete (crash recovery) |
 | `draining` | drain > `tGP + buffer` | `draining` | stuck-drain gauge; gate held |
 | `draining` | NodeClaim gone | *(success)* | unfreeze; write `last-rotation-at`; emit success; clear anchor |
 | `failed` | backoff + gates pass | `pending` | reset `state`; `started-at` re-stamped by new attempt |
-| `failed` | `deletionTimestamp` | `expired` | write `state=expired`; emit expired; clear anchor |
+| `failed` | `deletionTimestamp` | `expired` | **claim** `state=expired` (conditional); emit expired once; clear anchor |
 | `expired` | still anchored | `expired` | idempotent cleanup; clear anchor (metric not re-emitted) |
 
 :::

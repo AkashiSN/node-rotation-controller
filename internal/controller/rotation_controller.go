@@ -970,14 +970,22 @@ func (r *RotationReconciler) abortPendingExpiry(ctx context.Context, pool *karpv
 	if err := r.unfreezeNodes(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
-		m[annotations.State] = annotations.StateExpired
+	found, wrote, err := r.markExpired(ctx, cand.Name, func(m map[string]string) {
 		delete(m, annotations.StartedAt)
 		delete(m, annotations.SurgeClaim)
-	}); err != nil {
+	})
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	r.recorder().Expired(pool.Name, cand.Name)
+	if !found {
+		// The claim finalized away before this pass could mark it, so nothing here
+		// announced the abort. Leave the anchor set: the next pass finds no claim and
+		// completeOrAbort — which owns exactly that case — counts it once.
+		return ctrl.Result{RequeueAfter: shortRequeue}, nil
+	}
+	if wrote {
+		r.recorder().Expired(pool.Name, cand.Name)
+	}
 	if err := r.clearAnchor(ctx, pool); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1009,11 +1017,17 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 
 	// The retry-count annotation is the durable backoff state; it also feeds the
 	// recomputed noderotation_retry_count gauge (set in observe), so no separate
-	// gauge emission is needed here.
+	// gauge emission is needed here. retry is captured from inside the mutator, so
+	// the attempt number and next-attempt instant reported below are the values this
+	// write actually produced rather than the caller's cached copy, which may lag
+	// them (issue #307). The seed only survives for a claim that vanished before the
+	// write, where the mutator never runs.
+	retry := parseInt(cand.Annotations[annotations.RetryCount]) + 1
 	if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
 		m[annotations.State] = annotations.StateFailed
 		m[annotations.FailedAt] = rfc3339(r.now())
-		m[annotations.RetryCount] = strconv.Itoa(parseInt(m[annotations.RetryCount]) + 1)
+		retry = parseInt(m[annotations.RetryCount]) + 1
+		m[annotations.RetryCount] = strconv.Itoa(retry)
 		delete(m, annotations.StartedAt)
 		delete(m, annotations.SurgeClaim)
 	}); err != nil {
@@ -1023,7 +1037,6 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 
 	// Say why the attempt was rolled back, how many have been made, and when the
 	// next one becomes possible — the claim-scoped escalated backoff (issue #221).
-	retry := parseInt(cand.Annotations[annotations.RetryCount]) + 1
 	backoffUntil := r.now().Add(selection.EscalatedBackoff(retry, res.retryBackoff))
 	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation attempt failed",
@@ -1077,12 +1090,16 @@ func (r *RotationReconciler) advanceDraining(ctx context.Context, pool *karpv1.N
 // write by releasing the gate while preserving the pause anchor (spec §5.2).
 func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim) (ctrl.Result, error) {
 	if cand.DeletionTimestamp != nil {
-		if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
-			m[annotations.State] = annotations.StateExpired
-		}); err != nil {
+		found, wrote, err := r.markExpired(ctx, cand.Name, nil)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
-		r.recorder().Expired(pool.Name, cand.Name)
+		if !found { // as in abortPendingExpiry: completeOrAbort owns a vanished claim
+			return ctrl.Result{RequeueAfter: shortRequeue}, nil
+		}
+		if wrote {
+			r.recorder().Expired(pool.Name, cand.Name)
+		}
 		if err := r.clearAnchor(ctx, pool); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -1746,6 +1763,23 @@ func (r *RotationReconciler) patchPoolIf(ctx context.Context, pool *karpv1.NodeP
 // patchClaim applies an idempotent annotation mutation to the named NodeClaim
 // with retry-on-conflict. A vanished claim is a no-op.
 func (r *RotationReconciler) patchClaim(ctx context.Context, name string, mutate func(map[string]string)) error {
+	return r.patchClaimIf(ctx, name, func(m map[string]string) bool {
+		mutate(m)
+		return true
+	})
+}
+
+// patchClaimIf is patchClaim with a veto — the NodeClaim counterpart of
+// patchPoolIf, and there for the same reason (issue #307). The claim a handler
+// was called with is an informer-cache read, so only the read inside this loop
+// is authoritative, and only a write that succeeds against it proves this pass
+// made the transition it is about to announce. mutate reports whether its result
+// should be written; returning false skips the Update.
+//
+// A vanished claim is a no-op and mutate never runs, so a caller that must tell
+// "another pass already did it" from "the claim is gone" — two cases with
+// different owners of the outcome — records that from inside mutate.
+func (r *RotationReconciler) patchClaimIf(ctx context.Context, name string, mutate func(map[string]string) bool) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var c karpv1.NodeClaim
 		if err := r.Get(ctx, types.NamespacedName{Name: name}, &c); err != nil {
@@ -1754,9 +1788,38 @@ func (r *RotationReconciler) patchClaim(ctx context.Context, name string, mutate
 		if c.Annotations == nil {
 			c.Annotations = map[string]string{}
 		}
-		mutate(c.Annotations)
+		if !mutate(c.Annotations) {
+			return nil
+		}
 		return r.Update(ctx, &c)
 	})
+}
+
+// markExpired performs a transition INTO the terminal expired state and reports
+// who did what: found is false when the claim has already finalized away (nothing
+// was written), and wrote is true only when this pass made the transition and so
+// owns its announcement. extra carries the transition's other annotation edits.
+//
+// advanceExpired — the handler for a claim ALREADY expired — deliberately never
+// re-announces (spec §5.2). The veto extends that to the two paths that enter
+// expired, which a claim view taken before an earlier pass wrote would otherwise
+// announce a second time, overstating outcome="expired" exactly as the completion
+// path overstated outcome="success" (issues #304, #307).
+func (r *RotationReconciler) markExpired(ctx context.Context, name string, extra func(map[string]string)) (found, wrote bool, err error) {
+	err = r.patchClaimIf(ctx, name, func(m map[string]string) bool {
+		// RetryOnConflict re-runs this against a newer read, so both flags are derived
+		// from that read alone and never carried over from a losing attempt.
+		found, wrote = true, m[annotations.State] != annotations.StateExpired
+		if !wrote {
+			return false
+		}
+		m[annotations.State] = annotations.StateExpired
+		if extra != nil {
+			extra(m)
+		}
+		return true
+	})
+	return found, wrote, err
 }
 
 // patchNode applies a node mutator (applyFreeze/applyCordon/applyUnfreeze) with
