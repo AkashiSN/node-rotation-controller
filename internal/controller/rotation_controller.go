@@ -788,23 +788,41 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 		return r.abortPendingExpiry(ctx, pool, cand)
 	}
 
-	// Assert pending + write-once started-at (a single claim update). Capture the
-	// authoritative started-at from inside the mutator — either the value already
-	// present or the one we stamp this pass — so the readyTimeout check below never
-	// depends on a stale cache re-read. A cached Get that briefly lags this write
-	// would observe started-at empty, making now − parseTime("") trivially exceed
-	// readyTimeout and roll back a freshly selected candidate instantly (#95 item 3).
+	// Assert pending + write-once started-at (a single claim update), and only from
+	// the states advance() dispatches here on. The claim above is an informer-cache
+	// read, so a pass can arrive holding a `pending` view of a claim whose durable
+	// state has already moved on; asserting unconditionally would rewrite a rolled
+	// back `failed` claim as `pending`, restart its readyTimeout deadline with a
+	// fresh started-at and so bypass the escalated backoff only advanceFailed
+	// enforces — while retry-count keeps the value that escalation was based on
+	// (issue #307). Capture the authoritative started-at from inside the mutator —
+	// either the value already present or the one we stamp this pass — so the
+	// readyTimeout check below never depends on a stale cache re-read. A cached Get
+	// that briefly lags this write would observe started-at empty, making
+	// now − parseTime("") trivially exceed readyTimeout and roll back a freshly
+	// selected candidate instantly (#95 item 3).
 	var stampedStartedAt string
-	if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
+	wrote, err := r.patchClaimIf(ctx, cand.Name, func(m map[string]string) bool {
+		if st := m[annotations.State]; st != "" && st != annotations.StatePending {
+			return false
+		}
 		m[annotations.State] = annotations.StatePending
 		if m[annotations.StartedAt] == "" {
 			m[annotations.StartedAt] = rfc3339(r.now())
 		}
 		stampedStartedAt = m[annotations.StartedAt]
-	}); err != nil {
+		return true
+	})
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	cand, err := r.getClaim(ctx, cand.Name)
+	if wrote != claimWritten {
+		// Nothing was written, so this pass owns nothing and must touch none of the
+		// rotation's runtime objects: the claim has vanished, or the handler for the
+		// state it actually holds owns it and is reached on the next pass.
+		return ctrl.Result{RequeueAfter: shortRequeue}, nil
+	}
+	cand, err = r.getClaim(ctx, cand.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1147,10 +1165,25 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	if open && !staticPool(pool) &&
 		now.Sub(failedAt) >= selection.EscalatedBackoff(retry, res.retryBackoff) &&
 		headroomOK {
-		if err := r.patchClaim(ctx, cand.Name, func(m map[string]string) {
+		// Only from failed — the state this handler was dispatched on. That guard is
+		// also what bounds the re-entry below: advance() re-reads the claim through
+		// the cache, and a read still lagging this very write dispatches straight back
+		// here with every gate still open, which an unconditional write would answer
+		// by starting the attempt over, once per turn round the loop (issue #307).
+		wrote, err := r.patchClaimIf(ctx, cand.Name, func(m map[string]string) bool {
+			if m[annotations.State] != annotations.StateFailed {
+				return false
+			}
 			m[annotations.State] = annotations.StatePending
-		}); err != nil {
+			return true
+		})
+		if err != nil {
 			return ctrl.Result{}, err
+		}
+		if wrote != claimWritten {
+			// The claim vanished, or another pass already re-entered it and owns the
+			// attempt; either way this pass starts nothing.
+			return ctrl.Result{RequeueAfter: shortRequeue}, nil
 		}
 		return r.advance(ctx, pool, cand.Name, res) // falls into the pending handler, re-stamps started-at
 	}
