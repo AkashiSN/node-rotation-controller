@@ -71,9 +71,15 @@ func TestEveryEventReasonIsInTheOperationsTable(t *testing.T) {
 //
 //   - a reason* constant, resolved to its value;
 //   - a string literal, taken as-is;
-//   - a Finding's .Code, which stands for every Warn finding EmitFindings turns
-//     into an Event. Fatal findings are excluded deliberately: §4.3 states they
-//     are not Events but block rotation start.
+//   - <ident>.Code inside EmitFindings, which stands for every Warn finding that
+//     function turns into an Event. Fatal findings are excluded deliberately:
+//     §4.3 states they are not Events but block rotation start.
+//
+// The .Code form is pinned to EmitFindings rather than accepted from any
+// receiver, because without type information `.Code` alone does not say the value
+// came from a Finding: a future policy.Code would otherwise be silently read as
+// the whole Warn set, and its own missing row would pass. Renaming EmitFindings
+// fails this test, which is the intended prompt to re-check what the guard reads.
 func emittedReasons(t *testing.T) map[string]bool {
 	t.Helper()
 	consts := reasonConstants(t, ".")
@@ -83,53 +89,61 @@ func emittedReasons(t *testing.T) map[string]bool {
 	calls := 0
 	for path, file := range parseDir(t, ".") {
 		fset := file.fset
-		ast.Inspect(file.f, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+		for _, decl := range file.f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Eventf" {
-				return true
-			}
-			calls++
-			// Eventf(object, related, eventtype, reason, action, note, args...)
-			const reasonArg = 3
-			if len(call.Args) <= reasonArg {
-				t.Errorf("%s: Eventf call with %d args; did the reason argument move?",
-					fset.Position(call.Pos()), len(call.Args))
-				return true
-			}
-			switch v := call.Args[reasonArg].(type) {
-			case *ast.Ident:
-				value, known := consts[v.Name]
-				if !known {
-					t.Errorf("%s: Eventf reason %s is not a reason* string constant of this package, so this guard cannot tell which Event it raises",
-						fset.Position(v.Pos()), v.Name)
+			enclosing := fn.Name.Name
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
 					return true
 				}
-				out[value] = true
-			case *ast.BasicLit:
-				if v.Kind != token.STRING {
-					t.Errorf("%s: Eventf reason is a non-string literal", fset.Position(v.Pos()))
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Eventf" {
 					return true
 				}
-				out[mustUnquote(t, path, v.Value)] = true
-			case *ast.SelectorExpr:
-				if v.Sel.Name != "Code" {
-					t.Errorf("%s: Eventf reason is the field %s, which this guard does not understand",
-						fset.Position(v.Pos()), v.Sel.Name)
+				calls++
+				// Eventf(object, related, eventtype, reason, action, note, args...)
+				const reasonArg = 3
+				if len(call.Args) <= reasonArg {
+					t.Errorf("%s: Eventf call with %d args; did the reason argument move?",
+						fset.Position(call.Pos()), len(call.Args))
 					return true
 				}
-				for _, c := range warn {
-					out[c] = true
+				switch v := call.Args[reasonArg].(type) {
+				case *ast.Ident:
+					value, known := consts[v.Name]
+					if !known {
+						t.Errorf("%s: Eventf reason %s is not a reason* string constant of this package, so this guard cannot tell which Event it raises",
+							fset.Position(v.Pos()), v.Name)
+						return true
+					}
+					out[value] = true
+				case *ast.BasicLit:
+					if v.Kind != token.STRING {
+						t.Errorf("%s: Eventf reason is a non-string literal", fset.Position(v.Pos()))
+						return true
+					}
+					out[mustUnquote(t, path, v.Value)] = true
+				case *ast.SelectorExpr:
+					_, plainReceiver := v.X.(*ast.Ident)
+					if v.Sel.Name != "Code" || !plainReceiver || enclosing != "EmitFindings" {
+						t.Errorf("%s: Eventf reason is a field selector this guard does not understand; only a Finding's .Code inside EmitFindings stands for the Warn findings",
+							fset.Position(v.Pos()))
+						return true
+					}
+					for _, c := range warn {
+						out[c] = true
+					}
+				default:
+					t.Errorf("%s: Eventf reason is an expression this guard cannot read; pass a reason* constant so the Event stays checkable",
+						fset.Position(call.Args[reasonArg].Pos()))
 				}
-			default:
-				t.Errorf("%s: Eventf reason is an expression this guard cannot read; pass a reason* constant so the Event stays checkable",
-					fset.Position(call.Args[reasonArg].Pos()))
-			}
-			return true
-		})
+				return true
+			})
+		}
 	}
 	if calls == 0 {
 		t.Fatal("found no Eventf calls; did the recorder's method name change?")
@@ -188,6 +202,9 @@ func warnFindingCodes(t *testing.T, dir string) []string {
 				out = append(out, code)
 			}
 		}
+		// The elided elements of a []Finding are read through their parent, so
+		// they are not the unrecognized literals the fallback below is about.
+		viaParent := map[*ast.CompositeLit]bool{}
 		ast.Inspect(file.f, func(n ast.Node) bool {
 			lit, ok := n.(*ast.CompositeLit)
 			if !ok {
@@ -197,19 +214,27 @@ func warnFindingCodes(t *testing.T, dir string) []string {
 			case *ast.Ident:
 				if typ.Name == "Finding" {
 					read(lit)
-				}
-			case *ast.ArrayType:
-				id, isIdent := typ.Elt.(*ast.Ident)
-				if !isIdent || id.Name != "Finding" {
 					return true
 				}
-				// Only the elided elements are read here; a typed Finding{...}
-				// element is visited on its own by this walk.
-				for _, el := range lit.Elts {
-					if e, isLit := el.(*ast.CompositeLit); isLit && e.Type == nil {
-						read(e)
+			case *ast.ArrayType:
+				if id, isIdent := typ.Elt.(*ast.Ident); isIdent && id.Name == "Finding" {
+					// Only the elided elements are read here; a typed Finding{...}
+					// element is visited on its own by this walk.
+					for _, el := range lit.Elts {
+						if e, isLit := el.(*ast.CompositeLit); isLit && e.Type == nil {
+							viaParent[e] = true
+							read(e)
+						}
 					}
+					return true
 				}
+			}
+			// Not a shape this walk reads. Ignoring it silently is how a finding
+			// disappears, so a literal that is Finding-shaped — a named type or an
+			// alias over Finding, say — fails here instead of vanishing.
+			if !viaParent[lit] && hasFindingFields(lit) {
+				t.Errorf("%s: Finding-shaped literal of a type this guard does not read; give it the Finding or []Finding form, or teach this walk the new one",
+					fset.Position(lit.Pos()))
 			}
 			return true
 		})
@@ -263,6 +288,21 @@ func findingSeverityAndCode(t *testing.T, fset *token.FileSet, lit *ast.Composit
 		return "", "", false
 	}
 	return severity, code, true
+}
+
+// hasFindingFields reports whether a composite literal keys any field a Finding
+// has, which is how an unrecognized literal is spotted as one.
+func hasFindingFields(lit *ast.CompositeLit) bool {
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if key, ok := kv.Key.(*ast.Ident); ok && (key.Name == "Severity" || key.Name == "Code") {
+			return true
+		}
+	}
+	return false
 }
 
 // reasonsInEventTable reads the backticked identifiers out of the Reason column
