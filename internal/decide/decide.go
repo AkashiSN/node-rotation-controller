@@ -1,6 +1,7 @@
 // Package decide holds the pure rotation decisions the reconcile loop makes: may a
-// rotation start now (the §5.2 start gates), and must the picked candidate take the
-// window-bounded surge-less path (ADR-0001). They read nothing but annotations,
+// rotation start now (the §5.2 start gates), must the picked candidate take the
+// window-bounded surge-less path (ADR-0001), and did the maintenance window just
+// close with candidates unrotated (§4.2). They read nothing but annotations,
 // resolved durations and the clock — no client, no recorder, no metrics — so the
 // policy simulator (which compiles to wasm) calls the very same functions the
 // controller does, and the two cannot drift.
