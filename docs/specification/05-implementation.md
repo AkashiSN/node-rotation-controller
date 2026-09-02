@@ -400,6 +400,7 @@ Rules:
 - An anchored NodePool is **not stale** — step 1 resumes it normally
 - `failed`/`expired` claims keep their annotations (backoff re-entry / terminal marker)
 - A `pending`/`draining` claim with no anchor (impossible from any crash point) → **claim** `state=failed` from `pending`/`draining` (conditional) + alert, both only when that write lands. The sweep selects from a List — a cache read — and writes later; a claim finalized away in that window, or one whose durable state has already left those two, was repaired by nothing here, so nothing is written and nothing is announced. Unlike the reconcile paths there is no anchor to hand the outcome to: having none is what selected the claim
+- Every line the sweep logs names work it performed. The placeholder delete and the node reversal are no-ops when the object vanished in the same List-to-write window as above, or when its markers had already been reversed, and announce nothing then. The line also names the reversal applied — *unfroze* for a surge-frozen node, *uncordoned* for a cordon-only one, which was never frozen and belongs to no claim
 - An orphaned `active-rotation-state` without anchor → simply removed
 - Best-effort: per-item errors logged, never fatal
 

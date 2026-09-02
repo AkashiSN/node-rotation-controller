@@ -1012,7 +1012,7 @@ func (r *RotationReconciler) abortPendingExpiry(ctx context.Context, pool *karpv
 		r.recorder().Expired(pool.Name, cand.Name)
 	}
 	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
-	if err := r.deletePlaceholder(ctx, cand.Name); err != nil {
+	if _, err := r.deletePlaceholder(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.unfreezeNodes(ctx, cand.Name); err != nil {
@@ -1040,7 +1040,7 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 	if err := r.reapSurgeClaim(ctx, cand, surgeClaim); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.deletePlaceholder(ctx, cand.Name); err != nil {
+	if _, err := r.deletePlaceholder(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.unfreezeNodes(ctx, cand.Name); err != nil {
@@ -1204,7 +1204,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 // anchored (crash between the terminal write and the pool clear) and releases the
 // gate; the metric/alert are NOT re-emitted (spec §5.2).
 func (r *RotationReconciler) advanceExpired(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (ctrl.Result, error) {
-	if err := r.deletePlaceholder(ctx, cand.Name); err != nil {
+	if _, err := r.deletePlaceholder(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.unfreezeNodes(ctx, cand.Name); err != nil {
@@ -1240,7 +1240,7 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 	// Recover the surge node for the completion line BEFORE unfreezeNodes strips its
 	// surge-for marker (#228). "" on the surge-less forceful-fallback path.
 	surgeNode := r.surgeHostFor(ctx, name)
-	if err := r.deletePlaceholder(ctx, name); err != nil {
+	if _, err := r.deletePlaceholder(ctx, name); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.unfreezeNodes(ctx, name); err != nil {
@@ -1743,7 +1743,7 @@ func (r *RotationReconciler) reapUngovernedRotation(ctx context.Context, pool *k
 	// policy-conflict caller deliberately keeps it (to dedup the conflict itself),
 	// and would otherwise retain this claim's key forever (issue #221).
 	r.warn().ClearPlaceholderPending(pool.Name, claim)
-	if err := r.deletePlaceholder(ctx, claim); err != nil {
+	if _, err := r.deletePlaceholder(ctx, claim); err != nil {
 		return err
 	}
 	if err := r.unfreezeNodes(ctx, claim); err != nil {
@@ -1927,9 +1927,16 @@ func (r *RotationReconciler) markExpired(ctx context.Context, name string, extra
 
 // patchNode applies a node mutator (applyFreeze/applyCordon/applyUnfreeze) with
 // retry-on-conflict, skipping the Update when nothing changed. A vanished node is
-// a no-op.
-func (r *RotationReconciler) patchNode(ctx context.Context, nodeName string, mutate func(*corev1.Node) bool) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+// a no-op. It reports whether it wrote, for callers that announce the change.
+func (r *RotationReconciler) patchNode(ctx context.Context, nodeName string, mutate func(*corev1.Node) bool) (bool, error) {
+	// As in patchClaimIf, the report is produced here and reset at the top of every
+	// attempt, never taken from the mutator: an attempt whose Update conflicts can
+	// be followed by one whose Get finds the node gone, and the mutator does not run
+	// on that second attempt. "There was something to reverse" on the losing attempt
+	// says nothing about the node the retry found (issues #307, #313).
+	wrote := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		wrote = false
 		var n corev1.Node
 		if err := r.Get(ctx, types.NamespacedName{Name: nodeName}, &n); err != nil {
 			return client.IgnoreNotFound(err)
@@ -1937,22 +1944,29 @@ func (r *RotationReconciler) patchNode(ctx context.Context, nodeName string, mut
 		if !mutate(&n) {
 			return nil
 		}
-		return r.Update(ctx, &n)
+		if err := r.Update(ctx, &n); err != nil {
+			return err
+		}
+		wrote = true
+		return nil
 	})
+	return wrote, err
 }
 
 func (r *RotationReconciler) freezeNode(ctx context.Context, nodeName, claimName string) error {
 	if nodeName == "" {
 		return nil
 	}
-	return r.patchNode(ctx, nodeName, func(n *corev1.Node) bool { return applyFreeze(n, claimName) })
+	_, err := r.patchNode(ctx, nodeName, func(n *corev1.Node) bool { return applyFreeze(n, claimName) })
+	return err
 }
 
 func (r *RotationReconciler) cordonNode(ctx context.Context, nodeName string) error {
 	if nodeName == "" {
 		return nil
 	}
-	return r.patchNode(ctx, nodeName, applyCordon)
+	_, err := r.patchNode(ctx, nodeName, applyCordon)
+	return err
 }
 
 // unfreezeNodes reverses the freeze/cordon on every node carrying this rotation's
@@ -1966,7 +1980,7 @@ func (r *RotationReconciler) unfreezeNodes(ctx context.Context, claimName string
 		if nodes.Items[i].Annotations[annotations.SurgeFor] != claimName {
 			continue
 		}
-		if err := r.patchNode(ctx, nodes.Items[i].Name, applyUnfreeze); err != nil {
+		if _, err := r.patchNode(ctx, nodes.Items[i].Name, applyUnfreeze); err != nil {
 			return err
 		}
 	}
@@ -1999,11 +2013,22 @@ func (r *RotationReconciler) surgeHostFor(ctx context.Context, claimName string)
 	return host
 }
 
-func (r *RotationReconciler) deletePlaceholder(ctx context.Context, claimName string) error {
+// deletePlaceholder removes the claim's placeholder Pod and reports whether the
+// Delete found one, for callers that announce the removal. A Pod already gone —
+// deleted by an earlier pass, by another instance's rollback, or by an operator —
+// is a no-op, not an error.
+func (r *RotationReconciler) deletePlaceholder(ctx context.Context, claimName string) (bool, error) {
 	ph := &corev1.Pod{}
 	ph.Namespace = r.Namespace
 	ph.Name = surge.PlaceholderName(claimName)
-	return client.IgnoreNotFound(r.Delete(ctx, ph))
+	err := r.Delete(ctx, ph)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *RotationReconciler) getPlaceholder(ctx context.Context, claimName string) (*corev1.Pod, error) {

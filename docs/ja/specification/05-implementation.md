@@ -399,6 +399,7 @@ stateDiagram-v2
 - anchor がある NodePool は **陳腐化していない** — ステップ 1 が通常通り再開
 - `failed`/`expired` claim はアノテーションを保持（バックオフ再入 / 終端マーカー）
 - anchor なしの `pending`/`draining` claim（クラッシュポイントからは不可能）→ `pending`/`draining` から `state=failed` を**主張**（条件付き）+ アラート。どちらもその書き込みが成立したときにのみ行う。sweep は List（キャッシュ読み）から選択し、書き込みはその後になる。その窓で finalize された claim や、永続状態が既にその 2 状態を離れた claim は、ここでは何も修復していないので、何も書かず何も発行しない。reconcile の各経路と違い、結果を引き渡す anchor は存在しない — anchor を持たないことがこの claim を選んだ理由だからである
+- sweep が出すログ行は、いずれもその sweep が実際に行った作業を指す。placeholder の削除も node のマーカー解除も、上と同じ List から書き込みまでの窓でオブジェクトが消えていた場合や、マーカーが既に解除済みだった場合には no-op であり、そのときは何も発行しない。行はさらに、適用した解除の種類を名指す — surge で凍結されたノードなら *unfroze*、cordon のみのノード（凍結されたことがなく、どの claim にも属さない）なら *uncordoned*
 - anchor なしの孤立 `active-rotation-state` → 単純に削除
 - ベストエフォート: アイテムごとのエラーはログ、fatal にしない
 

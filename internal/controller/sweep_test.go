@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -505,5 +506,231 @@ func TestSweepLogsTheStateItActuallyRepaired(t *testing.T) {
 	}
 	if !containsLine(lines, "failed un-anchored in-flight claim", `"state"="draining"`) {
 		t.Errorf(`the line must name the state the write found, not the stale List value; lines = %v`, lines)
+	}
+}
+
+// --- announcement follows the write ----------------------------------------
+//
+// The claim leg above announces only the repair its write performed (issue
+// #311). Its two neighbours reach the same window from the other side: each
+// calls something that is a no-op when the object vanished or already held the
+// desired state, and a line placed after such a call names work this sweep did
+// not do (issue #313).
+
+// deletedUnderneathFirstPodDelete deletes the placeholder on the sweep's own
+// Delete and answers it NotFound — the window between the Pod List and the
+// Delete, which a completeOrAbort on another instance's watch, or an operator,
+// can close first.
+func deletedUnderneathFirstPodDelete() interceptor.Funcs {
+	first := true
+	return interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			p, ok := obj.(*corev1.Pod)
+			if !ok || !first {
+				return c.Delete(ctx, obj, opts...)
+			}
+			first = false
+			if err := client.IgnoreNotFound(c.Delete(ctx, p)); err != nil {
+				return err
+			}
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "pods"}, p.Name)
+		},
+	}
+}
+
+func TestSweepAnnouncesNoDeleteForAPlaceholderThatVanished(t *testing.T) {
+	r := newFlakyReconciler(t, nil, deletedUnderneathFirstPodDelete(),
+		testNodePool(nil),
+		placeholderPod(surgeNode, corev1.PodRunning),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("a placeholder someone else deleted is not a sweep error: %v", err)
+	}
+
+	if placeholderExists(t, r) {
+		t.Fatal("test did not exercise the window: the Pod must be gone by the Delete")
+	}
+	if containsLine(lines, "deleted orphaned placeholder") {
+		t.Errorf("the sweep announced a delete it did not perform; lines = %v", lines)
+	}
+}
+
+// The gate is only worth having if the line still fires for a placeholder this
+// sweep really deleted.
+func TestSweepLogsThePlaceholderItDeleted(t *testing.T) {
+	r := newReconciler(t, testNow, nil,
+		testNodePool(nil),
+		placeholderPod(surgeNode, corev1.PodRunning),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	if placeholderExists(t, r) {
+		t.Fatal("orphaned placeholder should have been deleted")
+	}
+	if !containsLine(lines, "deleted orphaned placeholder", `"claim"="nc-old"`) {
+		t.Errorf("a delete the sweep performed must be announced; lines = %v", lines)
+	}
+}
+
+// vanishOnFirstNodeGet deletes the node on the first Node Get — the one
+// patchNode makes — and answers it NotFound, which is what the sweep sees when
+// the node is gone by the time it writes.
+func vanishOnFirstNodeGet() interceptor.Funcs {
+	first := true
+	return interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Node); !ok || !first {
+				return c.Get(ctx, key, obj, opts...)
+			}
+			first = false
+			var live corev1.Node
+			if err := c.Get(ctx, key, &live); err != nil {
+				return err
+			}
+			if err := client.IgnoreNotFound(c.Delete(ctx, &live)); err != nil {
+				return err
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+}
+
+func TestSweepAnnouncesNoUnfreezeForANodeThatVanished(t *testing.T) {
+	r := newFlakyReconciler(t, nil, vanishOnFirstNodeGet(),
+		testNodePool(nil),
+		frozenNode(),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("a node that vanished is not a sweep error: %v", err)
+	}
+
+	var gone corev1.Node
+	if err := r.Get(context.Background(), types.NamespacedName{Name: surgeNode}, &gone); !apierrors.IsNotFound(err) {
+		t.Fatalf("test did not exercise the window: the node must be gone by the write, got %v", err)
+	}
+	if containsLine(lines, "unfroze orphaned node") {
+		t.Errorf("the sweep announced an unfreeze of a node that no longer exists; lines = %v", lines)
+	}
+}
+
+// staleNodeList stamps claim's surge-for marker onto every listed Node whatever
+// the node durably holds — the lagging List the sweep selects from.
+func staleNodeList(claim string) interceptor.Funcs {
+	return interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			l, ok := list.(*corev1.NodeList)
+			if !ok {
+				return nil
+			}
+			for i := range l.Items {
+				if l.Items[i].Annotations == nil {
+					l.Items[i].Annotations = map[string]string{}
+				}
+				l.Items[i].Annotations[annotations.SurgeFor] = claim
+			}
+			return nil
+		},
+	}
+}
+
+func TestSweepAnnouncesNoUnfreezeForANodeAlreadyClear(t *testing.T) {
+	// The List reports a surge-for marker the node no longer carries — an
+	// earlier instance's rollback, or this controller's own previous run, got
+	// there first — so the mutator finds nothing to reverse and skips the Update.
+	r := newFlakyReconciler(t, nil, staleNodeList("nc-old"),
+		testNodePool(nil),
+		testK8sNode(surgeNode, true, nil, false),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	if containsLine(lines, "unfroze orphaned node") {
+		t.Errorf("the sweep announced an unfreeze of a node whose markers were already clear; lines = %v", lines)
+	}
+}
+
+// A sweep line names the reversal it applied. A cordon-only node was never
+// frozen — it has no surge-for marker and belongs to no claim — so reporting it
+// as an unfreeze, with an empty claim, describes work of a kind the sweep did
+// not do on it.
+func TestSweepNamesTheReversalItApplied(t *testing.T) {
+	r := newReconciler(t, testNow, nil,
+		testNodePool(nil),
+		frozenNode(),
+		testK8sNode(candNode, true, map[string]string{annotations.Cordoned: "true"}, true),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	if !containsLine(lines, "unfroze orphaned node", `"node"="`+surgeNode+`"`, `"claim"="nc-old"`) {
+		t.Errorf("the surge-frozen node's unfreeze must be announced with its claim; lines = %v", lines)
+	}
+	if !containsLine(lines, "uncordoned orphaned node", `"node"="`+candNode+`"`) {
+		t.Errorf("the cordon-only node's uncordon must be announced; lines = %v", lines)
+	}
+	if containsLine(lines, "unfroze orphaned node", `"node"="`+candNode+`"`) {
+		t.Errorf("a cordon-only node was never frozen, so it cannot be unfrozen; lines = %v", lines)
+	}
+}
+
+// vanishWithConflictOnFirstNodeUpdate deletes the node on its first Update and
+// answers with the Conflict a stale resourceVersion would draw, so RetryOnConflict
+// runs a second attempt whose Get finds the node gone and whose mutator therefore
+// never runs.
+func vanishWithConflictOnFirstNodeUpdate() interceptor.Funcs {
+	first := true
+	return interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			n, ok := obj.(*corev1.Node)
+			if !ok || !first {
+				return c.Update(ctx, obj, opts...)
+			}
+			first = false
+			if err := client.IgnoreNotFound(c.Delete(ctx, n)); err != nil {
+				return err
+			}
+			return apierrors.NewConflict(
+				schema.GroupResource{Resource: "nodes"}, n.Name,
+				errors.New("simulated stale resourceVersion"))
+		},
+	}
+}
+
+// The same shape that made a conditional claim write announce a claim it had not
+// written (issue #307): the report must be produced by the Update, not by the
+// mutator's verdict on an attempt that then lost. A mutator that reported "yes,
+// there is something to reverse" on the losing attempt says nothing about the
+// node the retry found gone.
+func TestPatchNodeReportsNoWriteWhenTheNodeVanishesDuringTheRetry(t *testing.T) {
+	r := newFlakyReconciler(t, nil, vanishWithConflictOnFirstNodeUpdate(), frozenNode())
+
+	wrote, err := r.patchNode(context.Background(), surgeNode, applyUnfreeze)
+
+	if err != nil {
+		t.Fatalf("a node that vanished mid-retry is a no-op, not an error: %v", err)
+	}
+	var gone corev1.Node
+	if err := r.Get(context.Background(), types.NamespacedName{Name: surgeNode}, &gone); !apierrors.IsNotFound(err) {
+		t.Fatalf("test did not exercise the window: the node must be gone by the retry, got %v", err)
+	}
+	if wrote {
+		t.Error("patchNode reported a write for a node that no longer exists")
 	}
 }

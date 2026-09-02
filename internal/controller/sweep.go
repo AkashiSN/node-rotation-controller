@@ -94,8 +94,16 @@ func (r *RotationReconciler) sweepPlaceholders(ctx context.Context, logger logr.
 		if claim == "" || anchored[claim] {
 			continue
 		}
-		if err := r.deletePlaceholder(ctx, claim); err != nil {
+		// The List is a cache read and the Delete lands after it, so the Pod can be
+		// gone by then — deleted by another instance's rollback or by an operator.
+		// That is a no-op, not an error, and not this sweep's repair to report
+		// (issue #313).
+		deleted, err := r.deletePlaceholder(ctx, claim)
+		if err != nil {
 			errs = append(errs, err)
+			continue
+		}
+		if !deleted {
 			continue
 		}
 		logger.Info("deleted orphaned placeholder", "claim", claim, "pod", pods.Items[i].Name)
@@ -134,11 +142,25 @@ func (r *RotationReconciler) sweepNodes(ctx context.Context, logger logr.Logger,
 		if !surged {
 			mutate = applyUncordon
 		}
-		if err := r.patchNode(ctx, n.Name, mutate); err != nil {
+		// Same window as the placeholder leg: the node can be gone by the write, or
+		// its markers already reversed by an earlier run, and patchNode skips the
+		// Update in both cases. Announce only what this pass wrote, and name the
+		// reversal it applied — a cordon-only node was never frozen, so reporting it
+		// as an unfreeze (with an empty claim) describes work of a kind the sweep did
+		// not do on it (issue #313).
+		wrote, err := r.patchNode(ctx, n.Name, mutate)
+		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		logger.Info("unfroze orphaned node", "node", n.Name, "claim", claim)
+		if !wrote {
+			continue
+		}
+		if surged {
+			logger.Info("unfroze orphaned node", "node", n.Name, "claim", claim)
+		} else {
+			logger.Info("uncordoned orphaned node", "node", n.Name)
+		}
 	}
 	return errors.Join(errs...)
 }
