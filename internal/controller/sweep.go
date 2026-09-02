@@ -90,17 +90,55 @@ func (r *RotationReconciler) sweepPlaceholders(ctx context.Context, logger logr.
 	}
 	var errs []error
 	for i := range pods.Items {
-		claim := pods.Items[i].Labels[annotations.SurgeFor]
+		p := &pods.Items[i]
+		claim := p.Labels[annotations.SurgeFor]
 		if claim == "" || anchored[claim] {
 			continue
 		}
-		if err := r.deletePlaceholder(ctx, claim); err != nil {
+		// Delete the Pod the label selected, not one named from the label. The
+		// reconcile paths address their placeholder by its deterministic name, but
+		// the sweep's predicate is the label, and a Pod carrying it under any other
+		// name — an operator's copy of the manifest, a leftover from a rename — is
+		// exactly what the sweep exists to clean up. Rebuilding the canonical name
+		// here would delete a different object, or none, while the line named the
+		// one that was listed (issue #313).
+		deleted, err := r.deleteSelected(ctx, p)
+		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		logger.Info("deleted orphaned placeholder", "claim", claim, "pod", pods.Items[i].Name)
+		if !deleted {
+			continue
+		}
+		logger.Info("deleted orphaned placeholder", "claim", claim, "pod", p.Name)
 	}
 	return errors.Join(errs...)
+}
+
+// deleteSelected deletes exactly the object the sweep listed and reports whether
+// this call removed it.
+//
+// The List is a cache read and the Delete lands after it. A Pod already gone —
+// deleted by a rollback or by an operator — was removed by someone else; a Pod
+// replaced under the same name is a different object, which the UID precondition
+// turns into a Conflict rather than a delete of something the sweep never
+// selected. Neither is an error: in both cases the object this snapshot chose is
+// gone, and a replacement is not it — should the replacement carry an orphaned
+// label of its own, it belongs to a later sweep, not this pass, which runs once
+// and is never retried.
+func (r *RotationReconciler) deleteSelected(ctx context.Context, p *corev1.Pod) (bool, error) {
+	var opts []client.DeleteOption
+	if p.UID != "" {
+		opts = append(opts, client.Preconditions{UID: &p.UID})
+	}
+	err := r.Delete(ctx, p, opts...)
+	switch {
+	case apierrors.IsNotFound(err), apierrors.IsConflict(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
 }
 
 // sweepNodes reverses the freeze/cordon on every node whose controller markers
@@ -127,18 +165,57 @@ func (r *RotationReconciler) sweepNodes(ctx context.Context, logger logr.Logger,
 		case !surged && !cordoned:
 			continue
 		}
-		// A surge-for node is unfrozen (applyUnfreeze removes its do-not-disrupt
-		// only if the owned marker attributes it to the controller); a cordon-only
-		// node only has its cordon lifted.
-		mutate := applyUnfreeze
-		if !surged {
-			mutate = applyUncordon
-		}
-		if err := r.patchNode(ctx, n.Name, mutate); err != nil {
+		// The List above selected this node; only the read the write is validated
+		// against says what there was to reverse. So the predicate is re-applied
+		// there, the mutator is chosen there, and the line is described from there
+		// (issue #313, mirroring the claim leg's #311 fix):
+		//
+		//   - markers that read shows belong to an anchored rotation (against the
+		//     anchor set captured when the sweep started) are current, not orphaned,
+		//     and the rotation that owns them is not the sweep's to undo;
+		//   - a node the List reported as surge-frozen can be cordon-only by then,
+		//     and a cordon-only node was never frozen and belongs to no claim, so
+		//     reporting it as an unfreeze names work of a kind the sweep did not do;
+		//   - unfroze/frozenFor are set at the top of every attempt and read only
+		//     when the write landed, so a losing attempt never describes the winning
+		//     one (the shape of #307).
+		var unfroze bool
+		var frozenFor string
+		wrote, err := r.patchNode(ctx, n.Name, func(fresh *corev1.Node) bool {
+			unfroze, frozenFor = false, ""
+			claim, surged := fresh.Annotations[annotations.SurgeFor]
+			_, cordoned := fresh.Annotations[annotations.Cordoned]
+			switch {
+			case surged && anchored[claim]:
+				return false
+			case !surged && !cordoned:
+				return false
+			}
+			// applyUnfreeze removes do-not-disrupt only if the owned marker attributes
+			// it to the controller; a cordon-only node only has its cordon lifted.
+			if !surged {
+				return applyUncordon(fresh)
+			}
+			unfroze, frozenFor = true, claim
+			return applyUnfreeze(fresh)
+		})
+		switch {
+		case apierrors.IsNotFound(err):
+			// Gone between patchNode's read and its Update — the same non-event as a
+			// node already gone by the read, which patchNode absorbs, and the same
+			// second half of the window the claim leg treats this way (issue #311).
+			continue
+		case err != nil:
 			errs = append(errs, err)
 			continue
+		case !wrote:
+			continue
 		}
-		logger.Info("unfroze orphaned node", "node", n.Name, "claim", claim)
+		if unfroze {
+			logger.Info("unfroze orphaned node", "node", n.Name, "claim", frozenFor)
+		} else {
+			logger.Info("uncordoned orphaned node", "node", n.Name)
+		}
 	}
 	return errors.Join(errs...)
 }

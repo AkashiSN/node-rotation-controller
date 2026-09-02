@@ -1926,10 +1926,20 @@ func (r *RotationReconciler) markExpired(ctx context.Context, name string, extra
 }
 
 // patchNode applies a node mutator (applyFreeze/applyCordon/applyUnfreeze) with
-// retry-on-conflict, skipping the Update when nothing changed. A vanished node is
-// a no-op.
-func (r *RotationReconciler) patchNode(ctx context.Context, nodeName string, mutate func(*corev1.Node) bool) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+// retry-on-conflict, skipping the Update when nothing changed. A node already gone
+// by the Get is a no-op; one that vanishes between the Get and the Update surfaces
+// its NotFound to the caller, which is a retryable error on the reconcile paths
+// and a non-event for the startup sweep (see sweepNodes). It reports whether it
+// wrote, for callers that announce the change.
+func (r *RotationReconciler) patchNode(ctx context.Context, nodeName string, mutate func(*corev1.Node) bool) (bool, error) {
+	// As in patchClaimIf, the report is produced here and reset at the top of every
+	// attempt, never taken from the mutator: an attempt whose Update conflicts can
+	// be followed by one whose Get finds the node gone, and the mutator does not run
+	// on that second attempt. "There was something to reverse" on the losing attempt
+	// says nothing about the node the retry found (issues #307, #313).
+	wrote := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		wrote = false
 		var n corev1.Node
 		if err := r.Get(ctx, types.NamespacedName{Name: nodeName}, &n); err != nil {
 			return client.IgnoreNotFound(err)
@@ -1937,22 +1947,29 @@ func (r *RotationReconciler) patchNode(ctx context.Context, nodeName string, mut
 		if !mutate(&n) {
 			return nil
 		}
-		return r.Update(ctx, &n)
+		if err := r.Update(ctx, &n); err != nil {
+			return err
+		}
+		wrote = true
+		return nil
 	})
+	return wrote, err
 }
 
 func (r *RotationReconciler) freezeNode(ctx context.Context, nodeName, claimName string) error {
 	if nodeName == "" {
 		return nil
 	}
-	return r.patchNode(ctx, nodeName, func(n *corev1.Node) bool { return applyFreeze(n, claimName) })
+	_, err := r.patchNode(ctx, nodeName, func(n *corev1.Node) bool { return applyFreeze(n, claimName) })
+	return err
 }
 
 func (r *RotationReconciler) cordonNode(ctx context.Context, nodeName string) error {
 	if nodeName == "" {
 		return nil
 	}
-	return r.patchNode(ctx, nodeName, applyCordon)
+	_, err := r.patchNode(ctx, nodeName, applyCordon)
+	return err
 }
 
 // unfreezeNodes reverses the freeze/cordon on every node carrying this rotation's
@@ -1966,7 +1983,7 @@ func (r *RotationReconciler) unfreezeNodes(ctx context.Context, claimName string
 		if nodes.Items[i].Annotations[annotations.SurgeFor] != claimName {
 			continue
 		}
-		if err := r.patchNode(ctx, nodes.Items[i].Name, applyUnfreeze); err != nil {
+		if _, err := r.patchNode(ctx, nodes.Items[i].Name, applyUnfreeze); err != nil {
 			return err
 		}
 	}
@@ -1999,6 +2016,11 @@ func (r *RotationReconciler) surgeHostFor(ctx context.Context, claimName string)
 	return host
 }
 
+// deletePlaceholder removes the claim's placeholder Pod by its deterministic
+// name — the reconcile paths address their own placeholder, which they created.
+// A Pod already gone is a no-op. The startup sweep does NOT use this: it selects
+// on the surge-for label and deletes the object that predicate found (see
+// deleteSelected).
 func (r *RotationReconciler) deletePlaceholder(ctx context.Context, claimName string) error {
 	ph := &corev1.Pod{}
 	ph.Namespace = r.Namespace
