@@ -31,6 +31,7 @@ const (
 	reasonGovernanceLost   = "GovernanceLost"
 	reasonForcefulFallback = "ForcefulFallback"
 	reasonStaticNodePool   = "StaticNodePool"
+	reasonWindowMissed     = "WindowMissed"
 )
 
 // warningEmitter surfaces non-fatal schedule findings and per-node short-lead
@@ -190,6 +191,24 @@ func (w *warningEmitter) EmitStaticNodePool(ctx context.Context, pool *karpv1.No
 		"static NodePool cannot be rotated by surge; not starting a rotation", "replicas", replicas)
 	if w.events != nil {
 		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonStaticNodePool, actionEvaluateNodePool, "%s", msg)
+	}
+}
+
+// EmitWindowMissed logs and raises the Warning Event for a maintenance window
+// occurrence that closed with candidates outstanding and no rotation completed
+// inside it (spec §4.2, issue #303). Unlike the other emitters this one carries
+// no dedup state: the caller has already proven it owned the transition by
+// clearing the window-opened-at stamp, so it fires exactly once per occurrence.
+func (w *warningEmitter) EmitWindowMissed(ctx context.Context, pool *karpv1.NodePool, openedAt string, c selection.Census) {
+	out := selection.Census{Eligible: c.Eligible, InBackoff: c.InBackoff}
+	msg := fmt.Sprintf(
+		"maintenance window that opened at %s closed with %d candidate(s) unrotated (%d eligible, %d in retryBackoff) and no rotation completed inside it. The guaranteed rotation chance for those NodeClaims was consumed without a graceful replacement; they remain subject to Karpenter's forceful expiration.",
+		openedAt, out.Eligible+out.InBackoff, out.Eligible, out.InBackoff)
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
+		"maintenance window closed with candidates unrotated",
+		"windowOpenedAt", openedAt, "eligible", out.Eligible, "inBackoff", out.InBackoff)
+	if w.events != nil {
+		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonWindowMissed, actionEvaluateSchedule, "%s", msg)
 	}
 }
 

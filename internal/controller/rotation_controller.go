@@ -510,6 +510,13 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	r.warn().EmitFindings(ctx, pool, derived.Findings)
 	r.warn().EmitShortLead(ctx, pool, claims, res.leadTime)
 
+	// Record the maintenance window's open, and report an occurrence that closed
+	// with candidates unrotated (§4.2, issue #303). Above every gate: the signal
+	// states what happened to the window, not why the controller did not act.
+	if err := r.evaluateWindowEdge(ctx, pool, res, now, views, excluded, sched.InWindow(now)); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// ── 1. Drive the in-flight rotation, keyed on the anchor (it outlives the
 	//        old NodeClaim's deletion on success).
 	if name := pool.Annotations[annotations.ActiveRotation]; name != "" {
@@ -615,6 +622,89 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 		return r.startForcefulFallback(ctx, pool, cand)
 	}
 	return r.advance(ctx, pool, cand.Name, res)
+}
+
+// evaluateWindowEdge applies the §4.2 window-close evaluation: it records that a
+// maintenance window opened, and when that window closes it reports whether the
+// occurrence went by with candidates the controller could have rotated and no
+// rotation completed inside it (issue #303).
+//
+// It runs at step 0, ABOVE the static-capacity gate and the fatal feasibility
+// gate, on purpose. A pool that could not rotate because it is static (#302) or
+// because its schedule is infeasible still lost the window, and the signal's
+// meaning is fixed to that fact rather than to the controller's reason for not
+// acting — a signal whose meaning depended on gate order would change meaning
+// every time a gate was added.
+//
+// The clear is conditional and the emission follows the write: only the pass
+// whose Update actually removed the stamp reports the loss, so a retried or
+// raced pass cannot double-count. A crash between the write and the emission
+// drops the signal rather than inventing one, which is the same stance §4.2
+// takes for the duration histogram.
+func (r *RotationReconciler) evaluateWindowEdge(
+	ctx context.Context,
+	pool *karpv1.NodePool,
+	res resolved,
+	now time.Time,
+	views []selection.Claim,
+	excluded map[string]bool,
+	inWindow bool,
+) error {
+	census := selection.TakeCensus(views, r.selInputs(res, now, excluded))
+	switch decide.WindowEdge(decide.WindowInputs{
+		Now:         now,
+		InWindow:    inWindow,
+		Annotations: pool.Annotations,
+		Census:      census,
+	}) {
+	case decide.WindowStamp:
+		stamp := rfc3339(now)
+		_, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
+			// Veto if a racing pass already recorded this occurrence's open; the
+			// earlier stamp is the truer one.
+			if _, ok := parseTime(m[annotations.WindowOpenedAt]); ok {
+				return false
+			}
+			m[annotations.WindowOpenedAt] = stamp
+			return true
+		})
+		return err
+
+	case decide.WindowSettled:
+		_, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
+			if _, present := m[annotations.WindowOpenedAt]; !present {
+				return false
+			}
+			delete(m, annotations.WindowOpenedAt)
+			return true
+		})
+		return err
+
+	case decide.WindowMissed:
+		opened := pool.Annotations[annotations.WindowOpenedAt]
+		wrote, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
+			// Re-assert, against the authoritative read, both conditions the verdict
+			// rests on: this is still the occurrence that was evaluated, and no
+			// rotation has since been anchored on the pool. A pass that cannot
+			// re-assert them lost the race and must stay silent (issue #304).
+			if m[annotations.WindowOpenedAt] != opened || m[annotations.ActiveRotation] != "" {
+				return false
+			}
+			delete(m, annotations.WindowOpenedAt)
+			return true
+		})
+		if err != nil {
+			return err
+		}
+		if !wrote {
+			return nil
+		}
+		r.recorder().WindowMissed(pool.Name)
+		r.warn().EmitWindowMissed(ctx, pool, opened, census)
+		return nil
+	}
+	// WindowNothing and WindowDefer: no write, nothing to announce.
+	return nil
 }
 
 // observe computes and emits the §4.2 reconcile-time gauges from the live claims
