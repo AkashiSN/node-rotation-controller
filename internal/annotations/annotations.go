@@ -84,6 +84,16 @@ const (
 	// on the NodePool anchor so it survives the candidate NodeClaim's deletion on
 	// success. Absent = the default surge (make-before-break) rotation.
 	RotationMode = Prefix + "rotation-mode"
+	// WindowOpenedAt is the RFC3339 time at which the controller first observed
+	// this NodePool's maintenance window open, and the durable record that a
+	// window occurrence is outstanding. Its PRESENCE is the occurrence's identity:
+	// the controller stamps it on the first in-window reconcile that finds it
+	// absent, and clears it on the first out-of-window reconcile that finds it
+	// present — the §4.2 window-close evaluation. Nothing derives an occurrence
+	// start from the schedule, so the weekly projection's DST anchoring
+	// (internal/window) cannot skew the verdict. Cleared at close, so a pool that
+	// is never in-window carries no key at all.
+	WindowOpenedAt = Prefix + "window-opened-at"
 )
 
 // Cordoned marks a node's cordon (spec.unschedulable) as controller-applied, so
