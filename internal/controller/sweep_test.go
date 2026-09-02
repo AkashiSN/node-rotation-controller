@@ -6,10 +6,14 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	karpapis "sigs.k8s.io/karpenter/pkg/apis"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -424,5 +428,82 @@ func TestSweepDoesNotOverwriteAClaimThatIsAlreadyFailed(t *testing.T) {
 	}
 	if rec.failure != 0 {
 		t.Errorf("the sweep announced %d failures for a rollback it did not perform, want 0", rec.failure)
+	}
+}
+
+// vanishWithNotFoundOnFirstClaimUpdate lets the conditional write's Get succeed
+// and finalizes the claim away on its Update — the second half of the
+// List-to-write window, which the Get-side interceptor above cannot reach.
+func vanishWithNotFoundOnFirstClaimUpdate() interceptor.Funcs {
+	first := true
+	return interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			nc, ok := obj.(*karpv1.NodeClaim)
+			if !ok || !first {
+				return c.Update(ctx, obj, opts...)
+			}
+			first = false
+			var live karpv1.NodeClaim
+			if err := c.Get(ctx, client.ObjectKeyFromObject(nc), &live); err != nil {
+				return err
+			}
+			live.Finalizers = nil
+			if err := c.Update(ctx, &live); err != nil {
+				return err
+			}
+			if err := client.IgnoreNotFound(c.Delete(ctx, &live)); err != nil {
+				return err
+			}
+			return apierrors.NewNotFound(
+				schema.GroupResource{Group: karpapis.Group, Resource: "nodeclaims"}, nc.Name)
+		},
+	}
+}
+
+// A claim that vanishes needs no repair, so it is not an error either. The sweep
+// runs once and is never retried, so an error here would only report a startup
+// problem that is not one.
+func TestSweepReportsNoErrorForAClaimFinalizedDuringTheWrite(t *testing.T) {
+	rec := &fakeRecorder{}
+	r := newFlakyReconciler(t, rec, vanishWithNotFoundOnFirstClaimUpdate(),
+		testNodePool(nil),
+		testClaim("nc-old", claimAge, ncFinalizer(), ncAnn(annotations.State, annotations.StatePending)),
+	)
+
+	if err := r.Sweep(context.Background()); err != nil {
+		t.Errorf("a claim that vanished mid-write is not a sweep error: %v", err)
+	}
+	if getClaimOrNil(t, r, "nc-old") != nil {
+		t.Fatal("test did not exercise the window: the claim must be gone by the write")
+	}
+	if rec.failure != 0 {
+		t.Errorf("the sweep announced %d failures for a claim it never wrote, want 0", rec.failure)
+	}
+}
+
+// The predicate accepts either in-flight state, so the state the write repaired
+// is not necessarily the one the List reported. The line must name the state the
+// write actually found, or it describes a rollback that did not happen.
+func TestSweepLogsTheStateItActuallyRepaired(t *testing.T) {
+	rec := &fakeRecorder{}
+	r := newFlakyReconciler(t, rec, staleClaimList(annotations.StatePending),
+		testNodePool(nil),
+		testClaim("nc-old", claimAge, ncAnn(annotations.State, annotations.StateDraining)),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	c := getClaimOrNil(t, r, "nc-old")
+	if c == nil || c.Annotations[annotations.State] != annotations.StateFailed {
+		t.Fatalf("an un-anchored draining claim must still be repaired: %+v", c)
+	}
+	if rec.failure != 1 {
+		t.Errorf("failure alert: got %d, want 1", rec.failure)
+	}
+	if !containsLine(lines, "failed un-anchored in-flight claim", `"state"="draining"`) {
+		t.Errorf(`the line must name the state the write found, not the stale List value; lines = %v`, lines)
 	}
 }
