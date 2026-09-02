@@ -135,29 +135,53 @@ func (r *RotationReconciler) sweepNodes(ctx context.Context, logger logr.Logger,
 		case !surged && !cordoned:
 			continue
 		}
-		// A surge-for node is unfrozen (applyUnfreeze removes its do-not-disrupt
-		// only if the owned marker attributes it to the controller); a cordon-only
-		// node only has its cordon lifted.
-		mutate := applyUnfreeze
-		if !surged {
-			mutate = applyUncordon
-		}
-		// Same window as the placeholder leg: the node can be gone by the write, or
-		// its markers already reversed by an earlier run, and patchNode skips the
-		// Update in both cases. Announce only what this pass wrote, and name the
-		// reversal it applied — a cordon-only node was never frozen, so reporting it
-		// as an unfreeze (with an empty claim) describes work of a kind the sweep did
-		// not do on it (issue #313).
-		wrote, err := r.patchNode(ctx, n.Name, mutate)
-		if err != nil {
+		// The List above selected this node; only the read the write is validated
+		// against says what there was to reverse. So the predicate is re-applied
+		// there, the mutator is chosen there, and the line is described from there
+		// (issue #313, mirroring the claim leg's #311 fix):
+		//
+		//   - an anchor taken during the window makes the markers current, not
+		//     orphaned, and the rotation that owns them is not the sweep's to undo;
+		//   - a node the List reported as surge-frozen can be cordon-only by then,
+		//     and a cordon-only node was never frozen and belongs to no claim, so
+		//     reporting it as an unfreeze names work of a kind the sweep did not do;
+		//   - unfroze/frozenFor are set at the top of every attempt and read only
+		//     when the write landed, so a losing attempt never describes the winning
+		//     one (the shape of #307).
+		var unfroze bool
+		var frozenFor string
+		wrote, err := r.patchNode(ctx, n.Name, func(fresh *corev1.Node) bool {
+			unfroze, frozenFor = false, ""
+			claim, surged := fresh.Annotations[annotations.SurgeFor]
+			_, cordoned := fresh.Annotations[annotations.Cordoned]
+			switch {
+			case surged && anchored[claim]:
+				return false
+			case !surged && !cordoned:
+				return false
+			}
+			// applyUnfreeze removes do-not-disrupt only if the owned marker attributes
+			// it to the controller; a cordon-only node only has its cordon lifted.
+			if !surged {
+				return applyUncordon(fresh)
+			}
+			unfroze, frozenFor = true, claim
+			return applyUnfreeze(fresh)
+		})
+		switch {
+		case apierrors.IsNotFound(err):
+			// Gone between patchNode's read and its Update — the same non-event as a
+			// node already gone by the read, which patchNode absorbs, and the same
+			// second half of the window the claim leg treats this way (issue #311).
+			continue
+		case err != nil:
 			errs = append(errs, err)
 			continue
-		}
-		if !wrote {
+		case !wrote:
 			continue
 		}
-		if surged {
-			logger.Info("unfroze orphaned node", "node", n.Name, "claim", claim)
+		if unfroze {
+			logger.Info("unfroze orphaned node", "node", n.Name, "claim", frozenFor)
 		} else {
 			logger.Info("uncordoned orphaned node", "node", n.Name)
 		}

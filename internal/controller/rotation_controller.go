@@ -1926,8 +1926,11 @@ func (r *RotationReconciler) markExpired(ctx context.Context, name string, extra
 }
 
 // patchNode applies a node mutator (applyFreeze/applyCordon/applyUnfreeze) with
-// retry-on-conflict, skipping the Update when nothing changed. A vanished node is
-// a no-op. It reports whether it wrote, for callers that announce the change.
+// retry-on-conflict, skipping the Update when nothing changed. A node already gone
+// by the Get is a no-op; one that vanishes between the Get and the Update surfaces
+// its NotFound to the caller, which is a retryable error on the reconcile paths
+// and a non-event for the startup sweep (see sweepNodes). It reports whether it
+// wrote, for callers that announce the change.
 func (r *RotationReconciler) patchNode(ctx context.Context, nodeName string, mutate func(*corev1.Node) bool) (bool, error) {
 	// As in patchClaimIf, the report is produced here and reset at the top of every
 	// attempt, never taken from the mutator: an attempt whose Update conflicts can

@@ -734,3 +734,102 @@ func TestPatchNodeReportsNoWriteWhenTheNodeVanishesDuringTheRetry(t *testing.T) 
 		t.Error("patchNode reported a write for a node that no longer exists")
 	}
 }
+
+// vanishWithNotFoundOnFirstNodeUpdate lets patchNode's Get succeed and deletes
+// the node on its Update — the second half of the List-to-write window, which
+// the Get-side interceptor above cannot reach.
+func vanishWithNotFoundOnFirstNodeUpdate() interceptor.Funcs {
+	first := true
+	return interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			n, ok := obj.(*corev1.Node)
+			if !ok || !first {
+				return c.Update(ctx, obj, opts...)
+			}
+			first = false
+			if err := client.IgnoreNotFound(c.Delete(ctx, n)); err != nil {
+				return err
+			}
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "nodes"}, n.Name)
+		},
+	}
+}
+
+// A window has two ends. A node gone by the Get and a node gone by the Update are
+// the same non-event, and neither is a startup error — the sweep runs once and is
+// never retried.
+func TestSweepReportsNoErrorForANodeThatVanishedDuringTheWrite(t *testing.T) {
+	r := newFlakyReconciler(t, nil, vanishWithNotFoundOnFirstNodeUpdate(),
+		testNodePool(nil),
+		frozenNode(),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Errorf("a node that vanished mid-write is not a sweep error: %v", err)
+	}
+
+	var gone corev1.Node
+	if err := r.Get(context.Background(), types.NamespacedName{Name: surgeNode}, &gone); !apierrors.IsNotFound(err) {
+		t.Fatalf("test did not exercise the window: the node must be gone by the write, got %v", err)
+	}
+	if containsLine(lines, "unfroze orphaned node") {
+		t.Errorf("the sweep announced an unfreeze of a node that vanished; lines = %v", lines)
+	}
+}
+
+// The List picks the node; only the read the write is validated against says what
+// there was to reverse. A node the List reported as surge-frozen can be
+// cordon-only by then, and the line must follow the write, not the List.
+func TestSweepNamesTheReversalTheWriteApplied(t *testing.T) {
+	r := newFlakyReconciler(t, nil, staleNodeList("nc-old"),
+		testNodePool(nil),
+		testK8sNode(candNode, true, map[string]string{annotations.Cordoned: "true"}, true),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	if n := getNodeObj(t, r, candNode); n.Spec.Unschedulable {
+		t.Fatal("the stale cordon must still be lifted")
+	}
+	if containsLine(lines, "unfroze orphaned node") {
+		t.Errorf("the node carried no surge-for by the write, so nothing was unfrozen; lines = %v", lines)
+	}
+	if !containsLine(lines, "uncordoned orphaned node", `"node"="`+candNode+`"`) {
+		t.Errorf("the line must name the reversal the write applied; lines = %v", lines)
+	}
+}
+
+// The same window can hand the node to a live rotation: an anchor taken between
+// the List and the write makes the markers current, not orphaned. Re-applying the
+// selection predicate to the fresh read is what stops the sweep from stripping a
+// running rotation's freeze — the node counterpart of the claim predicate (#311).
+func TestSweepKeepsMarkersAnAnchorTookDuringTheWindow(t *testing.T) {
+	r := newFlakyReconciler(t, nil, staleNodeList("nc-old"),
+		testNodePool(map[string]string{annotations.ActiveRotation: "nc-live"}),
+		testK8sNode(surgeNode, true, map[string]string{
+			karpv1.DoNotDisruptAnnotationKey: "true",
+			annotations.DoNotDisruptOwned:    "true",
+			annotations.SurgeFor:             "nc-live",
+		}, false),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	n := getNodeObj(t, r, surgeNode)
+	if n.Annotations[annotations.SurgeFor] != "nc-live" {
+		t.Error("the anchored rotation's surge-for marker must survive the sweep")
+	}
+	if n.Annotations[karpv1.DoNotDisruptAnnotationKey] != "true" {
+		t.Error("the anchored rotation's do-not-disrupt must survive the sweep")
+	}
+	if containsLine(lines, "unfroze orphaned node") {
+		t.Errorf("nothing was reversed; lines = %v", lines)
+	}
+}
