@@ -88,10 +88,11 @@ Warning-level conditions surfaced via `kubectl describe`:
 
 | Object | Reason | When |
 |--------|--------|------|
-| NodePool | `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `DrainEstimateAboveTGP`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK` | Schedule finding active |
+| NodePool | `KBelowTwo`, `AVeryAggressive`, `TGPUnset`, `HardCapExceeded`, `RetryBackoffShort`, `DrainEstimateAboveTGP`, `ProvisioningEstimateAboveReadyTimeout`, `ThroughputBelowArrival`, `ThroughputBurstShortfall`, `RotationSpansNextWindow`, `OverrideGBelowK` | Schedule finding active |
 | NodeClaim | `ShortLead` | Claim can't guarantee `K` chances |
 | NodePool | `ForcefulFallback` | Surge-less rotation begins |
 | NodePool | `StaticNodePool` | `spec.replicas` set — surge can never rotate the pool (§3.3) |
+| NodePool | `PolicyConflict` | Equal-specificity RotationPolicy tie — the pool is not rotated (§5.4) |
 | NodePool | `GovernanceLost` | In-flight rotation rolled back after the pool left governance (§5.4) |
 | NodePool | `RotationStarted` | Candidate picked (`Normal`) |
 | NodePool | `RotationCompleted` | Old NodeClaim finalized (`Normal`) |

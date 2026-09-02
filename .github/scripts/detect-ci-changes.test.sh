@@ -32,6 +32,10 @@ assert "readme-is-docs"   $'go=false\nchart=false\ndocker=false\ninfra=false\ndo
 assert "sim-go-is-docs"   $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "internal/sim/loop.go"
 assert "simapi-is-docs"   $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "internal/simapi/simapi.go"
 assert "cmdwasm-is-docs"  $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "cmd/wasm/main.go"
+# The §4.3 Events table is asserted on by a Go test (issue #317), so it is Go too.
+assert "events-table-en"  $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "docs/specification/04-operations.md"
+assert "events-table-ja"  $'go=true\nchart=false\ndocker=false\ninfra=false\ndocs=true'   "docs/ja/specification/04-operations.md"
+assert "other-spec-page"  $'go=false\nchart=false\ndocker=false\ninfra=false\ndocs=true'  "docs/specification/05-implementation.md"
 assert "docs-only"        $'go=false\nchart=false\ndocker=false\ninfra=false\ndocs=true'  "docs/specification/03-design.md" "README.md" "docs/ja/runbook.md"
 assert "empty-input"      "$ALL_FALSE"                                                    ""
 
