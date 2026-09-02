@@ -9,7 +9,11 @@ changed="$(cat)"
 has() { grep -qE "$1" <<<"$changed"; }   # here-string: no pipe, so no SIGPIPE under pipefail
 
 go=false; chart=false; docker=false; infra=false; docs=false
-if has '(\.go$|^go\.(mod|sum)$|^api/|^config/|^\.golangci\.ya?ml$)'; then go=true; fi
+# The §4.3 Events table is asserted on by a Go test (internal/controller's
+# TestEveryEventReasonIsInTheOperationsTable, issue #317), so editing it must run
+# the Go suite even though nothing else about the change is Go. Without this, a
+# docs-only edit to that table could break the invariant with the guard skipped.
+if has '(\.go$|^go\.(mod|sum)$|^api/|^config/|^\.golangci\.ya?ml$|^docs/(ja/)?specification/04-operations\.md$)'; then go=true; fi
 if has '^charts/'; then chart=true; fi
 if has '(^Dockerfile$|^\.dockerignore$)'; then docker=true; fi
 if has '(^Makefile$|^aqua\.yaml$|^aqua-policy\.yaml$|^aqua/|^\.github/workflows/ci\.yaml$|^\.github/scripts/)'; then infra=true; fi
