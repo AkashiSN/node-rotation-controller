@@ -2,13 +2,19 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	karpapis "sigs.k8s.io/karpenter/pkg/apis"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -180,4 +186,62 @@ func TestGovernanceLostDoesNotAnnounceWhenCleanupFails(t *testing.T) {
 	if got := reapEvents(rec); len(got) != 1 {
 		t.Errorf("want exactly 1 GovernanceLost Event from the pass that reaped, got %d: %v", len(got), got)
 	}
+}
+
+// The veto is not the whole invariant: clearAnchorIf's outcome has to be reset at
+// the top of every RetryOnConflict attempt, because the attempt that loses the
+// race still runs the mutator and still sets it. Here the interceptor plays the
+// other pass — it clears the same anchor underneath the first Update and answers
+// with the Conflict the API server would return for the now-stale resourceVersion
+// — so the retry's fresh read vetoes. A `cleared` left true by the losing attempt
+// would announce a reap this pass did not perform (issue #315, the #304 shape).
+func TestGovernanceLostEmitsNothingWhenTheAnchorIsClearedUnderneathIt(t *testing.T) {
+	pool := anchoredPool(map[string]string{"workload": "api"})
+	evs := events.NewFakeRecorder(16)
+
+	first := true
+	funcs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			p, ok := obj.(*karpv1.NodePool)
+			if !ok || !first || p.Annotations[annotations.ActiveRotation] != "" {
+				return c.Update(ctx, obj, opts...)
+			}
+			first = false
+			var won karpv1.NodePool
+			if err := c.Get(ctx, client.ObjectKeyFromObject(p), &won); err != nil {
+				return err
+			}
+			clearRotationAnchorFields(won.Annotations)
+			if err := c.Update(ctx, &won); err != nil {
+				return err
+			}
+			return apierrors.NewConflict(
+				schema.GroupResource{Group: karpapis.Group, Resource: "nodepools"}, p.Name,
+				errors.New("simulated stale resourceVersion"))
+		},
+	}
+	r := newFlakyReconciler(t, nil, funcs,
+		pool.DeepCopy(),
+		placeholderPod(surgeNode, corev1.PodRunning),
+		frozenNode(),
+	)
+	r.Events = evs
+
+	var lines []string
+	ctx := log.IntoContext(context.Background(), captureLogger(&lines))
+
+	if err := r.reapUngovernedRotation(ctx, pool.DeepCopy()); err != nil {
+		t.Fatalf("the losing pass must not surface the resolved conflict as an error: %v", err)
+	}
+	if first {
+		t.Fatal("test did not exercise the retry: no anchor-clearing Update reached the interceptor")
+	}
+	if got := reapEvents(evs); len(got) != 0 {
+		t.Errorf("the pass that lost the anchor must announce nothing, got %v", got)
+	}
+	if got := countLines(lines, "reaped orphaned rotation artifacts"); got != 0 {
+		t.Errorf("the pass that lost the anchor must log no reap line; lines = %v", lines)
+	}
+	// The winner's clear stands, and the rollback this pass performed is intact.
+	assertReaped(t, r)
 }
