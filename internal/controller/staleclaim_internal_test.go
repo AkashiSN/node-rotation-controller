@@ -2,13 +2,19 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	karpapis "sigs.k8s.io/karpenter/pkg/apis"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -191,5 +197,170 @@ func TestFailureReportsTheRetryCountItActuallyWrote(t *testing.T) {
 	}
 	if reopensAt := failedAt.Add(selection.EscalatedBackoff(stored, testPolicy().Surge.RetryBackoff.Duration)); rfc3339(reopensAt) != wantUntil {
 		t.Errorf("the reported backoffUntil %s must be the instant the gate reopens %s", wantUntil, rfc3339(reopensAt))
+	}
+}
+
+// --- the write that never landed -------------------------------------------
+
+// vanishOnFirstClaimUpdate answers the first NodeClaim Update carrying state by
+// finalizing the claim away and returning the Conflict the API server would
+// return for the now-stale resourceVersion. RetryOnConflict then re-enters with
+// a Get that finds nothing — the attempt sequence a conditional write must not
+// mistake for its own success.
+func vanishOnFirstClaimUpdate(state string) interceptor.Funcs {
+	first := true
+	return interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			nc, ok := obj.(*karpv1.NodeClaim)
+			if !ok || !first || nc.Annotations[annotations.State] != state {
+				return c.Update(ctx, obj, opts...)
+			}
+			first = false
+			var live karpv1.NodeClaim
+			if err := c.Get(ctx, client.ObjectKeyFromObject(nc), &live); err != nil {
+				return err
+			}
+			live.Finalizers = nil
+			if err := c.Update(ctx, &live); err != nil {
+				return err
+			}
+			if err := client.IgnoreNotFound(c.Delete(ctx, &live)); err != nil {
+				return err
+			}
+			return apierrors.NewConflict(
+				schema.GroupResource{Group: karpapis.Group, Resource: "nodeclaims"}, nc.Name,
+				errors.New("simulated stale resourceVersion"))
+		},
+	}
+}
+
+// A first attempt that reads a live claim and then loses its Update, followed by
+// a retry whose Get finds the claim finalized away, wrote nothing at all. The
+// outcome must be the vanished-claim one — no announcement, anchor retained —
+// and not the first attempt's optimism carried across the retry.
+func TestExpiryEmitsNothingWhenTheClaimVanishesUnderARetriedWrite(t *testing.T) {
+	cand, pool, node, ph := expiringPendingRotation()
+	rec := &fakeRecorder{}
+	r := newFlakyReconciler(t, rec, vanishOnFirstClaimUpdate(annotations.StateExpired), pool, cand, node, ph)
+	res := r.resolve(pool, testPolicy(), mustSchedule(t))
+
+	if _, err := r.advancePending(context.Background(), getPool(t, r), res, cand.DeepCopy()); err != nil {
+		t.Fatalf("advancePending: %v", err)
+	}
+
+	if getClaimOrNil(t, r, "nc-old") != nil {
+		t.Fatal("test did not exercise the retry: the claim must be gone by the second attempt")
+	}
+	if rec.expired != 0 {
+		t.Errorf("a pass whose write never landed counted %d expiries, want 0", rec.expired)
+	}
+	if got := getPool(t, r).Annotations[annotations.ActiveRotation]; got != "nc-old" {
+		t.Errorf("the anchor must survive so completeOrAbort can own the outcome, got %q", got)
+	}
+}
+
+// The veto must claim THIS handler's transition, not merely refuse a repeat. A
+// claim deleted while still pending can reach `draining` through a pass that read
+// it before the deletion; a later pass dispatched from the older `pending` view
+// must not overwrite that with `expired`, announce it, and release the anchor —
+// the rotation is draining and will complete.
+func TestPendingForceExpiryRefusesAClaimThatHasReachedDraining(t *testing.T) {
+	dt := metav1.NewTime(testNow.Add(-time.Minute))
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncFinalizer(), ncAnn(
+		annotations.State, annotations.StateDraining,
+	))
+	cand.DeletionTimestamp = &dt
+	pool := withTGP(testNodePool(map[string]string{
+		annotations.ActiveRotation:      "nc-old",
+		annotations.ActiveRotationState: annotations.StateDraining,
+		annotations.DrainingAt:          rfc(testNow.Add(-time.Minute)),
+	}))
+	surge := testK8sNode(surgeNode, true, map[string]string{
+		karpv1.DoNotDisruptAnnotationKey: "true",
+		annotations.DoNotDisruptOwned:    "true",
+		annotations.SurgeFor:             "nc-old",
+	}, false)
+	rec := &fakeRecorder{}
+	r := newReconciler(t, testNow, rec, pool, cand, surge)
+	res := r.resolve(pool, testPolicy(), mustSchedule(t))
+
+	// The lagging view: the version this claim held before the pass that moved it on.
+	stale := cand.DeepCopy()
+	stale.Annotations[annotations.State] = annotations.StatePending
+	if _, err := r.advancePending(context.Background(), getPool(t, r), res, stale); err != nil {
+		t.Fatalf("advancePending: %v", err)
+	}
+
+	if rec.expired != 0 {
+		t.Errorf("a stale pass counted %d expiries against a draining rotation, want 0", rec.expired)
+	}
+	c := getClaimOrNil(t, r, "nc-old")
+	if c == nil || c.Annotations[annotations.State] != annotations.StateDraining {
+		t.Fatalf("the durable draining state must survive the stale pass: %+v", c)
+	}
+	if got := getPool(t, r).Annotations[annotations.ActiveRotation]; got != "nc-old" {
+		t.Errorf("the drain still owns the anchor, got %q", got)
+	}
+	if n := getNodeObj(t, r, surgeNode); n.Annotations[annotations.SurgeFor] != "nc-old" {
+		t.Error("a stale pass must not unfreeze the surge node the live drain depends on")
+	}
+}
+
+// failPending announces a failed attempt and stamps the pause anchor off a write
+// that records it. A claim that finalized away mid-rollback recorded nothing, so
+// there is no attempt to announce: the outcome is a force-expiry, which the
+// anchor hands to completeOrAbort.
+func TestFailPendingEmitsNothingWhenTheClaimVanished(t *testing.T) {
+	node, cand, pool := pendingRotation(testNow.Add(-20 * time.Minute))
+	rec := &fakeRecorder{}
+	r := newReconciler(t, testNow, rec, pool, node) // cand never seeded: already gone
+	res := r.resolve(pool, testPolicy(), mustSchedule(t))
+
+	if _, err := r.failPending(context.Background(), getPool(t, r), res, cand); err != nil {
+		t.Fatalf("failPending: %v", err)
+	}
+
+	if rec.failure != 0 {
+		t.Errorf("a rollback that recorded nothing counted %d failures, want 0", rec.failure)
+	}
+	p := getPool(t, r)
+	if p.Annotations[annotations.LastFailureAt] != "" {
+		t.Error("no failed attempt was recorded, so no failure pause may be stamped")
+	}
+	if got := p.Annotations[annotations.ActiveRotation]; got != "nc-old" {
+		t.Fatalf("the anchor must survive so completeOrAbort can own the outcome, got %q", got)
+	}
+
+	step(t, r, getPool(t, r))
+
+	if rec.expired != 1 || rec.failure != 0 {
+		t.Errorf("a claim that vanished mid-rollback is a force-expiry, not a failure: %+v", rec)
+	}
+}
+
+// The retried half of the same case: the failure write is attempted against a
+// live claim, loses its Update, and finds nothing on the retry.
+func TestFailPendingEmitsNothingWhenTheClaimVanishesUnderARetriedWrite(t *testing.T) {
+	node, cand, pool := pendingRotation(testNow.Add(-20 * time.Minute))
+	rec := &fakeRecorder{}
+	r := newFlakyReconciler(t, rec, vanishOnFirstClaimUpdate(annotations.StateFailed), pool, cand, node)
+	res := r.resolve(pool, testPolicy(), mustSchedule(t))
+
+	if _, err := r.failPending(context.Background(), getPool(t, r), res, cand.DeepCopy()); err != nil {
+		t.Fatalf("failPending: %v", err)
+	}
+
+	if getClaimOrNil(t, r, "nc-old") != nil {
+		t.Fatal("test did not exercise the retry: the claim must be gone by the second attempt")
+	}
+	if rec.failure != 0 {
+		t.Errorf("a rollback whose write never landed counted %d failures, want 0", rec.failure)
+	}
+	p := getPool(t, r)
+	if p.Annotations[annotations.LastFailureAt] != "" {
+		t.Error("no failed attempt was recorded, so no failure pause may be stamped")
+	}
+	if got := p.Annotations[annotations.ActiveRotation]; got != "nc-old" {
+		t.Errorf("the anchor must survive so completeOrAbort can own the outcome, got %q", got)
 	}
 }
