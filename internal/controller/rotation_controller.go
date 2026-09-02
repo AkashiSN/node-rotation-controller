@@ -1254,7 +1254,7 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 	var released, rotated, hasDrain, hasSurgeWait bool
 	var drain, surgeWait time.Duration
 	var mode string
-	if err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
+	if _, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
 		// RetryOnConflict re-runs this against a newer read, so every value it
 		// produces is reset here and derived from that read alone.
 		released, rotated, hasDrain, hasSurgeWait = false, false, false, false
@@ -1782,7 +1782,7 @@ func (r *RotationReconciler) clearAnchor(ctx context.Context, pool *karpv1.NodeP
 // was that one; false means an earlier pass already ended the rotation.
 func (r *RotationReconciler) clearAnchorIf(ctx context.Context, pool *karpv1.NodePool, claim string) (bool, error) {
 	var cleared bool
-	err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
+	_, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
 		// RetryOnConflict re-runs this against a newer read, so the outcome is reset
 		// here and derived from that read alone.
 		cleared = false
@@ -1819,10 +1819,11 @@ func clearRotationAnchorFields(m map[string]string) {
 // retry-on-conflict (each attempt re-reads the latest object), reflecting the
 // result back into pool.
 func (r *RotationReconciler) patchPool(ctx context.Context, pool *karpv1.NodePool, mutate func(map[string]string)) error {
-	return r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
+	_, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
 		mutate(m)
 		return true
 	})
+	return err
 }
 
 // patchPoolIf is patchPool with a veto: mutate runs against the freshly read
@@ -1837,8 +1838,19 @@ func (r *RotationReconciler) patchPool(ctx context.Context, pool *karpv1.NodePoo
 // longer shows the state it is acting on vetoes its write and learns it lost the
 // race; a caller whose read is itself stale cannot write at all — its Update
 // carries the stale resourceVersion and conflicts, so RetryOnConflict re-reads.
-func (r *RotationReconciler) patchPoolIf(ctx context.Context, pool *karpv1.NodePool, mutate func(map[string]string) bool) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+//
+// The bool reports whether THIS pass performed the Update. It is produced by the
+// retry loop and reset at the top of every attempt, never by the mutator: mutate
+// may run several times under RetryOnConflict, so a result it carried would
+// outlive the attempt that produced it (issue #307). Callers that emit a signal
+// for a transition use it as the proof they owned that transition.
+func (r *RotationReconciler) patchPoolIf(ctx context.Context, pool *karpv1.NodePool, mutate func(map[string]string) bool) (bool, error) {
+	wrote := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// Reset per attempt: mutate runs again on every conflict retry, so a result
+		// carried over from a vetoed or failed attempt would report a write this
+		// pass never made (issue #307).
+		wrote = false
 		var fresh karpv1.NodePool
 		if err := r.Get(ctx, client.ObjectKeyFromObject(pool), &fresh); err != nil {
 			return err
@@ -1853,9 +1865,11 @@ func (r *RotationReconciler) patchPoolIf(ctx context.Context, pool *karpv1.NodeP
 		if err := r.Update(ctx, &fresh); err != nil {
 			return err
 		}
+		wrote = true
 		*pool = fresh
 		return nil
 	})
+	return wrote, err
 }
 
 // patchClaim applies an idempotent annotation mutation to the named NodeClaim
