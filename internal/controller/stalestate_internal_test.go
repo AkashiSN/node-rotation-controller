@@ -5,6 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 )
 
@@ -145,5 +149,70 @@ func TestFailedRetryRefusesAClaimAnotherPassAlreadyReEntered(t *testing.T) {
 	}
 	if getNodeObj(t, r, candNode).Spec.Unschedulable {
 		t.Error("a pass that owns nothing must not cordon the candidate node")
+	}
+}
+
+// --- the recursion the retry guard bounds -----------------------------------
+
+// staleDispatchAfterTheRetryWrite reproduces the sequence the failed → pending
+// guard exists to end. The retry branch's write lands; the re-entry into
+// advance() then reads a claim that still says `failed` — one NodeClaim Get, the
+// dispatcher's — while every later read, including the conditional write's own,
+// sees the fresh `pending`. That combination is the only one that loops: when
+// both reads lag, the write carries a stale resourceVersion and RetryOnConflict
+// resolves it. claimUpdates counts NodeClaim writes so the test can assert the
+// re-entry made none.
+func staleDispatchAfterTheRetryWrite(claimUpdates *int) interceptor.Funcs {
+	var written, served bool
+	return interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*karpv1.NodeClaim); ok {
+				(*claimUpdates)++
+				written = true
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if err := c.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+			nc, ok := obj.(*karpv1.NodeClaim)
+			if !ok || !written || served {
+				return nil
+			}
+			served = true // the dispatcher's read, and only it, lags the write
+			nc.Annotations[annotations.State] = annotations.StateFailed
+			return nil
+		},
+	}
+}
+
+func TestFailedRetryDoesNotRestartTheAttemptOnAStaleReadOfItsOwnWrite(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode), ncAnn(
+		annotations.State, annotations.StateFailed,
+		annotations.RetryCount, "1",
+		annotations.FailedAt, rfc(testNow.Add(-40*time.Minute)), // backoff 30m → elapsed
+	))
+	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
+	var claimUpdates int
+	r := newFlakyReconciler(t, nil, staleDispatchAfterTheRetryWrite(&claimUpdates),
+		pool, cand, testK8sNode(candNode, true, nil, false))
+	res := r.resolve(pool, testPolicy(), mustSchedule(t))
+
+	if _, err := r.advanceFailed(context.Background(), getPool(t, r), res, cand.DeepCopy()); err != nil {
+		t.Fatalf("advanceFailed: %v", err)
+	}
+
+	// Exactly one: the retry branch's own failed → pending write. A second means
+	// the re-entry took the branch again and started the attempt over.
+	if claimUpdates != 1 {
+		t.Errorf("the stale re-entry wrote the claim again: %d NodeClaim updates, want exactly 1", claimUpdates)
+	}
+	c := getClaimOrNil(t, r, "nc-old")
+	if c == nil || c.Annotations[annotations.State] != annotations.StatePending {
+		t.Fatalf("the retry write itself must stand: %+v", c)
+	}
+	if placeholderExists(t, r) {
+		t.Error("a pass dispatched from a stale read must not drive the attempt")
 	}
 }
