@@ -90,15 +90,19 @@ func (r *RotationReconciler) sweepPlaceholders(ctx context.Context, logger logr.
 	}
 	var errs []error
 	for i := range pods.Items {
-		claim := pods.Items[i].Labels[annotations.SurgeFor]
+		p := &pods.Items[i]
+		claim := p.Labels[annotations.SurgeFor]
 		if claim == "" || anchored[claim] {
 			continue
 		}
-		// The List is a cache read and the Delete lands after it, so the Pod can be
-		// gone by then — deleted by another instance's rollback or by an operator.
-		// That is a no-op, not an error, and not this sweep's repair to report
-		// (issue #313).
-		deleted, err := r.deletePlaceholder(ctx, claim)
+		// Delete the Pod the label selected, not one named from the label. The
+		// reconcile paths address their placeholder by its deterministic name, but
+		// the sweep's predicate is the label, and a Pod carrying it under any other
+		// name — an operator's copy of the manifest, a leftover from a rename — is
+		// exactly what the sweep exists to clean up. Rebuilding the canonical name
+		// here would delete a different object, or none, while the line named the
+		// one that was listed (issue #313).
+		deleted, err := r.deleteSelected(ctx, p)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -106,9 +110,33 @@ func (r *RotationReconciler) sweepPlaceholders(ctx context.Context, logger logr.
 		if !deleted {
 			continue
 		}
-		logger.Info("deleted orphaned placeholder", "claim", claim, "pod", pods.Items[i].Name)
+		logger.Info("deleted orphaned placeholder", "claim", claim, "pod", p.Name)
 	}
 	return errors.Join(errs...)
+}
+
+// deleteSelected deletes exactly the object the sweep listed and reports whether
+// this call removed it.
+//
+// The List is a cache read and the Delete lands after it. A Pod already gone —
+// deleted by a rollback or by an operator — was removed by someone else; a Pod
+// replaced under the same name is a different object, which the UID precondition
+// turns into a Conflict rather than a delete of something the sweep never
+// selected. Neither is an error: nothing there needs repair any more, and the
+// sweep runs once and is never retried.
+func (r *RotationReconciler) deleteSelected(ctx context.Context, p *corev1.Pod) (bool, error) {
+	var opts []client.DeleteOption
+	if p.UID != "" {
+		opts = append(opts, client.Preconditions{UID: &p.UID})
+	}
+	err := r.Delete(ctx, p, opts...)
+	switch {
+	case apierrors.IsNotFound(err), apierrors.IsConflict(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
 }
 
 // sweepNodes reverses the freeze/cordon on every node whose controller markers

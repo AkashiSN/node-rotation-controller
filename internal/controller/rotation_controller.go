@@ -1012,7 +1012,7 @@ func (r *RotationReconciler) abortPendingExpiry(ctx context.Context, pool *karpv
 		r.recorder().Expired(pool.Name, cand.Name)
 	}
 	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
-	if _, err := r.deletePlaceholder(ctx, cand.Name); err != nil {
+	if err := r.deletePlaceholder(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.unfreezeNodes(ctx, cand.Name); err != nil {
@@ -1040,7 +1040,7 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 	if err := r.reapSurgeClaim(ctx, cand, surgeClaim); err != nil {
 		return ctrl.Result{}, err
 	}
-	if _, err := r.deletePlaceholder(ctx, cand.Name); err != nil {
+	if err := r.deletePlaceholder(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.unfreezeNodes(ctx, cand.Name); err != nil {
@@ -1204,7 +1204,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 // anchored (crash between the terminal write and the pool clear) and releases the
 // gate; the metric/alert are NOT re-emitted (spec §5.2).
 func (r *RotationReconciler) advanceExpired(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (ctrl.Result, error) {
-	if _, err := r.deletePlaceholder(ctx, cand.Name); err != nil {
+	if err := r.deletePlaceholder(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.unfreezeNodes(ctx, cand.Name); err != nil {
@@ -1240,7 +1240,7 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 	// Recover the surge node for the completion line BEFORE unfreezeNodes strips its
 	// surge-for marker (#228). "" on the surge-less forceful-fallback path.
 	surgeNode := r.surgeHostFor(ctx, name)
-	if _, err := r.deletePlaceholder(ctx, name); err != nil {
+	if err := r.deletePlaceholder(ctx, name); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.unfreezeNodes(ctx, name); err != nil {
@@ -1743,7 +1743,7 @@ func (r *RotationReconciler) reapUngovernedRotation(ctx context.Context, pool *k
 	// policy-conflict caller deliberately keeps it (to dedup the conflict itself),
 	// and would otherwise retain this claim's key forever (issue #221).
 	r.warn().ClearPlaceholderPending(pool.Name, claim)
-	if _, err := r.deletePlaceholder(ctx, claim); err != nil {
+	if err := r.deletePlaceholder(ctx, claim); err != nil {
 		return err
 	}
 	if err := r.unfreezeNodes(ctx, claim); err != nil {
@@ -2016,22 +2016,16 @@ func (r *RotationReconciler) surgeHostFor(ctx context.Context, claimName string)
 	return host
 }
 
-// deletePlaceholder removes the claim's placeholder Pod and reports whether the
-// Delete found one, for callers that announce the removal. A Pod already gone —
-// deleted by an earlier pass, by another instance's rollback, or by an operator —
-// is a no-op, not an error.
-func (r *RotationReconciler) deletePlaceholder(ctx context.Context, claimName string) (bool, error) {
+// deletePlaceholder removes the claim's placeholder Pod by its deterministic
+// name — the reconcile paths address their own placeholder, which they created.
+// A Pod already gone is a no-op. The startup sweep does NOT use this: it selects
+// on the surge-for label and deletes the object that predicate found (see
+// deleteSelected).
+func (r *RotationReconciler) deletePlaceholder(ctx context.Context, claimName string) error {
 	ph := &corev1.Pod{}
 	ph.Namespace = r.Namespace
 	ph.Name = surge.PlaceholderName(claimName)
-	err := r.Delete(ctx, ph)
-	if apierrors.IsNotFound(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+	return client.IgnoreNotFound(r.Delete(ctx, ph))
 }
 
 func (r *RotationReconciler) getPlaceholder(ctx context.Context, claimName string) (*corev1.Pod, error) {

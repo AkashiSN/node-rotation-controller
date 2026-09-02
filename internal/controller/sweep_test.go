@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -18,6 +19,7 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
+	"github.com/AkashiSN/node-rotation-controller/internal/surge"
 )
 
 // claimAge is a representative old-claim age used across the sweep tests; the
@@ -803,11 +805,12 @@ func TestSweepNamesTheReversalTheWriteApplied(t *testing.T) {
 	}
 }
 
-// The same window can hand the node to a live rotation: an anchor taken between
-// the List and the write makes the markers current, not orphaned. Re-applying the
-// selection predicate to the fresh read is what stops the sweep from stripping a
-// running rotation's freeze — the node counterpart of the claim predicate (#311).
-func TestSweepKeepsMarkersAnAnchorTookDuringTheWindow(t *testing.T) {
+// The same window can move a node onto a live rotation: the List reports markers
+// for an un-anchored claim, and by the write the node carries an anchored one's.
+// Re-applying the selection predicate to the fresh read — against the anchor set
+// the sweep captured at its start — is what stops it from stripping a running
+// rotation's freeze, the node counterpart of the claim predicate (#311).
+func TestSweepKeepsMarkersTheWriteFindsAnchored(t *testing.T) {
 	r := newFlakyReconciler(t, nil, staleNodeList("nc-old"),
 		testNodePool(map[string]string{annotations.ActiveRotation: "nc-live"}),
 		testK8sNode(surgeNode, true, map[string]string{
@@ -831,5 +834,101 @@ func TestSweepKeepsMarkersAnAnchorTookDuringTheWindow(t *testing.T) {
 	}
 	if containsLine(lines, "unfroze orphaned node") {
 		t.Errorf("nothing was reversed; lines = %v", lines)
+	}
+}
+
+// labeledPod builds a Pod carrying the surge-for label under a name the
+// controller would never mint — what an operator's copy, or a hand-written
+// manifest, looks like to a sweep that selects on that label.
+func labeledPod(name, claim string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: testNS,
+			Labels:    map[string]string{annotations.SurgeFor: claim},
+		},
+	}
+}
+
+// The label is the selection predicate, so the object it selected is the object
+// the sweep must act on. Rebuilding a canonical name from the label deletes a
+// different Pod — or none — while the line reports the one that was listed.
+func TestSweepDeletesThePlaceholderItSelected(t *testing.T) {
+	r := newReconciler(t, testNow, nil,
+		testNodePool(nil),
+		labeledPod("borrowed-surge-pod", "nc-old"),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	var p corev1.Pod
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: "borrowed-surge-pod"}, &p)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("the Pod the label selected must be the one deleted, got %v", err)
+	}
+	if !containsLine(lines, "deleted orphaned placeholder", `"pod"="borrowed-surge-pod"`) {
+		t.Errorf("the line must name the Pod that was deleted; lines = %v", lines)
+	}
+}
+
+// With both present the sweep removes both — each is an orphaned artifact its own
+// iteration selected — and each line names the Pod its own Delete removed.
+func TestSweepDeletesEveryLabeledPlaceholderItSelected(t *testing.T) {
+	r := newReconciler(t, testNow, nil,
+		testNodePool(nil),
+		placeholderPod(surgeNode, corev1.PodRunning),
+		labeledPod("borrowed-surge-pod", "nc-old"),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	if placeholderExists(t, r) {
+		t.Error("the canonical placeholder must be deleted")
+	}
+	var p corev1.Pod
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: "borrowed-surge-pod"}, &p); !apierrors.IsNotFound(err) {
+		t.Errorf("the second labeled Pod must be deleted too, got %v", err)
+	}
+	if got := countLines(lines, "deleted orphaned placeholder"); got != 2 {
+		t.Errorf("each deleted Pod gets its own line: got %d, want 2", got)
+	}
+	if !containsLine(lines, "deleted orphaned placeholder", `"pod"="borrowed-surge-pod"`) ||
+		!containsLine(lines, "deleted orphaned placeholder", `"pod"="`+surge.PlaceholderName("nc-old")+`"`) {
+		t.Errorf("the lines must name the Pods that were deleted; lines = %v", lines)
+	}
+}
+
+// A Pod replaced under the same name between the List and the Delete is a
+// different object; the identity precondition fails and the API server answers
+// Conflict. The sweep selected the object that is gone, so it removed nothing —
+// not an error, and nothing to announce.
+func TestSweepAnnouncesNoDeleteForAPlaceholderReplacedUnderItsName(t *testing.T) {
+	conflict := interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*corev1.Pod); !ok {
+				return c.Delete(ctx, obj, opts...)
+			}
+			return apierrors.NewConflict(
+				schema.GroupResource{Resource: "pods"}, obj.GetName(),
+				errors.New("simulated UID precondition failure"))
+		},
+	}
+	r := newFlakyReconciler(t, nil, conflict,
+		testNodePool(nil),
+		placeholderPod(surgeNode, corev1.PodRunning),
+	)
+
+	var lines []string
+	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
+		t.Errorf("a Pod replaced under its name is not a sweep error: %v", err)
+	}
+	if containsLine(lines, "deleted orphaned placeholder") {
+		t.Errorf("the sweep announced a delete that removed nothing; lines = %v", lines)
 	}
 }
