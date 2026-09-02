@@ -97,6 +97,32 @@ func TestWindowEdge(t *testing.T) {
 			census:   outstanding,
 			want:     decide.WindowSettled,
 		},
+		// An unreadable stamp names no occurrence, so there is nothing for the
+		// in-flight rotation to defer TO — the garbage is cleared and nothing is
+		// claimed, even though a rotation is running.
+		"closed with a corrupt stamp while a rotation is in flight: clear it, claim nothing": {
+			inWindow: false,
+			ann: map[string]string{
+				annotations.WindowOpenedAt: "not-a-time",
+				annotations.ActiveRotation: "nc-1",
+			},
+			census: outstanding,
+			want:   decide.WindowSettled,
+		},
+		// The claim being rotated sits in the census's InFlight bucket, which
+		// Outstanding deliberately does not count, so a zero outstanding count is
+		// exactly what an in-flight rotation looks like. Deferring on the anchor
+		// rather than settling on the count is what lets the verdict be taken
+		// correctly once the rotation ends.
+		"closed with a rotation in flight and nothing else outstanding: still defer": {
+			inWindow: false,
+			ann: map[string]string{
+				annotations.WindowOpenedAt: ts(opened),
+				annotations.ActiveRotation: "nc-1",
+			},
+			census: selection.Census{Total: 1, InFlight: 1},
+			want:   decide.WindowDefer,
+		},
 	}
 
 	for name, tc := range tests {
