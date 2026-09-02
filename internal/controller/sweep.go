@@ -160,13 +160,31 @@ func (r *RotationReconciler) sweepClaims(ctx context.Context, logger logr.Logger
 		if anchored[c.Name] {
 			continue // the reconcile loop owns the live rotation
 		}
-		if err := r.patchClaim(ctx, c.Name, func(m map[string]string) {
+		// The List above is a cache read and the write lands some time after it. Two
+		// things can happen in that window, neither of them this controller's to
+		// order: Karpenter's termination controller can finalize the claim away, and
+		// the claim's durable state can move past what the List saw. So re-apply the
+		// selection predicate to the read the write is validated against, and let the
+		// write itself report whether it landed (issue #311).
+		wrote, err := r.patchClaimIf(ctx, c.Name, func(m map[string]string) bool {
+			if st := m[annotations.State]; st != annotations.StatePending && st != annotations.StateDraining {
+				return false
+			}
 			m[annotations.State] = annotations.StateFailed
 			m[annotations.FailedAt] = rfc3339(r.now())
 			delete(m, annotations.StartedAt)
 			delete(m, annotations.SurgeClaim)
-		}); err != nil {
+			return true
+		})
+		if err != nil {
 			errs = append(errs, err)
+			continue
+		}
+		if wrote != claimWritten {
+			// Nothing was repaired, so there is no rollback to announce. Unlike the
+			// reconcile paths, the sweep has no anchor to hand the outcome to — having
+			// none is what selected this claim — so the outcome is simply that this
+			// claim needed no sweeping.
 			continue
 		}
 		r.recorder().Failure(c.Labels[karpv1.NodePoolLabelKey], c.Name)

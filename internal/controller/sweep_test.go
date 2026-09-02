@@ -8,6 +8,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -321,5 +323,106 @@ func TestReconcileSweepsOnlyOnce(t *testing.T) {
 
 	if !placeholderExists(t, r) {
 		t.Fatal("the sweep must run once at startup, not on every reconcile")
+	}
+}
+
+// --- the sweep's write, and what it may announce ---------------------------
+
+// The sweep decides from a List — a cache read — and writes some time later. Two
+// things can happen in that window, neither of them under this controller's
+// control: Karpenter's termination controller can finalize the claim away, and
+// the claim's durable state can move past what the List saw. In both cases the
+// sweep repairs nothing, so it must announce nothing (issue #311).
+
+// vanishOnFirstClaimGet finalizes the claim away on the first NodeClaim Get —
+// the one the conditional write makes — and answers it NotFound, which is what
+// the sweep sees when the termination controller wins that window.
+func vanishOnFirstClaimGet() interceptor.Funcs {
+	first := true
+	return interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*karpv1.NodeClaim); !ok || !first {
+				return c.Get(ctx, key, obj, opts...)
+			}
+			first = false
+			var live karpv1.NodeClaim
+			if err := c.Get(ctx, key, &live); err != nil {
+				return err
+			}
+			live.Finalizers = nil
+			if err := c.Update(ctx, &live); err != nil {
+				return err
+			}
+			if err := client.IgnoreNotFound(c.Delete(ctx, &live)); err != nil {
+				return err
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+}
+
+// staleClaimList serves every listed NodeClaim as state, whatever it durably
+// holds — the lagging List the sweep selects from.
+func staleClaimList(state string) interceptor.Funcs {
+	return interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			l, ok := list.(*karpv1.NodeClaimList)
+			if !ok {
+				return nil
+			}
+			for i := range l.Items {
+				l.Items[i].Annotations[annotations.State] = state
+			}
+			return nil
+		},
+	}
+}
+
+func TestSweepAnnouncesNoFailureForAClaimThatVanished(t *testing.T) {
+	rec := &fakeRecorder{}
+	r := newFlakyReconciler(t, rec, vanishOnFirstClaimGet(),
+		testNodePool(nil),
+		testClaim("nc-old", claimAge, ncFinalizer(), ncAnn(annotations.State, annotations.StatePending)),
+	)
+
+	sweep(t, r)
+
+	if getClaimOrNil(t, r, "nc-old") != nil {
+		t.Fatal("test did not exercise the window: the claim must be gone by the write")
+	}
+	if rec.failure != 0 {
+		t.Errorf("the sweep announced %d failures for a claim it never wrote, want 0", rec.failure)
+	}
+}
+
+func TestSweepDoesNotOverwriteAClaimThatIsAlreadyFailed(t *testing.T) {
+	rec := &fakeRecorder{}
+	failedAt := rfc(testNow.Add(-40 * time.Minute))
+	r := newFlakyReconciler(t, rec, staleClaimList(annotations.StatePending),
+		testNodePool(nil),
+		testClaim("nc-old", claimAge, ncAnn(
+			annotations.State, annotations.StateFailed,
+			annotations.FailedAt, failedAt,
+			annotations.RetryCount, "1",
+		)),
+	)
+
+	sweep(t, r)
+
+	c := getClaimOrNil(t, r, "nc-old")
+	if c == nil {
+		t.Fatal("claim should still exist")
+	}
+	if c.Annotations[annotations.State] != annotations.StateFailed {
+		t.Errorf("state: got %q, want it left at failed", c.Annotations[annotations.State])
+	}
+	if got := c.Annotations[annotations.FailedAt]; got != failedAt {
+		t.Errorf("failed-at = %q, want %q: rewriting it moves the escalated-backoff anchor", got, failedAt)
+	}
+	if rec.failure != 0 {
+		t.Errorf("the sweep announced %d failures for a rollback it did not perform, want 0", rec.failure)
 	}
 }
