@@ -191,9 +191,12 @@ advance(np, name):
                               clear=[started-at, surge-claim])
           if out in {gone, raced}:           # 何も書いていない = 何も所有しない
               return Requeue(30s)            # gone なら release_anchor が abort を数える
+          # 失敗しうるクリーンアップより前に発行する: クリーンアップが失敗すると
+          # 次の reconcile は `expired` ハンドラーへ渡り、そこは修復するだけで
+          # 発行しないため、後ろに置いた発行は遅延ではなく消失する（§5.2）
+          if out == claimed: emit_metrics(expired); alert
           delete(placeholder(name))
           for node in nodes_with(surge-for=name): unfreeze(node)
-          if out == claimed: emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
       annotate(cand, state=pending)
@@ -279,6 +282,7 @@ advance(np, name):
 - **メトリクス発行（完了）:** anchor 解放の書き込み後に、その書き込みを行ったパスだけが発行する。カウンター・ヒストグラム・完了ログ・Event は解放された anchor 1 つにつき 1 回発火する。書き込みと発行の間でクラッシュすると発行は失われる（at-most-once）
 - **メトリクス発行（claim スコープ）:** `expired` へ入る 2 つの遷移 — `abortPendingExpiry` と `advanceFailed` の削除分岐 — は、ディスパッチ元ハンドラー自身の遷移前状態だけを受け付ける条件付き NodeClaim 書き込みで遷移を主張するため、`expired` は遷移を行ったパスが 1 回だけ発行する。これは既に終端状態の claim を再発行しない `advanceExpired` と整合する
 - **発行は「試行」ではなく「書き込み」に従う:** 条件付き claim 書き込みの結果は書き込みループ自身が生成し、試行ごとにリセットされる。したがって、最初の試行が conflict し、リトライで claim が finalize 済みだった場合の結果は成功ではなく *gone* になる。終端書き込み前に消えた claim は anchor を残し、その結果は完了パス（`expired`、cooldown なし）が引き受ける。これは `failure` のロールバックにも適用され、試行の発行と failure pause のスタンプは、それを記録する書き込みが成立したときにのみ行い、報告する retry count はその書き込みが生成した値を使う
+- **発行は書き込みの直後・クリーンアップより前に置く:** クリーンアップは失敗しうる。そこでエラーになると次の reconcile は `advanceExpired` に渡るが、そのハンドラーは修復するだけで意図的に発行しない。したがってクリーンアップの後ろに置いた発行は、通常の一時的な API エラーでリトライされずに失われる。残る消失窓は完了パスが既に受け入れているものと同じ既約な窓 — 書き込みと発行の間でコントローラーが死ぬ場合（at-most-once）
 - **`failed` 状態の巻き戻し（未解決、issue #307）:** `failure` は同じ方法では主張しておらず、露出は発行の二重化ではない: `failPending` は `started-at` を削除するため、古い `pending` ビューで再入したパスがそれを再スタンプし、`readyTimeout` チェックはもう発火しない。再入が実際に行うのは、永続的な `failed` 状態を新しい期限付きの `pending` へ書き戻すことで、`advanceFailed` だけが強制するエスカレート backoff を迂回する一方、`retry-count` はインクリメントされた値のまま残る。pool と claim の両方のビューが遅れる必要があり、カウントではなく状態の欠陥であるため、別途追跡する
 
 ## 5.3 状態モデル
@@ -357,7 +361,7 @@ stateDiagram-v2
 | `pending` | 各 reconcile | `pending` | freeze + cordon 再アサート; `surge-claim` 永続化; placeholder 再作成（freeze 中は保留） |
 | `pending` | `surge_ready` | `draining` | surge ターゲット freeze; `draining-at` + `surge-wait` 書き込み; 旧 NodeClaim 削除 |
 | `pending` | `readyTimeout` | `failed` | surge claim reap; placeholder 削除; unfreeze; `state=failed` + `last-failure-at`; anchor クリア。ロールバック中に消えた claim は何も書かないため、試行を発行せず pause もスタンプせず、anchor を残して完了パスに force-expiry を記録させる |
-| `pending` | force-expiring | `expired` | `pending` から `state=expired` を**主張**（条件付き、クリーンアップより前）; placeholder 削除; unfreeze; expired を 1 回発行; anchor クリア |
+| `pending` | force-expiring | `expired` | `pending` から `state=expired` を**主張**（条件付き、クリーンアップより前）; expired を 1 回発行; placeholder 削除; unfreeze; anchor クリア |
 | `draining` | `deletionTimestamp` なし | `draining` | delete 再発行（クラッシュリカバリ） |
 | `draining` | ドレイン > `tGP + buffer` | `draining` | stuck-drain ゲージ; ゲート保持 |
 | `draining` | NodeClaim 消失 | *(success)* | unfreeze; `last-rotation-at`; success 発行; anchor クリア |

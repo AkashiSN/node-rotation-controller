@@ -984,15 +984,21 @@ func (r *RotationReconciler) abortPendingExpiry(ctx context.Context, pool *karpv
 		// the handler for the state it actually holds owns the rotation.
 		return ctrl.Result{RequeueAfter: shortRequeue}, nil
 	}
+	// Announce BEFORE the cleanup, which is fallible. The write already decided the
+	// outcome, and a cleanup error sends the next reconcile to advanceExpired — the
+	// terminal-state handler, which repairs the cleanup and deliberately never emits
+	// — so an emission placed after it would be lost for good on an ordinary
+	// transient API error, not merely deferred. That leaves only the irreducible
+	// window: a controller that dies between the write and this line.
+	if out == expiryClaimed {
+		r.recorder().Expired(pool.Name, cand.Name)
+	}
 	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
 	if err := r.deletePlaceholder(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.unfreezeNodes(ctx, cand.Name); err != nil {
 		return ctrl.Result{}, err
-	}
-	if out == expiryClaimed {
-		r.recorder().Expired(pool.Name, cand.Name)
 	}
 	if err := r.clearAnchor(ctx, pool); err != nil {
 		return ctrl.Result{}, err
@@ -1837,7 +1843,7 @@ type expiry int
 const (
 	expiryGone    expiry = iota // the claim finalized away; nothing was written
 	expiryRaced                 // the durable state is neither from nor expired
-	expiryAlready               // an earlier pass already made — and announced — the transition
+	expiryAlready               // an earlier pass made the transition and owns its announcement
 	expiryClaimed               // this pass made the transition and owns its announcement
 )
 

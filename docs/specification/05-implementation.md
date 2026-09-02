@@ -192,9 +192,12 @@ advance(np, name):
                               clear=[started-at, surge-claim])
           if out in {gone, raced}:           # nothing written; this pass owns nothing
               return Requeue(30s)            # gone ⇒ release_anchor counts the abort
+          # announce BEFORE the fallible cleanup: a cleanup error sends the next
+          # reconcile to the `expired` handler, which repairs cleanup and never
+          # emits, so an emission behind it would be lost, not deferred (§5.2)
+          if out == claimed: emit_metrics(expired); alert
           delete(placeholder(name))
           for node in nodes_with(surge-for=name): unfreeze(node)
-          if out == claimed: emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
       annotate(cand, state=pending)
@@ -280,6 +283,7 @@ Each state handler **re-asserts** its phase's desired state rather than performi
 - **Metric emission (completion):** emitted after the anchor-releasing write and only by the pass that performed it, so the counter, the histogram, the completion line and the Event fire once per released anchor. A crash between the write and the emission drops it (at-most-once)
 - **Metric emission (claim-scoped):** both transitions into `expired` — `abortPendingExpiry` and `advanceFailed`'s deletion branch — claim the transition with a conditional NodeClaim write that accepts only the dispatching handler's own pre-state, so `expired` is announced once by the pass that made it. That matches `advanceExpired`, which never re-announces a claim already terminal
 - **Announcement follows the write, never the attempt:** the outcome of a conditional claim write is produced by the write loop itself and reset per attempt, so a first attempt that conflicts and a retry that finds the claim finalized away report *gone*, not success. A claim that vanishes before a terminal write is left anchored and its outcome falls to completion (`expired`, no cooldown) — this covers the `failure` rollback too, which announces an attempt and stamps the failure pause only when the write that records it landed, and reports the retry count that write produced
+- **Emission sits immediately after the write, ahead of the cleanup:** the cleanup is fallible, and an error there hands the next reconcile to `advanceExpired`, which repairs it and deliberately never emits — so an emission placed behind the cleanup would be dropped by an ordinary transient API error rather than retried. The remaining loss window is the irreducible one the completion path already accepts: a controller that dies between the write and the emission (at-most-once)
 - **`failed` state regression (open, issue #307):** `failure` is not claimed that way, and duplicate emission is not the exposure: `failPending` deletes `started-at`, so a pass re-entering on a stale `pending` view re-stamps it and the `readyTimeout` check no longer fires. What the re-entry does instead is rewrite the durable `failed` state back to `pending` with a fresh deadline, bypassing the escalated backoff that only `advanceFailed` enforces while `retry-count` keeps its incremented value. It needs both the pool and the claim view to lag; it is a state defect rather than a counting one, and is tracked separately
 
 ## 5.3 State Model
@@ -358,7 +362,7 @@ stateDiagram-v2
 | `pending` | each reconcile | `pending` | re-assert freeze + cordon; persist `surge-claim`; recreate placeholder if missing (held during freeze) |
 | `pending` | `surge_ready` | `draining` | freeze surge target; write `draining-at` + `surge-wait`; delete old NodeClaim |
 | `pending` | `readyTimeout` | `failed` | reap surge claim; delete placeholder; unfreeze; write `state=failed` + `last-failure-at`; clear anchor. A claim that vanished mid-rollback writes nothing: no attempt is announced, no pause stamped, and the anchor is left for completion to record a force-expiry |
-| `pending` | force-expiring | `expired` | **claim** `state=expired` from `pending` (conditional, before cleanup); delete placeholder; unfreeze; emit expired once; clear anchor |
+| `pending` | force-expiring | `expired` | **claim** `state=expired` from `pending` (conditional, before cleanup); emit expired once; delete placeholder; unfreeze; clear anchor |
 | `draining` | no `deletionTimestamp` | `draining` | re-issue delete (crash recovery) |
 | `draining` | drain > `tGP + buffer` | `draining` | stuck-drain gauge; gate held |
 | `draining` | NodeClaim gone | *(success)* | unfreeze; write `last-rotation-at`; emit success; clear anchor |
