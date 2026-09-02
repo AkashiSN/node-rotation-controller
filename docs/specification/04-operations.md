@@ -92,6 +92,7 @@ Warning-level conditions surfaced via `kubectl describe`:
 | NodeClaim | `ShortLead` | Claim can't guarantee `K` chances |
 | NodePool | `ForcefulFallback` | Surge-less rotation begins |
 | NodePool | `StaticNodePool` | `spec.replicas` set — surge can never rotate the pool (§3.3) |
+| NodePool | `GovernanceLost` | In-flight rotation rolled back after the pool left governance (§5.4) |
 | NodePool | `RotationStarted` | Candidate picked (`Normal`) |
 | NodePool | `RotationCompleted` | Old NodeClaim finalized (`Normal`) |
 | NodeClaim | `RotationFailed` | `readyTimeout` expired; rolled back |

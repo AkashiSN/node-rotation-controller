@@ -483,13 +483,18 @@ A dedicated `RotationPolicyStatusReconciler` populates this view. Optimistic-con
 
 ### Leaving governance mid-rotation
 
-When a pool ceases to be governed while a rotation is anchored, the controller **rolls it back**:
-- Deletes placeholder
-- Unfreezes nodes (preserving operator's own protections)
-- Clears anchor
-- Emits `GovernanceLost` Warning Event
+When a pool ceases to be governed while a rotation is anchored, the controller **rolls it back**, in this order:
+1. Deletes placeholder
+2. Unfreezes nodes (preserving operator's own protections)
+3. Clears the anchor — **only while it still names this rotation**
+4. Emits `GovernanceLost` Warning Event
 
 This prevents orphaned placeholders and stale `do-not-disrupt` markers from silently blocking Karpenter's voluntary operations indefinitely.
+
+The order is normative, for two reasons:
+
+- **The rollback precedes the clear.** The anchor is the only thing that brings a later reconcile back to this cleanup — the reap returns immediately on a pool without one, and no policy governs the pool any longer. Clearing it ahead of a step that then fails would orphan the artifacts permanently.
+- **The conditional clear elects the announcer.** The reap is entered from the anchor its caller was handed, which is a cache read that still shows an anchor an earlier pass already cleared. The write that clears it is therefore what identifies the pass that reaped the rotation: at most one pass ever earns the announcement, and the pass that earns it describes work already done. This is the claim-then-announce ordering §5.2 uses for completion, and it inherits the same **at-most-once** semantics — one Event per reaped rotation in ordinary operation, and none at all when the controller dies between the write and the emission.
 
 ### Policy change propagation
 
