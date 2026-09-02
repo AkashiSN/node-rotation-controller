@@ -58,6 +58,7 @@ type recDuration struct {
 type fakeRecorder struct {
 	success, expired, failure int
 	forcefulFallback          int
+	windowMissed              int
 	obs                       map[string]PoolObservation
 	window                    []bool
 	durations                 []recDuration
@@ -69,6 +70,7 @@ func (f *fakeRecorder) Success(string)                  { f.success++ }
 func (f *fakeRecorder) Expired(string, string)          { f.expired++ }
 func (f *fakeRecorder) Failure(string, string)          { f.failure++ }
 func (f *fakeRecorder) ForcefulFallback(string, string) { f.forcefulFallback++ }
+func (f *fakeRecorder) WindowMissed(string)             { f.windowMissed++ }
 func (f *fakeRecorder) ObservePolicyConflict(np string, blocked bool) {
 	if f.conflicts == nil {
 		f.conflicts = map[string]bool{}

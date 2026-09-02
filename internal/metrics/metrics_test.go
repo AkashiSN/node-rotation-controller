@@ -266,6 +266,8 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 	rec.ObserveDuration("api", controller.PhaseSurgeWait, time.Minute)
 	rec.ObserveWindow("api", true)
 	rec.ObservePolicyConflict("api", true)
+	rec.ForcefulFallback("api", "nc-1")
+	rec.WindowMissed("api")
 	rec.ObservePool("web", controller.PoolObservation{Candidates: 5}) // unrelated pool stays
 	rec.ObserveWindow("web", true)
 
@@ -289,6 +291,12 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 	if metricPresent(t, reg, "noderotation_duration_seconds", map[string]string{"nodepool": "api", "phase": controller.PhaseSurgeWait}) {
 		t.Error("duration_seconds{nodepool=api} still present after ForgetPool")
 	}
+	if metricPresent(t, reg, "noderotation_forceful_fallback_total", api) {
+		t.Error("forceful_fallback_total{nodepool=api} still present after ForgetPool")
+	}
+	if metricPresent(t, reg, "noderotation_window_missed_total", api) {
+		t.Error("window_missed_total{nodepool=api} still present after ForgetPool")
+	}
 
 	// The unrelated pool's series survive — including its own window_active.
 	if got := metricValue(t, reg, "noderotation_candidates", map[string]string{"nodepool": "web"}); got != 5 {
@@ -296,5 +304,26 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 	}
 	if got := metricValue(t, reg, "noderotation_window_active", map[string]string{"nodepool": "web"}); got != 1 {
 		t.Errorf("web window_active clobbered: got %v, want 1", got)
+	}
+}
+
+// The window-missed counter is the alertable fact issue #303 asked for: a
+// maintenance window occurrence closed with candidates outstanding and nothing
+// rotated. A counter rather than a latching gauge, so
+// increase(noderotation_window_missed_total[24h]) > 0 is unambiguous and
+// survives a missed scrape.
+func TestWindowMissedCounts(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	rec := metrics.New(reg)
+
+	rec.WindowMissed("api")
+	rec.WindowMissed("api")
+	rec.WindowMissed("web")
+
+	if got := metricValue(t, reg, "noderotation_window_missed_total", map[string]string{"nodepool": "api"}); got != 2 {
+		t.Errorf("api window_missed_total = %v, want 2", got)
+	}
+	if got := metricValue(t, reg, "noderotation_window_missed_total", map[string]string{"nodepool": "web"}); got != 1 {
+		t.Errorf("web window_missed_total = %v, want 1", got)
 	}
 }

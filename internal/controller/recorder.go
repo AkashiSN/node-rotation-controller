@@ -38,6 +38,10 @@ type Recorder interface {
 	// rotation that was initiated (spec §3.3): a candidate that could not complete
 	// a graceful surge before its deadline, deleted in-window via the voluntary path.
 	ForcefulFallback(nodePool, nodeClaim string)
+	// WindowMissed records a maintenance window occurrence that closed with
+	// candidates outstanding and no rotation completed inside it (spec §4.2) —
+	// the guaranteed rotation chance was consumed and lost.
+	WindowMissed(nodePool string)
 	// ObservePool sets the §4.2 reconcile-time gauges for one NodePool.
 	ObservePool(nodePool string, o PoolObservation)
 	// ObserveWindow sets the per-NodePool window-active gauge (§4.2): whether the
@@ -115,6 +119,7 @@ func (noopRecorder) Success(string)                                {}
 func (noopRecorder) Expired(string, string)                        {}
 func (noopRecorder) Failure(string, string)                        {}
 func (noopRecorder) ForcefulFallback(string, string)               {}
+func (noopRecorder) WindowMissed(string)                           {}
 func (noopRecorder) ObservePool(string, PoolObservation)           {}
 func (noopRecorder) ObserveWindow(string, bool)                    {}
 func (noopRecorder) ObservePolicyConflict(string, bool)            {}
