@@ -122,8 +122,10 @@ func (r *RotationReconciler) sweepPlaceholders(ctx context.Context, logger logr.
 // deleted by a rollback or by an operator — was removed by someone else; a Pod
 // replaced under the same name is a different object, which the UID precondition
 // turns into a Conflict rather than a delete of something the sweep never
-// selected. Neither is an error: nothing there needs repair any more, and the
-// sweep runs once and is never retried.
+// selected. Neither is an error: in both cases the object this snapshot chose is
+// gone, and a replacement is not it — should the replacement carry an orphaned
+// label of its own, it belongs to a later sweep, not this pass, which runs once
+// and is never retried.
 func (r *RotationReconciler) deleteSelected(ctx context.Context, p *corev1.Pod) (bool, error) {
 	var opts []client.DeleteOption
 	if p.UID != "" {
@@ -168,8 +170,9 @@ func (r *RotationReconciler) sweepNodes(ctx context.Context, logger logr.Logger,
 		// there, the mutator is chosen there, and the line is described from there
 		// (issue #313, mirroring the claim leg's #311 fix):
 		//
-		//   - an anchor taken during the window makes the markers current, not
-		//     orphaned, and the rotation that owns them is not the sweep's to undo;
+		//   - markers that read shows belong to an anchored rotation (against the
+		//     anchor set captured when the sweep started) are current, not orphaned,
+		//     and the rotation that owns them is not the sweep's to undo;
 		//   - a node the List reported as surge-frozen can be cordon-only by then,
 		//     and a cordon-only node was never frozen and belongs to no claim, so
 		//     reporting it as an unfreeze names work of a kind the sweep did not do;

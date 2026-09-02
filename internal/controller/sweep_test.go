@@ -905,28 +905,41 @@ func TestSweepDeletesEveryLabeledPlaceholderItSelected(t *testing.T) {
 }
 
 // A Pod replaced under the same name between the List and the Delete is a
-// different object; the identity precondition fails and the API server answers
-// Conflict. The sweep selected the object that is gone, so it removed nothing —
-// not an error, and nothing to announce.
+// different object. The Delete must therefore carry the listed Pod's identity, so
+// the API server answers Conflict instead of removing a Pod this sweep never
+// selected — the interceptor asserts that precondition rather than assuming it,
+// since without it the Delete would simply succeed. Removing nothing is not an
+// error and has nothing to announce.
 func TestSweepAnnouncesNoDeleteForAPlaceholderReplacedUnderItsName(t *testing.T) {
+	ph := placeholderPod(surgeNode, corev1.PodRunning)
+	ph.UID = "the-pod-the-sweep-listed"
+
+	var refused bool
 	conflict := interceptor.Funcs{
 		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 			if _, ok := obj.(*corev1.Pod); !ok {
 				return c.Delete(ctx, obj, opts...)
 			}
+			var o client.DeleteOptions
+			o.ApplyOptions(opts)
+			if o.Preconditions == nil || o.Preconditions.UID == nil || *o.Preconditions.UID != ph.UID {
+				t.Errorf("the Delete must name the identity the sweep selected, got preconditions %+v", o.Preconditions)
+				return c.Delete(ctx, obj, opts...)
+			}
+			refused = true
 			return apierrors.NewConflict(
 				schema.GroupResource{Resource: "pods"}, obj.GetName(),
 				errors.New("simulated UID precondition failure"))
 		},
 	}
-	r := newFlakyReconciler(t, nil, conflict,
-		testNodePool(nil),
-		placeholderPod(surgeNode, corev1.PodRunning),
-	)
+	r := newFlakyReconciler(t, nil, conflict, testNodePool(nil), ph)
 
 	var lines []string
 	if err := r.Sweep(log.IntoContext(context.Background(), captureLogger(&lines))); err != nil {
 		t.Errorf("a Pod replaced under its name is not a sweep error: %v", err)
+	}
+	if !refused {
+		t.Fatal("the identity precondition was never exercised")
 	}
 	if containsLine(lines, "deleted orphaned placeholder") {
 		t.Errorf("the sweep announced a delete that removed nothing; lines = %v", lines)
