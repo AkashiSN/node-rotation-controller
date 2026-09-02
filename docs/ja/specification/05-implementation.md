@@ -183,10 +183,20 @@ advance(np, name):
   switch cand.state:
   case (none) | pending:
       if cand.deletionTimestamp != nil:      # force-expiry 捕捉
+          # claim が「このハンドラー自身の遷移前状態」を保持している場合のみ書き込む、
+          # conflict チェック済みの単一書き込み。何をしたかを返す。クリーンアップより
+          # 前に実行する: 遷移を所有しないパスが、進行中のドレインが依存している
+          # surge ノードを unfreeze してはならない（§5.2）。
+          out := mark_expired(cand, from=[none, pending],
+                              clear=[started-at, surge-claim])
+          if out in {gone, raced}:           # 何も書いていない = 何も所有しない
+              return Requeue(30s)            # gone なら release_anchor が abort を数える
+          # 失敗しうるクリーンアップより前に発行する: クリーンアップが失敗すると
+          # 次の reconcile は `expired` ハンドラーへ渡り、そこは修復するだけで
+          # 発行しないため、後ろに置いた発行は遅延ではなく消失する（§5.2）
+          if out == claimed: emit_metrics(expired); alert
           delete(placeholder(name))
           for node in nodes_with(surge-for=name): unfreeze(node)
-          annotate(cand, state=expired, clear=[started-at, surge-claim])
-          emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
       annotate(cand, state=pending)
@@ -195,8 +205,12 @@ advance(np, name):
           reap_surge_claim(cand[surge-claim])
           delete(placeholder(name))
           for node in nodes_with(surge-for=name): unfreeze(node)
-          annotate(cand, state=failed, failed-at=now, retry-count+=1,
-                   clear=[started-at, surge-claim])
+          wrote := annotate(cand, state=failed, failed-at=now, retry-count+=1,
+                            clear=[started-at, surge-claim])
+          if not wrote:                      # ロールバック中に claim が finalize された
+              return Requeue(30s)            # 失敗した試行ではなく force-expiry
+          # alert が報告する retry-count は、呼び出し元のキャッシュコピーではなく
+          # この書き込みが実際に生成した値
           emit_metrics(failure); alert
           annotate(np, last-failure-at=now, clear=anchor)
           return Requeue(1m)
@@ -229,8 +243,9 @@ advance(np, name):
 
   case failed:
       if cand.deletionTimestamp != nil:
-          annotate(cand, state=expired)
-          emit_metrics(expired); alert
+          out := mark_expired(cand, from=[failed])   # 上と同じ条件付き書き込み
+          if out in {gone, raced}: return Requeue(30s)
+          if out == claimed: emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
       # リトライは新しい試行: このパスが上位にある step 1a の static ゲート
@@ -259,12 +274,16 @@ advance(np, name):
 - `pending` は各パスで freeze、cordon、placeholder 存在を再アサート
 - `draining` は `deletionTimestamp` がない場合に冪等な `delete` を再発行（状態書き込みと delete 間のクラッシュ）
 - 完了はクリーンアップを再実行するが、ローテーションの完了は **条件付き書き込みで主張する**: anchor の解放と success/expired の判定はどちらもその書き込みが検証される最新の読み取りから決まる。したがって、すでに解放済みの anchor をキャッシュ経由で見たパスは冪等なクリーンアップだけを行い、何も発行しない
+- `expired` へ入る 2 つの遷移も、同じ方法で NodeClaim 上の遷移を主張する。ただし受け付けるのは **そのハンドラーがディスパッチされた遷移前状態からのみ**: 終端状態が既に書かれた claim をキャッシュ経由で見たパスはクリーンアップと anchor 解放だけを行い何も発行しない。一方、claim が別の状態へ進んでいたパスは一切書き込まず、その状態を所有するハンドラーにローテーションを委ねる
 
 ### オブザーバビリティのスキュー（v1 で許容）
 
 - **ミラーから delete 間のギャップ:** そこでのクラッシュ後に force-expiry が発生すると `success` と記録（surge は確保済み — 実質的結果は一致）
 - **メトリクス発行（完了）:** anchor 解放の書き込み後に、その書き込みを行ったパスだけが発行する。カウンター・ヒストグラム・完了ログ・Event は解放された anchor 1 つにつき 1 回発火する。書き込みと発行の間でクラッシュすると発行は失われる（at-most-once）
-- **メトリクス発行（claim スコープ）:** `failure` と 2 つの `expired` の書き換えが続く NodeClaim 書き込みは、conflict チェックはされるが遷移を条件付きで **主張しない** — 永続状態が既に終端遷移を示していても veto せず、終端状態を書き換える。`abortPendingExpiry` と `advanceFailed` の `expired` 書き換えは冪等だが、`failPending` は `retry-count` もインクリメントするため冪等ではない。したがって古いビューでの再入は発行を二重化し、`failPending` では永続的な retry count も二重に進める。`increase(...)` を使用するアラートルールはどちらのスキューも許容
+- **メトリクス発行（claim スコープ）:** `expired` へ入る 2 つの遷移 — `abortPendingExpiry` と `advanceFailed` の削除分岐 — は、ディスパッチ元ハンドラー自身の遷移前状態だけを受け付ける条件付き NodeClaim 書き込みで遷移を主張するため、`expired` は遷移を行ったパスが 1 回だけ発行する。これは既に終端状態の claim を再発行しない `advanceExpired` と整合する
+- **発行は「試行」ではなく「書き込み」に従う:** 条件付き claim 書き込みの結果は書き込みループ自身が生成し、試行ごとにリセットされる。したがって、最初の試行が conflict し、リトライで claim が finalize 済みだった場合の結果は成功ではなく *gone* になる。終端書き込み前に消えた claim は anchor を残し、その結果は完了パス（`expired`、cooldown なし）が引き受ける。これは `failure` のロールバックにも適用され、試行の発行と failure pause のスタンプは、それを記録する書き込みが成立したときにのみ行い、報告する retry count はその書き込みが生成した値を使う
+- **発行は書き込みの直後・クリーンアップより前に置く:** クリーンアップは失敗しうる。そこでエラーになると次の reconcile は `advanceExpired` に渡るが、そのハンドラーは修復するだけで意図的に発行しない。したがってクリーンアップの後ろに置いた発行は、通常の一時的な API エラーでリトライされずに失われる。残る消失窓は完了パスが既に受け入れているものと同じ既約な窓 — 書き込みと発行の間でコントローラーが死ぬ場合（at-most-once）
+- **`failed` 状態の巻き戻し（未解決、issue #307）:** `failure` は同じ方法では主張しておらず、露出は発行の二重化ではない: `failPending` は `started-at` を削除するため、古い `pending` ビューで再入したパスがそれを再スタンプし、`readyTimeout` チェックはもう発火しない。再入が実際に行うのは、永続的な `failed` 状態を新しい期限付きの `pending` へ書き戻すことで、`advanceFailed` だけが強制するエスカレート backoff を迂回する一方、`retry-count` はインクリメントされた値のまま残る。pool と claim の両方のビューが遅れる必要があり、カウントではなく状態の欠陥であるため、別途追跡する
 
 ## 5.3 状態モデル
 
@@ -341,13 +360,13 @@ stateDiagram-v2
 | *(none)* | forceful fallback | `draining` | anchor + `rotation-mode` + `draining-at` 書き込み; `state=draining`; 旧 NodeClaim 削除（surge なし） |
 | `pending` | 各 reconcile | `pending` | freeze + cordon 再アサート; `surge-claim` 永続化; placeholder 再作成（freeze 中は保留） |
 | `pending` | `surge_ready` | `draining` | surge ターゲット freeze; `draining-at` + `surge-wait` 書き込み; 旧 NodeClaim 削除 |
-| `pending` | `readyTimeout` | `failed` | surge claim reap; placeholder 削除; unfreeze; `state=failed` + `last-failure-at`; anchor クリア |
-| `pending` | force-expiring | `expired` | placeholder 削除; unfreeze; `state=expired`; expired 発行; anchor クリア |
+| `pending` | `readyTimeout` | `failed` | surge claim reap; placeholder 削除; unfreeze; `state=failed` + `last-failure-at`; anchor クリア。ロールバック中に消えた claim は何も書かないため、試行を発行せず pause もスタンプせず、anchor を残して完了パスに force-expiry を記録させる |
+| `pending` | force-expiring | `expired` | `pending` から `state=expired` を**主張**（条件付き、クリーンアップより前）; expired を 1 回発行; placeholder 削除; unfreeze; anchor クリア |
 | `draining` | `deletionTimestamp` なし | `draining` | delete 再発行（クラッシュリカバリ） |
 | `draining` | ドレイン > `tGP + buffer` | `draining` | stuck-drain ゲージ; ゲート保持 |
 | `draining` | NodeClaim 消失 | *(success)* | unfreeze; `last-rotation-at`; success 発行; anchor クリア |
 | `failed` | バックオフ + ゲート通過 | `pending` | `state` リセット; 新試行で `started-at` 再スタンプ |
-| `failed` | `deletionTimestamp` | `expired` | `state=expired`; expired 発行; anchor クリア |
+| `failed` | `deletionTimestamp` | `expired` | `failed` から `state=expired` を**主張**（条件付き）; expired を 1 回発行; anchor クリア |
 | `expired` | まだ anchor あり | `expired` | 冪等クリーンアップ; anchor クリア（メトリクスは再発行しない） |
 
 :::
