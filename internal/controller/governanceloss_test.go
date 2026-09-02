@@ -1,10 +1,14 @@
 package controller
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -84,5 +88,96 @@ func TestReconcileConflictReapsAnchoredRotation(t *testing.T) {
 	// still flagged as conflicted so an operator sees why it stopped rotating.
 	if blocked, ok := rec.conflicts[testPoolName]; !ok || !blocked {
 		t.Errorf("policy_conflict gauge = %v (present=%v), want blocked=true", blocked, ok)
+	}
+}
+
+// --- the announcement must describe work that has been done (issue #315) ----
+
+// reapEvents returns the GovernanceLost Events buffered in rec.
+func reapEvents(rec *events.FakeRecorder) []string {
+	var out []string
+	for _, e := range drain(rec) {
+		if strings.Contains(e, reasonGovernanceLost) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// The reap is entered from the anchor the caller was handed, which is an
+// informer-cache read: a pass that arrives after an earlier one already reaped
+// still sees the anchor set and re-runs the whole rollback. The rollback is
+// idempotent, so re-running it is harmless — but the Warning Event is the
+// alerting surface, and one reaped rotation must raise exactly one of them.
+// Only the write that clears the anchor can decide who announces (issue #315).
+func TestGovernanceLostAnnouncesOncePerReapedRotation(t *testing.T) {
+	pool := anchoredPool(map[string]string{"workload": "api"})
+	rec := events.NewFakeRecorder(16)
+	r := newReconciler(t, testNow, nil,
+		pool.DeepCopy(),
+		placeholderPod(surgeNode, corev1.PodRunning),
+		frozenNode(),
+	)
+	r.Events = rec
+
+	var lines []string
+	ctx := log.IntoContext(context.Background(), captureLogger(&lines))
+
+	// Two passes entered from the same cached anchor — what the informer serves
+	// while the first pass's write propagates.
+	if err := r.reapUngovernedRotation(ctx, pool.DeepCopy()); err != nil {
+		t.Fatalf("first reap: %v", err)
+	}
+	if err := r.reapUngovernedRotation(ctx, pool.DeepCopy()); err != nil {
+		t.Fatalf("second reap: %v", err)
+	}
+
+	assertReaped(t, r)
+	if got := reapEvents(rec); len(got) != 1 {
+		t.Errorf("want exactly 1 GovernanceLost Event for one reaped rotation, got %d: %v", len(got), got)
+	}
+	if got := countLines(lines, "reaped orphaned rotation artifacts"); got != 1 {
+		t.Errorf("want exactly 1 reap log line, got %d; lines = %v", got, lines)
+	}
+}
+
+// The Event's text is past tense and enumerates the rollback. Emitting it before
+// the rollback lets a transient API error leave an operator told the placeholder
+// is gone and the markers lifted while both are still in place. The pass that
+// fails must announce nothing and leave the anchor for the retry (issue #315).
+func TestGovernanceLostDoesNotAnnounceWhenCleanupFails(t *testing.T) {
+	pool := anchoredPool(map[string]string{"workload": "api"})
+	rec := events.NewFakeRecorder(16)
+	r := newFlakyReconciler(t, nil, failFirstPodDelete(),
+		pool.DeepCopy(),
+		placeholderPod(surgeNode, corev1.PodRunning),
+		frozenNode(),
+	)
+	r.Events = rec
+
+	var lines []string
+	ctx := log.IntoContext(context.Background(), captureLogger(&lines))
+
+	if err := r.reapUngovernedRotation(ctx, pool.DeepCopy()); err == nil {
+		t.Fatal("test did not exercise the cleanup failure: the pass must return the error")
+	}
+	if got := reapEvents(rec); len(got) != 0 {
+		t.Errorf("a pass whose rollback failed must announce nothing, got %v", got)
+	}
+	if got := countLines(lines, "reaped orphaned rotation artifacts"); got != 0 {
+		t.Errorf("a pass whose rollback failed must log no reap line; lines = %v", lines)
+	}
+	if p := getPool(t, r); p.Annotations[annotations.ActiveRotation] != "nc-old" {
+		t.Fatalf("the anchor must survive a failed rollback so a retry re-enters it, got %q",
+			p.Annotations[annotations.ActiveRotation])
+	}
+
+	// The retry completes the rollback and is the pass that announces it.
+	if err := r.reapUngovernedRotation(ctx, pool.DeepCopy()); err != nil {
+		t.Fatalf("retry reap: %v", err)
+	}
+	assertReaped(t, r)
+	if got := reapEvents(rec); len(got) != 1 {
+		t.Errorf("want exactly 1 GovernanceLost Event from the pass that reaped, got %d: %v", len(got), got)
 	}
 }

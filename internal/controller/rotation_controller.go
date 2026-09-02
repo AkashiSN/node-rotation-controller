@@ -1726,17 +1726,24 @@ func (r *RotationReconciler) anchorRotation(ctx context.Context, pool *karpv1.No
 // operator's own protections, spec §3.3/§5.3), and clear the anchor. It is a
 // no-op when the pool carries no anchor, so the common ungoverned-idle-pool path
 // is untouched.
+//
+// The anchor clear is both the last step and the write that claims the reap, and
+// the line and Event follow it — the completion path's ordering (issue #304), not
+// the terminal-claim one (issue #307). Two properties force it here (issue #315).
+// The rollback must precede the clear: the anchor is the ONLY thing that brings a
+// later reconcile back to this cleanup, since the reap returns early without one
+// and the pool is ungoverned, so a clear followed by a failed deletePlaceholder
+// would orphan the placeholder for good — the exact leak this function exists to
+// prevent. And announcing before the clear announces nothing in particular: the
+// reap is re-entered from the anchor the caller was handed, which is a cache read
+// that still shows the anchor a previous pass already cleared, so every such pass
+// re-announced one rotation. Only the write that clears the anchor identifies the
+// pass that reaped it. The accepted cost is the one the completion path accepts:
+// a controller dying between the write and the emissions drops them.
 func (r *RotationReconciler) reapUngovernedRotation(ctx context.Context, pool *karpv1.NodePool) error {
 	claim := pool.Annotations[annotations.ActiveRotation]
 	if claim == "" {
 		return nil
-	}
-	log.FromContext(ctx).WithValues("nodepool", pool.Name, "claim", claim).
-		Info("ceased to govern a pool mid-rotation; reaping orphaned rotation artifacts")
-	if r.Events != nil {
-		r.Events.Eventf(pool, nil, corev1.EventTypeWarning, reasonGovernanceLost, actionReapRotation,
-			"NodePool left RotationPolicy governance with an in-flight rotation on %s; rolled it back (deleted placeholder, removed freeze markers and cordon, cleared anchor) so no do-not-disrupt marker or placeholder is orphaned",
-			claim)
 	}
 	// The attempt ends here, so drop its unschedulable-placeholder dedup entry. The
 	// no-policy caller drops the whole pool's warn state via Forget, but the
@@ -1749,18 +1756,54 @@ func (r *RotationReconciler) reapUngovernedRotation(ctx context.Context, pool *k
 	if err := r.unfreezeNodes(ctx, claim); err != nil {
 		return err
 	}
-	return r.clearAnchor(ctx, pool)
+	reaped, err := r.clearAnchorIf(ctx, pool, claim)
+	if err != nil || !reaped {
+		return err
+	}
+
+	log.FromContext(ctx).WithValues("nodepool", pool.Name, "claim", claim).
+		Info("ceased to govern a pool mid-rotation; reaped orphaned rotation artifacts")
+	if r.Events != nil {
+		r.Events.Eventf(pool, nil, corev1.EventTypeWarning, reasonGovernanceLost, actionReapRotation,
+			"NodePool left RotationPolicy governance with an in-flight rotation on %s; rolled it back (deleted placeholder, removed freeze markers and cordon, cleared anchor) so no do-not-disrupt marker or placeholder is orphaned",
+			claim)
+	}
+	return nil
 }
 
 func (r *RotationReconciler) clearAnchor(ctx context.Context, pool *karpv1.NodePool) error {
 	return r.patchPool(ctx, pool, clearRotationAnchorFields)
 }
 
+// clearAnchorIf is clearAnchor with the veto that decides who announces the reap:
+// it clears the anchor only while the pool still names claim, so of the passes
+// that enter the reap from the same cached anchor exactly one performs the write,
+// and that one owns the announcement (issue #315). It reports whether this pass
+// was that one; false means an earlier pass already ended the rotation.
+func (r *RotationReconciler) clearAnchorIf(ctx context.Context, pool *karpv1.NodePool, claim string) (bool, error) {
+	var cleared bool
+	err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
+		// RetryOnConflict re-runs this against a newer read, so the outcome is reset
+		// here and derived from that read alone.
+		cleared = false
+		if m[annotations.ActiveRotation] != claim {
+			return false
+		}
+		cleared = true
+		clearRotationAnchorFields(m)
+		return true
+	})
+	if err != nil {
+		return false, err
+	}
+	return cleared, nil
+}
+
 // clearRotationAnchorFields deletes every NodePool annotation scoped to a single
 // in-flight rotation. It is the ONE place the anchor's field set is enumerated, so
 // the completion clear (completeOrAbort, both outcomes), the two failure clears
 // (failPending and advanceFailed's torn-write repair) and the reap clear
-// (clearAnchor) can never drift — a field added to the anchor is cleared on
+// (clearAnchorIf) can never drift — a field added to the anchor is cleared on
 // every end path by editing this alone. It leaves the post-rotation anchors
 // last-rotation-at / last-failure-at untouched; the caller writes those in the
 // same update.
