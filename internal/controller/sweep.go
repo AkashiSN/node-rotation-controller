@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -160,17 +161,47 @@ func (r *RotationReconciler) sweepClaims(ctx context.Context, logger logr.Logger
 		if anchored[c.Name] {
 			continue // the reconcile loop owns the live rotation
 		}
-		if err := r.patchClaim(ctx, c.Name, func(m map[string]string) {
+		// The List above is a cache read and the write lands some time after it. Two
+		// things can happen in that window, neither of them this controller's to
+		// order: Karpenter's termination controller can finalize the claim away, and
+		// the claim's durable state can move past what the List saw. So re-apply the
+		// selection predicate to the read the write is validated against, and let the
+		// write itself report whether it landed (issue #311).
+		// repaired is the state the write actually found, which the predicate allows
+		// to differ from the one the List reported. It is read only on claimWritten,
+		// so it always comes from the attempt that won.
+		var repaired string
+		wrote, err := r.patchClaimIf(ctx, c.Name, func(m map[string]string) bool {
+			st := m[annotations.State]
+			if st != annotations.StatePending && st != annotations.StateDraining {
+				return false
+			}
+			repaired = st
 			m[annotations.State] = annotations.StateFailed
 			m[annotations.FailedAt] = rfc3339(r.now())
 			delete(m, annotations.StartedAt)
 			delete(m, annotations.SurgeClaim)
-		}); err != nil {
+			return true
+		})
+		switch {
+		case apierrors.IsNotFound(err):
+			// Finalized away between the conditional write's read and its Update — the
+			// other half of the window whose Get side patchClaimIf already treats as a
+			// no-op, and the same non-event. A claim that needs no repair is not a
+			// sweep error, and the sweep runs once and never retries.
+			continue
+		case err != nil:
 			errs = append(errs, err)
+			continue
+		case wrote != claimWritten:
+			// Nothing was repaired, so there is no rollback to announce. Unlike the
+			// reconcile paths, the sweep has no anchor to hand the outcome to — having
+			// none is what selected this claim — so the outcome is simply that this
+			// claim needed no sweeping.
 			continue
 		}
 		r.recorder().Failure(c.Labels[karpv1.NodePoolLabelKey], c.Name)
-		logger.Info("failed un-anchored in-flight claim", "claim", c.Name, "state", state)
+		logger.Info("failed un-anchored in-flight claim", "claim", c.Name, "state", repaired)
 	}
 	return errors.Join(errs...)
 }
