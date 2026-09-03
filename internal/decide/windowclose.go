@@ -48,9 +48,10 @@ type WindowInputs struct {
 // It is not "the claims the controller could have rotated". The window-close
 // evaluation deliberately sits above the pool-level gates (static capacity §3.3,
 // fatal feasibility §5.2), so a claim this counts may be one the controller
-// would never have started — a static pool misses every occurrence, and that is
-// the reported fact, not a contradiction. The signal states what happened to the
-// window, not why the controller did not act.
+// would never have started — a static pool misses every occurrence that closes
+// with age/state-outstanding claims, and that is the reported fact, not a
+// contradiction. The signal states what happened to the window, not why the
+// controller did not act.
 //
 // InBackoff is the load-bearing half. noderotation_candidates counts only
 // Eligible, so a pool whose every candidate is inside its escalated retryBackoff

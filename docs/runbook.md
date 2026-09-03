@@ -224,25 +224,25 @@ See [`values.yaml`](https://github.com/AkashiSN/node-rotation-controller/blob/ma
 
 ### Responding to a lost window (`NodeRotationWindowMissed`)
 
-**What it means:** a maintenance window occurrence closed with candidates still outstanding by age and state (eligible, or inside `retryBackoff`) and no rotation attributable to that occurrence ever completed. The guaranteed rotation chance for that occurrence was consumed and lost — with `minRotationChances: 1` (the floor), those nodes now reach `expireAfter` with no graceful replacement.
+**What it means:** a maintenance window occurrence closed with candidates still outstanding by age and state (eligible, or inside `retryBackoff`) and no rotation attributable to that occurrence ever completed. The guaranteed rotation chance for that occurrence was consumed and lost — with `minRotationChances: 1` (the floor), no guaranteed graceful chance remains for those nodes, and they may now reach `expireAfter` without one.
 
 Two words in that sentence are narrower than they look:
 
 - **Attributable, not "inside".** A window gates only rotation *starts*: an attempt that began in-window keeps running past the boundary. If it succeeds there — after the window closed — the occurrence was not lost, and it settles silently. Only an occurrence with no such attempt behind it is reported.
-- **Outstanding by age and state, not "the controller could have rotated".** The evaluation runs above the pool-level gates on purpose, so it says what happened to the window rather than why the controller did not act. A static NodePool, or one whose schedule is fatally infeasible, therefore reports every occurrence — including claims those gates would have stopped anyway. That is the reported fact, not a broken signal.
+- **Outstanding by age and state, not "the controller could have rotated".** The evaluation runs above the pool-level gates on purpose, so it says what happened to the window rather than why the controller did not act. A static NodePool, or one whose schedule is fatally infeasible, therefore reports every occurrence that closes with age/state-outstanding claims — including claims those gates would have stopped anyway. That is the reported fact, not a broken signal.
 
 **What to check:**
 
 - The `WindowMissed` Event on the NodePool — its counts (`windowOpenedAt`, `eligible`, `inBackoff`) say how much of the window's work went unrotated.
 - The preceding `rotation attempt failed` log lines and their `reason` — a lost window is usually the tail of one or more failed attempts, not a cold start.
 - `noderotation_retry_count` — climbing toward the escalated backoff cap means attempts are repeatedly failing, not merely running out of time.
-- Whether the pool is static (`StaticNodePool` Warning Event, [spec §3.3](specification/03-design.md)) — a static NodePool never attempts a surge rotation and will always miss its windows; see issue #302.
+- Whether the pool is static (`StaticNodePool` Warning Event, [spec §3.3](specification/03-design.md)) — a static NodePool never attempts a surge rotation, so it misses every occurrence that closes with age/state-outstanding claims; see issue #302.
 
 **What to do:** address the underlying failure surfaced by the `rotation attempt failed` lines (see [§1](#1-per-az-surge-headroom-zonal-pv) and [§5](#5-handling-a-stuck-drain)). If attempts are healthy but genuinely cannot fit the window — the batch is too large for the schedule — widen the maintenance window so more attempts complete per occurrence, or raise `minRotationChances` (`K`) so a single missed window still leaves guaranteed chances in reserve before the `expireAfter` backstop.
 
 **Known limits of this signal.** The occurrence is identified by the *presence* of the `noderotation.io/window-opened-at` annotation on the NodePool, and only what a reconcile observes exists at all. Three consequences, accepted by design:
 
-- **Two occurrences can be reported as one.** If no reconcile ever observes the out-of-window gap between them — the gap is short, the controller is down only across it, or API errors persist through it — the first occurrence's stamp survives into the second, and the pair is judged and reported once, under the earlier `windowOpenedAt`. No stuck rotation is needed for this. (The narrower case: a window shorter than the controller's 1-minute self-requeue may never be observed at all, and is then neither stamped nor reported.)
+- **Two occurrences can be reported as one.** This happens either of two ways: no reconcile ever observes the out-of-window gap between them — the gap is short, the controller is down only across it, or API errors persist through it — or the gap *is* observed on every pass, but every one of those passes deferred because a rotation was still in flight (a drain stuck across the gap and into the next occurrence collapses the pair this way too). Either path leaves the first occurrence's stamp in place through the second, and the pair is judged and reported once, under the earlier `windowOpenedAt`. A later success then settles against that earlier stamp — against the merged span, not the occurrence it actually belonged to. (The narrower case: a window shorter than the controller's 1-minute self-requeue may never be observed at all, and is then neither stamped nor reported.)
 - **A schedule edit can close a window immediately.** Editing a policy's `maintenanceWindows` while a stamp is held, such that the current time is no longer in-window, is treated as the occurrence closing right then — it is judged against the census as it stands at the edit.
 - **The report is at-most-once, never more.** The stamp is cleared before the counter and the Event, so a controller that stops in between drops that occurrence's report rather than inventing one, and a stop between the counter and the Event can leave one without the other. Alert on `increase(...) > 0`, not on an exact count.
 

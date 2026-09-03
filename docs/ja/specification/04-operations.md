@@ -55,7 +55,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 - **`noderotation_in_progress`:** プールあたりのアクティブローテーション数
 - **`noderotation_completed_total`:** 累積完了数; `outcome` ∈ {`success`, `failure`, `expired`}。`expired` = graceful ローテーション完了前に force-expire（1回のみ発行、success としてカウントしない）
 - **`noderotation_forceful_fallback_total`:** surge なし forceful fallback ローテーション開始数（§3.6）; 開始時にインクリメント
-- **`noderotation_window_missed_total`:** 年齢と状態から見て未処理の候補（eligible または `retryBackoff` 中）が残ったまま、その発生に帰属するローテーションが 1 件も完了しないままメンテナンスウィンドウの発生が閉じた回数（§5.2）。ウィンドウがゲートするのはローテーションの*開始*だけなので、発生の中で始まり境界の後に成功した試行はその発生に帰属し、発生を settle させる。ここでの「残っている」は「コントローラーがローテーションできたはず」ではない: この評価は意図的にプールレベルのゲートより前段で走る（§5.2）ため、static なプールやスケジュールが致命的に実行不能なプールは毎回の発生を報告する。発生ごとに**最大** 1 回、`window-opened-at` スタンプをクリアしたパスがインクリメント — クリアが発行より先に着地するため、その間に停止したコントローラーはシグナルを捏造せず落とす
+- **`noderotation_window_missed_total`:** 年齢と状態から見て未処理の候補（eligible または `retryBackoff` 中）が残ったまま、その発生に帰属するローテーションが 1 件も完了しないままメンテナンスウィンドウの発生が閉じた回数（§5.2）。ウィンドウがゲートするのはローテーションの*開始*だけなので、発生の中で始まり境界の後に成功した試行はその発生に帰属し、発生を settle させる。ここでの「残っている」は「コントローラーがローテーションできたはず」ではない: この評価は意図的にプールレベルのゲートより前段で走る（§5.2）ため、static なプールやスケジュールが致命的に実行不能なプールは、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびに報告する。発生ごとに**最大** 1 回、`window-opened-at` スタンプをクリアしたパスがインクリメント — クリアが発行より先に着地するため、その間に停止したコントローラーはシグナルを捏造せず落とす
 - **`noderotation_duration_seconds`:** フェーズごと; `phase` ∈ {`surge_wait`, `drain`}。`surge_wait` = `started-at → surge_ready`; `drain` = `draining-at → 旧 NodeClaim ファイナライズ`。成功遷移ごとに最大 1 回観測（リトライ書き込みでの二重カウントなし）
 - **`noderotation_window_active`:** 0/1 ウィンドウメンバーシップ表示
 - **`noderotation_policy_conflict`:** 0/1 セレクタータイまたは無効ポリシーによりブロック（§5.4）
