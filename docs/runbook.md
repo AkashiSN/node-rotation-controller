@@ -228,7 +228,7 @@ See [`values.yaml`](https://github.com/AkashiSN/node-rotation-controller/blob/ma
 
 **What to check:**
 
-- The `WindowMissed` Event on the NodePool — its counts (`windowOpenedAt`, eligible, in-backoff) say how much of the window's work went unrotated.
+- The `WindowMissed` Event on the NodePool — its counts (`windowOpenedAt`, `eligible`, `inBackoff`) say how much of the window's work went unrotated.
 - The preceding `rotation attempt failed` log lines and their `reason` — a lost window is usually the tail of one or more failed attempts, not a cold start.
 - `noderotation_retry_count` — climbing toward the escalated backoff cap means attempts are repeatedly failing, not merely running out of time.
 - Whether the pool is static (`StaticNodePool` Warning Event, [spec §3.3](specification/03-design.md)) — a static NodePool never attempts a surge rotation and will always miss its windows; see issue #302.
@@ -251,6 +251,7 @@ Start from what you **see**, confirm with the **signal**, then jump to the **fix
 | NodePool never rotates, candidates accumulate | `noderotation_policy_conflict == 1` | Fix the RotationPolicy selector overlap |
 | NodePool never rotates, no attempt is ever made | `StaticNodePool` Warning Event on the NodePool | The pool sets `spec.replicas` (static capacity), which surge cannot rotate. Karpenter forbids adding or removing `spec.replicas` on an existing NodePool, so migrate the workload to a dynamic NodePool or drop this one from the policy selector |
 | NodePool stopped rotating quietly | `noderotation_freeze_until_timestamp > 0` | Forgotten freeze — [§4](#4-the-freeze-workflow) |
+| A maintenance window closed with candidates still unrotated | `NodeRotationWindowMissed` alert; `WindowMissed` Warning Event | [§6](#responding-to-a-lost-window-noderotationwindowmissed) — check the preceding failed attempts and `retry_count` |
 | Nodes reach `expireAfter` despite the controller | `noderotation_completed_total{outcome="expired"}` | Lead time too tight — widen windows or lower tGP |
 | `noderotation_short_lead_nodes > 0` | `ShortLead` Warning Event | Raise `expireAfter` on the NodePool or add window days |
 | Rising `forceful_fallback_total` | `ForcefulFallback` Warning Event | Expected if throughput is tight; remediate via §2 if excessive |

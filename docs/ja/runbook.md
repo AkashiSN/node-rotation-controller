@@ -228,7 +228,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 
 **何を確認するか:**
 
-- NodePool 上の `WindowMissed` Event — そのカウント（`windowOpenedAt`、eligible、in-backoff）が、ウィンドウのどれだけの作業が未ローテーションだったかを示す。
+- NodePool 上の `WindowMissed` Event — そのカウント（`windowOpenedAt`、`eligible`、`inBackoff`）が、ウィンドウのどれだけの作業が未ローテーションだったかを示す。
 - 直前の `rotation attempt failed` ログ行とその `reason` — ウィンドウ喪失は通常、コールドスタートではなく 1 件以上の失敗した試行の末尾である。
 - `noderotation_retry_count` — エスカレートするバックオフの上限に向かって増加している場合、試行が時間切れではなく繰り返し失敗している。
 - プールが static かどうか（`StaticNodePool` Warning Event、[spec §3.3](specification/03-design.md)）— static な NodePool は surge ローテーションを一切試みず、常にウィンドウを逃す。issue #302 を参照。
@@ -251,6 +251,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 | NodePool が一切ローテーションしない、候補が溜まる | `noderotation_policy_conflict == 1` | RotationPolicy のセレクタ重複を修正 |
 | NodePool が一切ローテーションせず、試行も起きない | NodePool 上の `StaticNodePool` Warning Event | プールが `spec.replicas`（static capacity）を設定しており surge ではローテーションできない。Karpenter は既存 NodePool への `spec.replicas` の追加・削除を禁じているため、ワークロードを dynamic な NodePool へ移すか、ポリシーのセレクタからこのプールを外す |
 | NodePool がいつの間にかローテーション停止 | `freeze_until_timestamp > 0` | 忘れられた freeze — [§4](#4-freeze-ワークフロー) |
+| メンテナンスウィンドウが候補未ローテーションのまま閉じた | `NodeRotationWindowMissed` アラート; NodePool 上の `WindowMissed` Warning Event | [§6](#noderotationwindowmissed-への対処) — 直前の失敗した試行と `retry_count` を確認 |
 | ノードがコントローラーにもかかわらず expireAfter に到達 | `completed_total{outcome="expired"}` | lead time 不足 — ウィンドウ拡張か tGP 引き下げ |
 | `short_lead_nodes > 0` | `ShortLead` Warning Event | NodePool の `expireAfter` 引き上げかウィンドウ日追加 |
 | `forceful_fallback_total` が増加中 | `ForcefulFallback` Warning Event | スループットが逼迫なら §2 で対処。単発は設計通り |
