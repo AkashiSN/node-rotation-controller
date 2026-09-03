@@ -95,6 +95,7 @@ Per-NodePool series are cleared when the NodePool is deleted or loses its govern
 | `noderotation_in_progress` | Gauge | 0 or 1 (serial per pool in v1) |
 | `noderotation_completed_total{outcome}` | Counter | `outcome ∈ {success, failure, expired}`. Any `failure`/`expired` → investigate |
 | `noderotation_forceful_fallback_total` | Counter | Rising → graceful surges losing the race to deadlines |
+| `noderotation_window_missed_total` | Counter | Per pool — window occurrences that closed with candidates outstanding and nothing attributable to them rotated |
 | `noderotation_duration_seconds{phase}` | Histogram | `phase ∈ {surge_wait, drain}`. Use these to set your estimates |
 | `noderotation_drain_stuck` | Gauge | `1` → operator action needed ([§5](#5-handling-a-stuck-drain)) |
 | `noderotation_retry_count` | Gauge | `≥ 3` → systematic failure (preemption or AZ shortage) |
@@ -206,18 +207,46 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 |-------|------------|--------|
 | `NodeRotationCompletedFailureOrExpired` | A rotation failed or expired in the last hour | Check §1 (AZ capacity) and §5 (stuck drain) |
 | `NodeRotationCandidatesNotDraining` | Candidates haven't cleared across two windows | Check §2 (throughput) |
-| `NodeRotationStalledInWindow` | Window open, candidates exist, zero completions | Check §1 or §5 |
+| `NodeRotationStalledInWindow` | Window open, candidates or retrying claims exist, zero **successful** completions | Check §1 or §5 |
 | `NodeRotationDrainStuck` | Drain exceeds `tGP + buffer` | Follow §5 |
 | `NodeRotationShortLeadNodes` | Nodes can't get K chances before expiry | Raise `expireAfter` or add windows |
 | `NodeRotationRetryCountHigh` | Same rotation failing ≥ 3 times | Systematic cause — check §1 |
 | `NodeRotationForcefulFallback` | A rotation went surge-less (by design) | Check §2 if rising; single occurrence is expected |
+| `NodeRotationWindowMissed` | A maintenance window closed with candidates unrotated | See [below](#responding-to-a-lost-window-noderotationwindowmissed) |
 
 **Tune schedule-dependent ranges** in your values:
 
 - `prometheusRule.candidatesNotDraining.windowRange` → `2·P` (default `8d` for `{Wed, Sat}`)
 - `prometheusRule.stalledInWindow.completionRange` → window duration `D` (default `4h`)
+- `prometheusRule.windowMissed.range` → comfortably longer than one window period (default `24h`; widen for a weekly schedule)
 
 See [`values.yaml`](https://github.com/AkashiSN/node-rotation-controller/blob/main/charts/node-rotation-controller/values.yaml) for all tunable fields.
+
+### Responding to a lost window (`NodeRotationWindowMissed`)
+
+**What it means:** a maintenance window occurrence closed with candidates still outstanding by age and state (eligible, or inside `retryBackoff`) and no rotation attributable to that occurrence ever completed. The guaranteed rotation chance for that occurrence was consumed and lost — with `minRotationChances: 1` (the floor), no guaranteed graceful chance remains for those nodes, and they may now reach `expireAfter` without one.
+
+Two words in that sentence are narrower than they look:
+
+- **Attributable, not "inside".** A window gates only rotation *starts*: an attempt that began in-window keeps running past the boundary. If it succeeds there — after the window closed — the occurrence was not lost, and it settles silently. Only an occurrence with no such attempt behind it is reported.
+- **Outstanding by age and state, not "the controller could have rotated".** The evaluation runs above the pool-level gates on purpose, so it says what happened to the window rather than why the controller did not act. A static NodePool, or one whose schedule is fatally infeasible, therefore reports every occurrence that closes with age/state-outstanding claims — including claims those gates would have stopped anyway. That is the reported fact, not a broken signal.
+
+**What to check:**
+
+- The `WindowMissed` Event on the NodePool — its counts (`windowOpenedAt`, `eligible`, `inBackoff`) say how much of the window's work went unrotated.
+- The preceding `rotation attempt failed` log lines and their `reason` — a lost window is usually the tail of one or more failed attempts, not a cold start.
+- `noderotation_retry_count` — climbing toward the escalated backoff cap means attempts are repeatedly failing, not merely running out of time.
+- Whether the pool is static (`StaticNodePool` Warning Event, [spec §3.3](specification/03-design.md)) — a static NodePool never attempts a surge rotation, so it misses every occurrence that closes with age/state-outstanding claims; see issue #302.
+
+**What to do:** address the underlying failure surfaced by the `rotation attempt failed` lines (see [§1](#1-per-az-surge-headroom-zonal-pv) and [§5](#5-handling-a-stuck-drain)). If attempts are healthy but genuinely cannot fit the window — the batch is too large for the schedule — widen the maintenance window so more attempts complete per occurrence, or raise `minRotationChances` (`K`) so a single missed window still leaves guaranteed chances in reserve before the `expireAfter` backstop.
+
+**Known limits of this signal.** The occurrence is identified by the *presence* of the `noderotation.io/window-opened-at` annotation on the NodePool, and only what a reconcile observes exists at all. Three consequences, accepted by design:
+
+- **Two occurrences can be reported as one.** This happens either of two ways: no reconcile ever observes the out-of-window gap between them — the gap is short, the controller is down only across it, or API errors persist through it — or the gap *is* observed on every pass, but every one of those passes deferred because a rotation was still in flight (a drain stuck across the gap and into the next occurrence collapses the pair this way too). Either path leaves the first occurrence's stamp in place through the second, and the pair is judged and reported once, under the earlier `windowOpenedAt`. A later success then settles against that earlier stamp — against the merged span, not the occurrence it actually belonged to. (The narrower case: a window shorter than the controller's 1-minute self-requeue may never be observed at all, and is then neither stamped nor reported.)
+- **A schedule edit can close a window immediately.** Editing a policy's `maintenanceWindows` while a stamp is held, such that the current time is no longer in-window, is treated as the occurrence closing right then — it is judged against the census as it stands at the edit.
+- **The report is at-most-once, never more.** The stamp is cleared before the counter and the Event, so a controller that stops in between drops that occurrence's report rather than inventing one, and a stop between the counter and the Event can leave one without the other. Alert on `increase(...) > 0`, not on an exact count.
+
+**Note:** `NodeRotationStalledInWindow`'s `retry_count` arm can fire without `NodeRotationWindowMissed` following it. `noderotation_retry_count` is the highest retry count across all of a pool's NodeClaims regardless of eligibility, so it can stay elevated for a claim `noderotation_window_missed_total` deliberately does not count — one whose Node has since been marked `karpenter.sh/do-not-disrupt`, or one that is deleting or already expired. Seeing the two disagree in that direction does not mean either signal is broken.
 
 ---
 
@@ -235,6 +264,7 @@ Start from what you **see**, confirm with the **signal**, then jump to the **fix
 | NodePool never rotates, candidates accumulate | `noderotation_policy_conflict == 1` | Fix the RotationPolicy selector overlap |
 | NodePool never rotates, no attempt is ever made | `StaticNodePool` Warning Event on the NodePool | The pool sets `spec.replicas` (static capacity), which surge cannot rotate. Karpenter forbids adding or removing `spec.replicas` on an existing NodePool, so migrate the workload to a dynamic NodePool or drop this one from the policy selector |
 | NodePool stopped rotating quietly | `noderotation_freeze_until_timestamp > 0` | Forgotten freeze — [§4](#4-the-freeze-workflow) |
+| A maintenance window closed with candidates still unrotated | `NodeRotationWindowMissed` alert; `WindowMissed` Warning Event | [§6](#responding-to-a-lost-window-noderotationwindowmissed) — check the preceding failed attempts and `retry_count` |
 | Nodes reach `expireAfter` despite the controller | `noderotation_completed_total{outcome="expired"}` | Lead time too tight — widen windows or lower tGP |
 | `noderotation_short_lead_nodes > 0` | `ShortLead` Warning Event | Raise `expireAfter` on the NodePool or add window days |
 | Rising `forceful_fallback_total` | `ForcefulFallback` Warning Event | Expected if throughput is tight; remediate via §2 if excessive |

@@ -128,6 +128,22 @@ Reconcile(req):
   return reconcile_nodepool(nodepool(req.obj))
 
 reconcile_nodepool(np):
+  # ── 0. ウィンドウクローズ評価（§4.2）。この関数内のすべてのゲートより前段: これは
+  #        ウィンドウに何が起きたかを述べるものであり、コントローラーが動かなかった
+  #        理由ではない。Reconcile 自身のガバナンスゲート（ポリシー競合、ガバナンス
+  #        ポリシーなし）は reconcile_nodepool が呼ばれる前にすでに return している。
+  #        以下の書き込みはすべて条件付き: 書き込みループの中で、権威的なアノテーション
+  #        に対して（同じ census・同じ now で）verdict を再計算し、同じ action が再び
+  #        得られること、かつ評価したスタンプが依然としてそのままであることを要求する。
+  #        新しく読んだオブジェクトがもはや正当化しない verdict は、どちら向きであっても
+  #        書き込まない。
+  match window_edge(np, census(np), in_window(now)):
+    case stamp:    annotate(np, window-opened-at=now)        # only-if still `stamp`
+    case defer:    pass                                      # ローテーションがまだ成功しうる
+    case settled:  clear(np, window-opened-at)               # only-if still `settled`
+    case missed:   won := clear(np, window-opened-at)        # only-if still `missed`
+                   if won: emit_metrics(window_missed); event(WindowMissed)
+
   # ── 1. 進行中のローテーションを先に駆動（シリアル: NodePool あたり最大 1）
   if name := np[active-rotation]:
       return advance(np, name)
@@ -292,6 +308,7 @@ advance(np, name):
 - **メトリクス発行（完了）:** anchor 解放の書き込み後に、その書き込みを行ったパスだけが発行する。カウンター・ヒストグラム・完了ログ・Event は解放された anchor 1 つにつき 1 回発火する。書き込みと発行の間でクラッシュすると発行は失われる（at-most-once）
 - **メトリクス発行（claim スコープ）:** `expired` へ入る 2 つの遷移 — `abortPendingExpiry` と `advanceFailed` の削除分岐 — は、ディスパッチ元ハンドラー自身の遷移前状態だけを受け付ける条件付き NodeClaim 書き込みで遷移を主張するため、`expired` は遷移を行ったパスが 1 回だけ発行する。これは既に終端状態の claim を再発行しない `advanceExpired` と整合する
 - **発行は「試行」ではなく「書き込み」に従う:** 条件付き claim 書き込みの結果は書き込みループ自身が生成し、試行ごとにリセットされる。したがって、最初の試行が conflict し、リトライで claim が finalize 済みだった場合の結果は成功ではなく *gone* になる。終端書き込み前に消えた claim は anchor を残し、その結果は完了パス（`expired`、cooldown なし）が引き受ける。これは `failure` のロールバックにも適用され、試行の発行と failure pause のスタンプは、それを記録する書き込みが成立したときにのみ行い、報告する retry count はその書き込みが生成した値を使う
+- **メトリクス発行（ウィンドウクローズ）:** 喪失ウィンドウのカウンターと `WindowMissed` Event は `window-opened-at` スタンプをクリアした書き込みの後に続き、その書き込みが成立したパスだけが発行する — 発生ごとに最大 1 回。クリアと発行の間でコントローラーが停止するとその発生の報告は失われる（捏造はしない）。カウンターと Event の間で停止すれば、片方だけが残りうる
 - **発行は書き込みの直後・クリーンアップより前に置く:** クリーンアップは失敗しうる。そこでエラーになると次の reconcile は `advanceExpired` に渡るが、そのハンドラーは修復するだけで意図的に発行しない。したがってクリーンアップの後ろに置いた発行は、通常の一時的な API エラーでリトライされずに失われる。残る消失窓は完了パスが既に受け入れているものと同じ既約な窓 — 書き込みと発行の間でコントローラーが死ぬ場合（at-most-once）
 
 ## 5.3 状態モデル
@@ -309,6 +326,7 @@ advance(np, name):
 | `draining-at` | NodePool | RFC3339 | ドレイン所要時間 anchor（§4.2） |
 | `surge-wait` | NodePool | Go duration | 完了ログの surge フェーズ所要時間 |
 | `rotation-mode` | NodePool | `forceful-fallback` | surge なしパスマーカー |
+| `window-opened-at` | NodePool | RFC3339 | 観測されたウィンドウの発生（§4.2） |
 | `state` | 旧 NodeClaim | `pending`/`draining`/`failed`/`expired` | 進捗状態 |
 | `started-at` | 旧 NodeClaim | RFC3339 | `readyTimeout` 期限 |
 | `failed-at` | 旧 NodeClaim | RFC3339 | バックオフ anchor |
@@ -331,6 +349,9 @@ advance(np, name):
 - **`draining-at`:** `pending → draining` で write-once。旧 NodeClaim の `deletionTimestamp` は完了時に消失 — この anchor が必要
 - **`surge-wait`:** `pending → draining` で write-once。旧 NodeClaim（`started-at` のキャリア）がその遷移で削除される
 - **`rotation-mode`:** forceful-fallback 開始時に anchor にスタンプ。不在 = デフォルト surge。すべての終了パスで anchor とともにクリア
+- **`window-opened-at`:** in-window の reconcile でこのアノテーションが不在だと判明した最初の回にスタンプされ、window 外の reconcile で存在すると判明した最初の回にクリアされる。その**存在**が発生の識別子であり、スケジュールから発生の開始時刻を導出することはしない — 週次の投影は DST をアンカー週に固定しているため、復元した壁時計上の開始時刻は最大 1 時間ずれうる。in-flight のローテーションはクリアを遅延させる; 読み取れない値は in-window では再スタンプされ、window 外では黙ってクリアされる。発生を「観測」で識別することに由来する既知の限界（v1 で許容）:
+    - **2 つの発生が 1 件の報告にまとまる。** これは 2 通りの経路のいずれかで起きる: (a) 発生と発生の間の window 外のギャップを reconcile が 1 度も観測しない場合 — ギャップが reconcile 間隔より短い、その区間だけコントローラーが停止していた、API エラーがその区間を通じて続いた — か、(b) そのギャップを毎回観測してはいるものの、観測したすべてのパスでローテーションが in-flight のため `WindowDefer` を返し続ける場合。ギャップをまたいで次の発生にまで及ぶ stuck な drain は、まさにこの経路で 2 つを 1 件にまとめる。どちらの経路でも先の発生のスタンプは次の発生まで残り、2 つはまとめて 1 回だけ判定・報告される（報告に載るのは先の `window-opened-at`）。その後の成功はこの先のスタンプに対して settle する — つまり、本来その成功が属していた発生ではなく、まとめられた期間全体に対して settle する。より狭い、すでに含意されているケースは 1 分の self-requeue より短いウィンドウそのもの: 観測されないためスタンプされず、報告もされない
+    - **スタンプ保持中にスケジュールを編集して現在時刻が window 外になれば、即座のクローズとして扱われる。** その時点で、その時点の census に対して発生が判定される — スタンプが書かれたときのスケジュールをコントローラーは記録していない
 - **`state`:** `expired` は終端 — forceful drain 下でファイナライズ中の claim の再選定をブロック
 - **`started-at`:** 試行ごとに write-once。failed 書き込み時にクリア（`state=failed` と単一更新）。リトライ時に再スタンプ
 - **`surge-claim`:** placeholder の bind ターゲット（`spec.nodeName`）が観測可能になり次第永続化。failed 書き込み時にクリア

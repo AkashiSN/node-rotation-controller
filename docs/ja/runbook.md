@@ -95,6 +95,7 @@ NodePool 単位の系列は NodePool 削除時、または統治 `RotationPolicy
 | `noderotation_in_progress` | Gauge | 0 か 1（v1 は pool ごとに直列） |
 | `noderotation_completed_total{outcome}` | Counter | `outcome ∈ {success, failure, expired}`。failure/expired → 調査 |
 | `noderotation_forceful_fallback_total` | Counter | 増加中 → graceful surge がデッドラインに間に合っていない |
+| `noderotation_window_missed_total` | Counter | pool ごと — 候補が残ったまま、帰属するローテーションが何も行われずに閉じたウィンドウ発生数 |
 | `noderotation_duration_seconds{phase}` | Histogram | `phase ∈ {surge_wait, drain}`。見積もりの設定に使う |
 | `noderotation_drain_stuck` | Gauge | `1` → 運用者の対処が必要（[§5](#5-drain-が詰まったときの対処)） |
 | `noderotation_retry_count` | Gauge | `≥ 3` → systematic な失敗（preemption か AZ 不足） |
@@ -206,18 +207,46 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 |---------|---------|------|
 | `NodeRotationCompletedFailureOrExpired` | 直近 1h にローテーションが失敗/expired | §1（AZ 容量）と §5（stuck drain）を確認 |
 | `NodeRotationCandidatesNotDraining` | 2 ウィンドウ跨いで候補がさばけない | §2（スループット）を確認 |
-| `NodeRotationStalledInWindow` | ウィンドウ内で候補あり、完了ゼロ | §1 または §5 を確認 |
+| `NodeRotationStalledInWindow` | ウィンドウ内で候補またはリトライ中の claim あり、**成功**完了ゼロ | §1 または §5 を確認 |
 | `NodeRotationDrainStuck` | drain が `tGP + buffer` を超過 | §5 に従う |
 | `NodeRotationShortLeadNodes` | ノードが K 回の機会を得られない | `expireAfter` を引き上げるかウィンドウ日を追加 |
 | `NodeRotationRetryCountHigh` | 同じローテーションが 3 回以上失敗 | systematic な原因 — §1 を確認 |
 | `NodeRotationForcefulFallback` | ローテーションが surge-less で実行された | 設計通り。増加が過剰なら §2 で対処 |
+| `NodeRotationWindowMissed` | 候補が未ローテーションのままメンテナンスウィンドウが閉じた | [下記](#noderotationwindowmissed-への対処)を参照 |
 
 **スケジュール依存のレンジを調整:**
 
 - `prometheusRule.candidatesNotDraining.windowRange` → `2·P`（既定 `8d`、`{Wed, Sat}` 向け）
 - `prometheusRule.stalledInWindow.completionRange` → ウィンドウ長 `D`（既定 `4h`）
+- `prometheusRule.windowMissed.range` → ウィンドウ周期より十分長く（既定 `24h`; 週次スケジュールでは広げる）
 
 全チューニング項目は [`values.yaml`](https://github.com/AkashiSN/node-rotation-controller/blob/main/charts/node-rotation-controller/values.yaml) を参照。
+
+### `NodeRotationWindowMissed` への対処
+
+**何を意味するか:** メンテナンスウィンドウの発生が、年齢と状態から見て未処理の候補（eligible、または `retryBackoff` 中）を残したまま閉じ、その発生に帰属するローテーションが 1 件も完了しなかった。その発生に対する保証ローテーション機会は消費されたまま失われた — `minRotationChances: 1`（下限）の場合、それらのノードに保証された graceful な機会はもう残っておらず、置き換えのないまま `expireAfter` に到達することもありうる。
+
+この文中の 2 つの語は、見た目より狭い意味を持つ:
+
+- **「帰属する」であって「中で」ではない。** ウィンドウがゲートするのはローテーションの*開始*だけで、in-window で始まった試行は境界を越えて走り続ける。それが境界の後 — ウィンドウが閉じた後 — に成功したなら、その発生は失われていないので黙って settle する。そうした試行が背後に 1 件もない発生だけが報告される。
+- **「年齢と状態から見て未処理」であって「コントローラーがローテーションできたはず」ではない。** この評価は意図的にプールレベルのゲートより前段で走り、コントローラーが動かなかった理由ではなくウィンドウに何が起きたかを述べる。したがって static な NodePool や、スケジュールが致命的に実行不能なプールは、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびに報告する — それらのゲートがどのみち止めていたはずの claim も含まれる。これは報告された事実であって、シグナルの故障ではない。
+
+**何を確認するか:**
+
+- NodePool 上の `WindowMissed` Event — そのカウント（`windowOpenedAt`、`eligible`、`inBackoff`）が、ウィンドウのどれだけの作業が未ローテーションだったかを示す。
+- 直前の `rotation attempt failed` ログ行とその `reason` — ウィンドウ喪失は通常、コールドスタートではなく 1 件以上の失敗した試行の末尾である。
+- `noderotation_retry_count` — エスカレートするバックオフの上限に向かって増加している場合、試行が時間切れではなく繰り返し失敗している。
+- プールが static かどうか（`StaticNodePool` Warning Event、[spec §3.3](specification/03-design.md)）— static な NodePool は surge ローテーションを一切試みないため、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびにウィンドウを逃す。issue #302 を参照。
+
+**何をするか:** `rotation attempt failed` 行が示す根本原因に対処する（[§1](#1-az-ごとの-surge-ヘッドルームゾーン-pv) と [§5](#5-drain-が詰まったときの対処) を参照）。試行自体は健全だが、バッチがスケジュールに対して大きすぎて本当に収まらない場合は、メンテナンスウィンドウを拡張して 1 回の発生あたりの完了数を増やすか、`minRotationChances`（`K`）を引き上げて、1 回のウィンドウ喪失があっても `expireAfter` バックストップ前に保証された機会を残すようにする。
+
+**このシグナルの既知の限界。** 発生は NodePool 上の `noderotation.io/window-opened-at` アノテーションの*存在*で識別され、reconcile が観測したものだけが存在する。設計上受け入れている帰結が 3 つある:
+
+- **2 つの発生が 1 件として報告されうる。** これは 2 通りの経路のいずれかで起きる: 発生と発生の間の window 外のギャップを reconcile が 1 度も観測しない場合 — ギャップが短い、その区間だけコントローラーが停止していた、API エラーがその区間を通じて続いた — か、あるいはそのギャップを毎回観測してはいるものの、観測したすべてのパスでローテーションが in-flight のため defer し続けた場合（ギャップをまたいで次の発生にまで及ぶ stuck な drain は、まさにこの経路で 2 つを 1 件にまとめる）。どちらの経路でも先の発生のスタンプは次の発生まで残り、2 つはまとめて 1 回だけ判定・報告される（載るのは先の `windowOpenedAt`）。その後の成功はこの先のスタンプに対して settle する — つまり、本来その成功が属していた発生ではなく、まとめられた期間全体に対して settle する。（より狭いケース: コントローラーの 1 分 self-requeue より短いウィンドウはそもそも観測されないことがあり、その場合スタンプも報告も行われない。）
+- **スケジュールの編集がウィンドウを即座に閉じうる。** スタンプ保持中にポリシーの `maintenanceWindows` を編集して現在時刻が window 外になると、その時点で発生が閉じたものとして扱われ、その時点の census に対して判定される。
+- **報告は最大 1 回で、それ以上にはならない。** スタンプのクリアはカウンターと Event より先に行われるため、その間に停止したコントローラーはその発生の報告を捏造せず落とし、カウンターと Event の間で停止すれば片方だけが残りうる。正確な回数ではなく `increase(...) > 0` でアラートすること。
+
+**注記:** `NodeRotationStalledInWindow` の `retry_count` アームは、`NodeRotationWindowMissed` を伴わずに単独で発火することがある。`noderotation_retry_count` は eligibility のバケットに関係なく、プールの NodeClaim 全体での最大リトライ回数なので、`noderotation_window_missed_total` が意図的にカウントしない claim（Node が後から `karpenter.sh/do-not-disrupt` を付与された、または削除中・期限切れ済みの claim）でも高いまま残りうる。この向きの不一致は、どちらかの信号が壊れていることを意味しない。
 
 ---
 
@@ -235,6 +264,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 | NodePool が一切ローテーションしない、候補が溜まる | `noderotation_policy_conflict == 1` | RotationPolicy のセレクタ重複を修正 |
 | NodePool が一切ローテーションせず、試行も起きない | NodePool 上の `StaticNodePool` Warning Event | プールが `spec.replicas`（static capacity）を設定しており surge ではローテーションできない。Karpenter は既存 NodePool への `spec.replicas` の追加・削除を禁じているため、ワークロードを dynamic な NodePool へ移すか、ポリシーのセレクタからこのプールを外す |
 | NodePool がいつの間にかローテーション停止 | `freeze_until_timestamp > 0` | 忘れられた freeze — [§4](#4-freeze-ワークフロー) |
+| メンテナンスウィンドウが候補未ローテーションのまま閉じた | `NodeRotationWindowMissed` アラート; NodePool 上の `WindowMissed` Warning Event | [§6](#noderotationwindowmissed-への対処) — 直前の失敗した試行と `retry_count` を確認 |
 | ノードがコントローラーにもかかわらず expireAfter に到達 | `completed_total{outcome="expired"}` | lead time 不足 — ウィンドウ拡張か tGP 引き下げ |
 | `short_lead_nodes > 0` | `ShortLead` Warning Event | NodePool の `expireAfter` 引き上げかウィンドウ日追加 |
 | `forceful_fallback_total` が増加中 | `ForcefulFallback` Warning Event | スループットが逼迫なら §2 で対処。単発は設計通り |

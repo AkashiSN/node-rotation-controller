@@ -103,7 +103,7 @@ metrics:
 # (especially the window-period-dependent ones) without editing the template.
 # See the production runbook (docs/runbook.md) for how to read the metrics.
 prometheusRule:
-  # -- Create a PrometheusRule with the seven §4.2 alerts.
+  # -- Create a PrometheusRule with the eight §4.2 alerts.
   enabled: false
   # -- Extra labels for the PrometheusRule (e.g. a Prometheus release selector).
   labels: {}
@@ -148,6 +148,16 @@ prometheusRule:
   forcefulFallback:
     for: 0m
     severity: info
+  # A maintenance window occurrence closed with candidates unrotated and no
+  # rotation attributable to it ever completing, even after allowing an
+  # in-flight attempt to finish past the boundary (spec §4.2, issue #303). Set
+  # `range` to comfortably span
+  # your window period so a lost window is still visible on the next look —
+  # 24h suits a daily window; widen it for a weekly one.
+  windowMissed:
+    range: 24h
+    for: 0m
+    severity: warning
 
 podDisruptionBudget:
   # -- Create a PodDisruptionBudget for the controller. With replicaCount=2 and

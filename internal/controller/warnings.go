@@ -12,6 +12,7 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/adapt"
+	"github.com/AkashiSN/node-rotation-controller/internal/decide"
 	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
 	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 )
@@ -31,6 +32,7 @@ const (
 	reasonGovernanceLost   = "GovernanceLost"
 	reasonForcefulFallback = "ForcefulFallback"
 	reasonStaticNodePool   = "StaticNodePool"
+	reasonWindowMissed     = "WindowMissed"
 )
 
 // warningEmitter surfaces non-fatal schedule findings and per-node short-lead
@@ -190,6 +192,25 @@ func (w *warningEmitter) EmitStaticNodePool(ctx context.Context, pool *karpv1.No
 		"static NodePool cannot be rotated by surge; not starting a rotation", "replicas", replicas)
 	if w.events != nil {
 		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonStaticNodePool, actionEvaluateNodePool, "%s", msg)
+	}
+}
+
+// EmitWindowMissed logs and raises the Warning Event for a maintenance window
+// occurrence that closed with candidates outstanding and no rotation
+// attributable to it ever completing (spec §4.2, issue #303). Unlike the other
+// emitters this one carries no dedup state: the caller has already proven it
+// owned the transition by clearing the window-opened-at stamp, so it fires at
+// most once per occurrence — the clear lands before this call, so a controller
+// that stops in between drops the Event rather than inventing one.
+func (w *warningEmitter) EmitWindowMissed(ctx context.Context, pool *karpv1.NodePool, openedAt string, c selection.Census) {
+	msg := fmt.Sprintf(
+		"maintenance window first observed open at %s closed with %d candidate(s) unrotated (%d eligible, %d in retryBackoff): even after allowing an in-flight attempt to finish past the boundary, no rotation attributable to that occurrence completed. The guaranteed rotation chance for those NodeClaims was consumed without a graceful replacement; they remain subject to Karpenter's forceful expiration.",
+		openedAt, decide.Outstanding(c), c.Eligible, c.InBackoff)
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
+		"maintenance window closed with candidates unrotated",
+		"windowOpenedAt", openedAt, "eligible", c.Eligible, "inBackoff", c.InBackoff)
+	if w.events != nil {
+		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonWindowMissed, actionEvaluateSchedule, "%s", msg)
 	}
 }
 

@@ -34,6 +34,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 | `noderotation_in_progress` | Gauge | `nodepool` |
 | `noderotation_completed_total` | Counter | `nodepool`, `outcome` |
 | `noderotation_forceful_fallback_total` | Counter | `nodepool` |
+| `noderotation_window_missed_total` | Counter | `nodepool` |
 | `noderotation_duration_seconds` | Histogram | `nodepool`, `phase` |
 | `noderotation_window_active` | Gauge | `nodepool` |
 | `noderotation_policy_conflict` | Gauge | `nodepool` |
@@ -54,6 +55,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 - **`noderotation_in_progress`:** プールあたりのアクティブローテーション数
 - **`noderotation_completed_total`:** 累積完了数; `outcome` ∈ {`success`, `failure`, `expired`}。`expired` = graceful ローテーション完了前に force-expire（1回のみ発行、success としてカウントしない）
 - **`noderotation_forceful_fallback_total`:** surge なし forceful fallback ローテーション開始数（§3.6）; 開始時にインクリメント
+- **`noderotation_window_missed_total`:** 年齢と状態から見て未処理の候補（eligible または `retryBackoff` 中）が残ったまま、その発生に帰属するローテーションが 1 件も完了しないままメンテナンスウィンドウの発生が閉じた回数（§5.2）。ウィンドウがゲートするのはローテーションの*開始*だけなので、発生の中で始まり境界の後に成功した試行はその発生に帰属し、発生を settle させる。ここでの「残っている」は「コントローラーがローテーションできたはず」ではない: この評価は意図的にプールレベルのゲートより前段で走る（§5.2）ため、static なプールやスケジュールが致命的に実行不能なプールは、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびに報告する。発生ごとに**最大** 1 回、`window-opened-at` スタンプをクリアしたパスがインクリメント — クリアが発行より先に着地するため、その間に停止したコントローラーはシグナルを捏造せず落とす
 - **`noderotation_duration_seconds`:** フェーズごと; `phase` ∈ {`surge_wait`, `drain`}。`surge_wait` = `started-at → surge_ready`; `drain` = `draining-at → 旧 NodeClaim ファイナライズ`。成功遷移ごとに最大 1 回観測（リトライ書き込みでの二重カウントなし）
 - **`noderotation_window_active`:** 0/1 ウィンドウメンバーシップ表示
 - **`noderotation_policy_conflict`:** 0/1 セレクタータイまたは無効ポリシーによりブロック（§5.4）
@@ -92,6 +94,7 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | NodeClaim | `ShortLead` | claim が `K` 回を保証できない |
 | NodePool | `ForcefulFallback` | surge なしローテーション開始 |
 | NodePool | `StaticNodePool` | `spec.replicas` が設定されており surge では絶対にローテーションできない（§3.3） |
+| NodePool | `WindowMissed` | 候補が未ローテーションのままウィンドウが閉じ、その発生に帰属するローテーションが 1 件もなかった（§4.2） |
 | NodePool | `PolicyConflict` | 同一 specificity の RotationPolicy タイ — そのプールはローテーションしない（§5.4） |
 | NodePool | `GovernanceLost` | ガバナンス喪失後に in-flight ローテーションをロールバック（§5.4） |
 | NodePool | `RotationStarted` | 候補選定（`Normal`） |
@@ -119,6 +122,7 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
 | `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `total` |
+| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoff` |
 
 - **レベルトリガー行**（`no rotation candidate`、`surge placeholder is not schedulable`）は遷移 dedup を使用 — reason/census/message が変化した場合のみ再発行
 - **デバッグ冗長性**（`V(1)`）で dedup なしの各パス findings とハートビートを追加
@@ -130,11 +134,16 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 |-------|-----------|
 | 失敗/expired | `increase(noderotation_completed_total{outcome=~"failure|expired"}[1h]) > 0` |
 | 追いつけない | `noderotation_candidates > 0` が 2 回連続ウィンドウ |
-| ウィンドウ無駄 | `window_active == 1` 全ウィンドウ、完了ゼロ、候補非ゼロ |
+| ウィンドウ喪失 | `increase(noderotation_window_missed_total[24h]) > 0` |
+| ウィンドウ詰まり（in-window） | `window_active == 1`、**成功**完了ゼロ、かつ `noderotation_candidates > 0 or noderotation_retry_count > 0` |
 | ドレイン停滞 | `noderotation_drain_stuck == 1` |
 | Short lead | `noderotation_short_lead_nodes > 0` |
 | 体系的失敗 | `noderotation_retry_count >= 3` |
 | Forceful fallback | `increase(noderotation_forceful_fallback_total[1h]) > 0`（severity: info） |
+
+in-window 条件の `retry_count` 側はロードベアリングである: エスカレートした `retryBackoff` 中の NodeClaim は eligible ではないため、プールに未処理の作業が残っていても `noderotation_candidates` は `0` に落ちる。`candidates` だけに依存する条件は、ウィンドウ全体が失敗した試行だけで費やされた場合に沈黙する — これはまさに `window_missed_total` が報告するために追加されたケースである。
+
+完了側を `outcome="success"` に限定することも、同じインシデントに対して同じ向きにロードベアリングである。`noderotation_completed_total` は `failure` と `expired` も数え、`readyTimeout` のロールバックは failure を記録する。したがって*あらゆる*完了を進捗とみなす条件では、失敗した試行 1 件ごとにアラートが抑止され、ウィンドウ全体が失敗した試行だけで費やされたときにちょうど沈黙する。表明すべき条件は「ウィンドウが開いていて、作業が残っていて、何も成功していない」である。
 
 Helm chart がオプションの `PrometheusRule` として提供（`prometheusRule.enabled` でゲート、デフォルト `false`）。チューニングは [プロダクション Runbook](../runbook.md) を参照。
 

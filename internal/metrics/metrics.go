@@ -23,6 +23,7 @@ import (
 type Recorder struct {
 	completed        *prometheus.CounterVec
 	forcefulFallback *prometheus.CounterVec
+	windowMissed     *prometheus.CounterVec
 	duration         *prometheus.HistogramVec
 	candidates       *prometheus.GaugeVec
 	inProgress       *prometheus.GaugeVec
@@ -58,6 +59,10 @@ func New(reg prometheus.Registerer) *Recorder {
 			Name: "noderotation_forceful_fallback_total",
 			Help: "Cumulative surge-less window-bounded forceful-fallback rotations initiated (spec §3.3).",
 		}, []string{"nodepool"}),
+		windowMissed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "noderotation_window_missed_total",
+			Help: "Cumulative maintenance window occurrences that closed with candidates outstanding by age and state and no rotation attributable to the occurrence ever completing (spec §4.2).",
+		}, poolLabel),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "noderotation_duration_seconds",
 			Help:    "Per-phase rotation duration in seconds (phase: surge_wait, drain).",
@@ -121,7 +126,7 @@ func New(reg prometheus.Registerer) *Recorder {
 		}, poolLabel),
 	}
 	reg.MustRegister(
-		r.completed, r.forcefulFallback, r.duration, r.candidates, r.inProgress, r.freezeUntil,
+		r.completed, r.forcefulFallback, r.windowMissed, r.duration, r.candidates, r.inProgress, r.freezeUntil,
 		r.ageThreshold, r.rotationChances, r.windowPeriod, r.shortLead,
 		r.drainStuck, r.retryCount, r.policyConflict, r.windowActive,
 		r.throughputCapacity, r.tRotEstimate, r.tRotBound,
@@ -142,6 +147,18 @@ func (r *Recorder) Failure(nodePool, _ string) {
 // recorders and logged by callers; it is not a metric label (cardinality).
 func (r *Recorder) ForcefulFallback(nodePool, _ string) {
 	r.forcefulFallback.WithLabelValues(nodePool).Inc()
+}
+
+// WindowMissed increments the lost-window counter for one NodePool: a
+// maintenance window occurrence closed with candidates outstanding by age and
+// state — including ones a later pool-level gate would have stopped — and no
+// rotation attributable to that occurrence ever completing, a rotation that
+// started inside it and finished after the boundary included (spec §4.2). It is
+// incremented at most once per occurrence, by the pass that cleared the
+// window-opened-at stamp: the clear lands first, so a controller that stops
+// between the two drops the increment rather than inventing one.
+func (r *Recorder) WindowMissed(nodePool string) {
+	r.windowMissed.WithLabelValues(nodePool).Inc()
 }
 
 func (r *Recorder) ObserveWindow(nodePool string, active bool) {
@@ -194,6 +211,8 @@ func (r *Recorder) ForgetPool(nodePool string) {
 	r.duration.DeletePartialMatch(prometheus.Labels{"nodepool": nodePool})
 	// forceful_fallback_total{nodepool} has only the nodepool label.
 	r.forcefulFallback.DeleteLabelValues(nodePool)
+	// window_missed_total{nodepool} has only the nodepool label.
+	r.windowMissed.DeleteLabelValues(nodePool)
 }
 
 func b2f(b bool) float64 {
