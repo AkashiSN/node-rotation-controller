@@ -51,10 +51,14 @@ spec:
         # Correlated per NodePool, because maintenanceWindows is now per-policy and
         # noderotation_window_active carries a nodepool label (spec §5.4): each pool
         # is judged against its OWN candidates and completions, not a cluster-wide sum.
+        # The retry_count arm is load-bearing: a claim inside its escalated
+        # retryBackoff is not eligible, so noderotation_candidates falls to 0
+        # while the pool still has work outstanding (issue #303). Without it this
+        # alert is silent through a window spent entirely on failed attempts.
         - alert: NodeRotationStalledInWindow
           expr: |-
             noderotation_window_active == 1
-            and on(nodepool) (noderotation_candidates > 0)
+            and on(nodepool) (noderotation_candidates > 0 or on(nodepool) noderotation_retry_count > 0)
             unless on(nodepool) (sum by(nodepool) (increase(noderotation_completed_total[{{ .Values.prometheusRule.stalledInWindow.completionRange }}])) > 0)
           for: {{ .Values.prometheusRule.stalledInWindow.for }}
           labels:
@@ -126,5 +130,23 @@ spec:
               {{`{{ $value }}`}} window-bounded forceful fallback(s) on NodePool
               {{`{{ $labels.nodepool }}`}} in the last hour — graceful surges are
               losing the race to the deadline (spec §3.3, ADR-0001). See
+              docs/runbook.md.
+        # A maintenance window occurrence closed with candidates the controller
+        # could have rotated and nothing rotated inside it: the guaranteed
+        # rotation chance was consumed and lost, and with minRotationChances: 1
+        # those nodes now reach expireAfter with no graceful replacement (spec
+        # §4.2). This is the post-hoc fact; NodeRotationStalledInWindow is the
+        # in-window early warning for the same failure.
+        - alert: NodeRotationWindowMissed
+          expr: increase(noderotation_window_missed_total[{{ .Values.prometheusRule.windowMissed.range }}]) > 0
+          for: {{ .Values.prometheusRule.windowMissed.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.windowMissed.severity }}
+          annotations:
+            summary: node-rotation-controller lost a maintenance window
+            description: >-
+              NodePool {{`{{ $labels.nodepool }}`}} had a maintenance window close
+              with candidates unrotated and no rotation completed inside it — the
+              guaranteed rotation chance was consumed (spec §4.2). See
               docs/runbook.md.
 {{- end }}

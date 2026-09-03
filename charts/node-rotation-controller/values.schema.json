@@ -60,7 +60,13 @@
         "drainStuck": { "$ref": "#/definitions/alertTuning" },
         "shortLeadNodes": { "$ref": "#/definitions/alertTuning" },
         "retryCountHigh": { "$ref": "#/definitions/alertTuning" },
-        "forcefulFallback": { "$ref": "#/definitions/alertTuning" }
+        "forcefulFallback": { "$ref": "#/definitions/alertTuning" },
+        "windowMissed": {
+          "allOf": [
+            { "$ref": "#/definitions/alertTuning" },
+            { "properties": { "range": { "$ref": "#/definitions/promDuration" } } }
+          ]
+        }
       }
     },
     "podDisruptionBudget": {

@@ -15,9 +15,13 @@ tests:
       - equal:
           path: spec.groups[0].rules[2].alert
           value: NodeRotationStalledInWindow
+      # Claims inside their escalated retryBackoff are NOT eligible, so
+      # noderotation_candidates reads 0 while a pool's every candidate waits
+      # (issue #303). Without the retry_count arm this alert stays silent through
+      # exactly the incident it exists to catch.
       - matchRegex:
           path: spec.groups[0].rules[2].expr
-          pattern: 'and on\(nodepool\) \(noderotation_candidates > 0\)'
+          pattern: 'and on\(nodepool\) \(noderotation_candidates > 0 or on\(nodepool\) noderotation_retry_count > 0\)'
       - matchRegex:
           path: spec.groups[0].rules[2].expr
           pattern: 'unless on\(nodepool\) \(sum by\(nodepool\) \(increase\(noderotation_completed_total'
@@ -25,3 +29,23 @@ tests:
       - notMatchRegex:
           path: spec.groups[0].rules[2].expr
           pattern: 'on\(\) \(sum\(noderotation_candidates\)'
+  - it: WindowMissed alerts on the lost-window counter
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[7].alert
+          value: NodeRotationWindowMissed
+      - matchRegex:
+          path: spec.groups[0].rules[7].expr
+          pattern: 'increase\(noderotation_window_missed_total\[24h\]\) > 0'
+      - equal:
+          path: spec.groups[0].rules[7].labels.severity
+          value: warning
+  - it: ships eight alerts
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 8
