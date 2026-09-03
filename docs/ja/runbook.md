@@ -95,7 +95,7 @@ NodePool 単位の系列は NodePool 削除時、または統治 `RotationPolicy
 | `noderotation_in_progress` | Gauge | 0 か 1（v1 は pool ごとに直列） |
 | `noderotation_completed_total{outcome}` | Counter | `outcome ∈ {success, failure, expired}`。failure/expired → 調査 |
 | `noderotation_forceful_fallback_total` | Counter | 増加中 → graceful surge がデッドラインに間に合っていない |
-| `noderotation_window_missed_total` | Counter | pool ごと — 候補が未ローテーションのまま閉じたウィンドウ発生数 |
+| `noderotation_window_missed_total` | Counter | pool ごと — 候補が残ったまま、帰属するローテーションが何も行われずに閉じたウィンドウ発生数 |
 | `noderotation_duration_seconds{phase}` | Histogram | `phase ∈ {surge_wait, drain}`。見積もりの設定に使う |
 | `noderotation_drain_stuck` | Gauge | `1` → 運用者の対処が必要（[§5](#5-drain-が詰まったときの対処)） |
 | `noderotation_retry_count` | Gauge | `≥ 3` → systematic な失敗（preemption か AZ 不足） |
@@ -207,7 +207,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 |---------|---------|------|
 | `NodeRotationCompletedFailureOrExpired` | 直近 1h にローテーションが失敗/expired | §1（AZ 容量）と §5（stuck drain）を確認 |
 | `NodeRotationCandidatesNotDraining` | 2 ウィンドウ跨いで候補がさばけない | §2（スループット）を確認 |
-| `NodeRotationStalledInWindow` | ウィンドウ内で候補またはリトライ中の claim あり、完了ゼロ | §1 または §5 を確認 |
+| `NodeRotationStalledInWindow` | ウィンドウ内で候補またはリトライ中の claim あり、**成功**完了ゼロ | §1 または §5 を確認 |
 | `NodeRotationDrainStuck` | drain が `tGP + buffer` を超過 | §5 に従う |
 | `NodeRotationShortLeadNodes` | ノードが K 回の機会を得られない | `expireAfter` を引き上げるかウィンドウ日を追加 |
 | `NodeRotationRetryCountHigh` | 同じローテーションが 3 回以上失敗 | systematic な原因 — §1 を確認 |
@@ -224,7 +224,12 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 
 ### `NodeRotationWindowMissed` への対処
 
-**何を意味するか:** メンテナンスウィンドウの発生が、コントローラーがローテーションできたはずの候補（eligible、または `retryBackoff` 中）を残したまま閉じ、その中で何もローテーションされなかった。その発生に対する保証ローテーション機会は消費されたまま失われた — `minRotationChances: 1`（下限）の場合、それらのノードは graceful な置き換えなしに `expireAfter` に到達する。
+**何を意味するか:** メンテナンスウィンドウの発生が、年齢と状態から見て未処理の候補（eligible、または `retryBackoff` 中）を残したまま閉じ、その発生に帰属するローテーションが 1 件も完了しなかった。その発生に対する保証ローテーション機会は消費されたまま失われた — `minRotationChances: 1`（下限）の場合、それらのノードは graceful な置き換えなしに `expireAfter` に到達する。
+
+この文中の 2 つの語は、見た目より狭い意味を持つ:
+
+- **「帰属する」であって「中で」ではない。** ウィンドウがゲートするのはローテーションの*開始*だけで、in-window で始まった試行は境界を越えて走り続ける。それが境界の後 — ウィンドウが閉じた後 — に成功したなら、その発生は失われていないので黙って settle する。そうした試行が背後に 1 件もない発生だけが報告される。
+- **「年齢と状態から見て未処理」であって「コントローラーがローテーションできたはず」ではない。** この評価は意図的にプールレベルのゲートより前段で走り、コントローラーが動かなかった理由ではなくウィンドウに何が起きたかを述べる。したがって static な NodePool や、スケジュールが致命的に実行不能なプールは毎回の発生を報告する — それらのゲートがどのみち止めていたはずの claim も含まれる。これは報告された事実であって、シグナルの故障ではない。
 
 **何を確認するか:**
 
@@ -234,6 +239,12 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 - プールが static かどうか（`StaticNodePool` Warning Event、[spec §3.3](specification/03-design.md)）— static な NodePool は surge ローテーションを一切試みず、常にウィンドウを逃す。issue #302 を参照。
 
 **何をするか:** `rotation attempt failed` 行が示す根本原因に対処する（[§1](#1-az-ごとの-surge-ヘッドルームゾーン-pv) と [§5](#5-drain-が詰まったときの対処) を参照）。試行自体は健全だが、バッチがスケジュールに対して大きすぎて本当に収まらない場合は、メンテナンスウィンドウを拡張して 1 回の発生あたりの完了数を増やすか、`minRotationChances`（`K`）を引き上げて、1 回のウィンドウ喪失があっても `expireAfter` バックストップ前に保証された機会を残すようにする。
+
+**このシグナルの既知の限界。** 発生は NodePool 上の `noderotation.io/window-opened-at` アノテーションの*存在*で識別され、reconcile が観測したものだけが存在する。設計上受け入れている帰結が 3 つある:
+
+- **2 つの発生が 1 件として報告されうる。** 発生と発生の間の window 外のギャップを reconcile が 1 度も観測しなかった場合 — ギャップが短い、その区間だけコントローラーが停止していた、API エラーがその区間を通じて続いた — 先の発生のスタンプが次の発生へ生き残り、2 つはまとめて 1 回だけ判定・報告される（載るのは先の `windowOpenedAt`）。ローテーションが詰まっている必要はない。（より狭いケース: コントローラーの 1 分 self-requeue より短いウィンドウはそもそも観測されないことがあり、その場合スタンプも報告も行われない。）
+- **スケジュールの編集がウィンドウを即座に閉じうる。** スタンプ保持中にポリシーの `maintenanceWindows` を編集して現在時刻が window 外になると、その時点で発生が閉じたものとして扱われ、その時点の census に対して判定される。
+- **報告は最大 1 回で、それ以上にはならない。** スタンプのクリアはカウンターと Event より先に行われるため、その間に停止したコントローラーはその発生の報告を捏造せず落とし、カウンターと Event の間で停止すれば片方だけが残りうる。正確な回数ではなく `increase(...) > 0` でアラートすること。
 
 **注記:** `NodeRotationStalledInWindow` の `retry_count` アームは、`NodeRotationWindowMissed` を伴わずに単独で発火することがある。`noderotation_retry_count` は eligibility のバケットに関係なく、プールの NodeClaim 全体での最大リトライ回数なので、`noderotation_window_missed_total` が意図的にカウントしない claim（Node が後から `karpenter.sh/do-not-disrupt` を付与された、または削除中・期限切れ済みの claim）でも高いまま残りうる。この向きの不一致は、どちらかの信号が壊れていることを意味しない。
 

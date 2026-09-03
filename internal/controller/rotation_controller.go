@@ -628,21 +628,30 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 
 // evaluateWindowEdge applies the §4.2 window-close evaluation: it records that a
 // maintenance window opened, and when that window closes it reports whether the
-// occurrence went by with candidates the controller could have rotated and no
-// rotation completed inside it (issue #303).
+// occurrence went by with candidates outstanding by age and state and no
+// rotation attributable to it ever completing (issue #303).
 //
 // It runs at step 0, ABOVE the static-capacity gate and the fatal feasibility
 // gate, on purpose. A pool that could not rotate because it is static (#302) or
 // because its schedule is infeasible still lost the window, and the signal's
 // meaning is fixed to that fact rather than to the controller's reason for not
 // acting — a signal whose meaning depended on gate order would change meaning
-// every time a gate was added.
+// every time a gate was added. The outstanding count is therefore what the
+// window left undone by age and state, including claims one of those later
+// pool-level gates would have stopped anyway.
+//
+// "Attributable to the occurrence" is wider than "inside it": a window gates
+// only rotation STARTS (§3.1), so an attempt that began in-window and succeeded
+// after the boundary still settles the occurrence — the stamp is held for the
+// in-flight rotation, and last-rotation-at then lands at or after it.
 //
 // The clear is conditional and the emission follows the write: only the pass
 // whose Update actually removed the stamp reports the loss, so a retried or
-// raced pass cannot double-count. A crash between the write and the emission
-// drops the signal rather than inventing one, which is the same stance §4.2
-// takes for the duration histogram.
+// raced pass cannot double-count. That makes the report AT MOST once per
+// occurrence: the clear lands before the emission, so a controller that stops
+// in between drops the signal rather than inventing one — the same stance §4.2
+// takes for the duration histogram. The counter and the Event have the same
+// gap between them, so a stop there can leave one without the other.
 //
 // A successful write refreshes *pool in place (patchPoolIf's *pool = fresh),
 // so on return the pool object can be newer than the res/views/excluded
@@ -658,54 +667,67 @@ func (r *RotationReconciler) evaluateWindowEdge(
 	excluded map[string]bool,
 	inWindow bool,
 ) error {
-	census := selection.TakeCensus(views, r.selInputs(res, now, excluded))
-	switch decide.WindowEdge(decide.WindowInputs{
+	in := decide.WindowInputs{
 		Now:         now,
 		InWindow:    inWindow,
 		Annotations: pool.Annotations,
-		Census:      census,
-	}) {
-	case decide.WindowStamp:
-		stamp := rfc3339(now)
-		_, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
-			// Veto if a racing pass already recorded this occurrence's open; the
-			// earlier stamp is the truer one.
-			if _, ok := parseTime(m[annotations.WindowOpenedAt]); ok {
+		Census:      selection.TakeCensus(views, r.selInputs(res, now, excluded)),
+	}
+	action := decide.WindowEdge(in)
+	opened := pool.Annotations[annotations.WindowOpenedAt]
+
+	// claim turns a mutation into a conditional write that re-asserts the verdict
+	// itself against the AUTHORITATIVE annotations: WindowEdge runs again inside
+	// the write loop over the fresh map, and the write happens only if it still
+	// yields the action being applied. One mechanism covers every
+	// annotation-derived condition the verdict rested on — the stamp, the anchor,
+	// the freeze, last-rotation-at — and it covers them in BOTH directions. A
+	// freeze or an anchor that lands after the cached read vetoes a report that
+	// is no longer true; a freeze or a last-rotation-at that has since gone from
+	// the object vetoes the silent clear it justified, so a genuine loss is
+	// judged again next pass instead of being swallowed for good (issue #304).
+	//
+	// Now, InWindow and Census stay as this pass computed them. The claims were
+	// listed once at the top of the reconcile and cannot be re-listed cheaply, so
+	// the re-assertion covers the annotation-derived conditions only — the census
+	// is as fresh as the pass that decided, no fresher.
+	//
+	// The action alone does not identify the occurrence: a NEWER stamp yields the
+	// same action, and clearing it would consume an occurrence this pass never
+	// evaluated and report it under the earlier stamp. So the exact stamp this
+	// pass saw is re-asserted alongside the action. For the stamp branch this is
+	// the "veto if already parseable" guard the earlier code wrote by hand —
+	// in-window with a parseable stamp is WindowNothing, not WindowStamp.
+	claim := func(apply func(map[string]string)) func(map[string]string) bool {
+		return func(m map[string]string) bool {
+			fresh := in
+			fresh.Annotations = m
+			if decide.WindowEdge(fresh) != action || m[annotations.WindowOpenedAt] != opened {
 				return false
 			}
-			m[annotations.WindowOpenedAt] = stamp
+			apply(m)
 			return true
-		})
+		}
+	}
+
+	switch action {
+	case decide.WindowStamp:
+		stamp := rfc3339(now)
+		_, err := r.patchPoolIf(ctx, pool, claim(func(m map[string]string) {
+			m[annotations.WindowOpenedAt] = stamp
+		}))
 		return err
 
 	case decide.WindowSettled:
-		opened := pool.Annotations[annotations.WindowOpenedAt]
-		_, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
-			// Veto unless the fresh read still shows the exact stamp this pass
-			// evaluated: a boundary race in which the authoritative annotation is
-			// already a NEWER occurrence's stamp must not have that occurrence
-			// silently cleared.
-			if m[annotations.WindowOpenedAt] != opened {
-				return false
-			}
+		_, err := r.patchPoolIf(ctx, pool, claim(func(m map[string]string) {
 			delete(m, annotations.WindowOpenedAt)
-			return true
-		})
+		}))
 		return err
 
 	case decide.WindowMissed:
-		opened := pool.Annotations[annotations.WindowOpenedAt]
-		wrote, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
-			// Re-assert, against the authoritative read, both conditions the verdict
-			// rests on: this is still the occurrence that was evaluated, and no
-			// rotation has since been anchored on the pool. A pass that cannot
-			// re-assert them lost the race and must stay silent (issue #304).
-			if m[annotations.WindowOpenedAt] != opened || m[annotations.ActiveRotation] != "" {
-				return false
-			}
+		wrote, err := r.patchPoolIf(ctx, pool, claim(func(m map[string]string) {
 			delete(m, annotations.WindowOpenedAt)
-			return true
-		})
+		}))
 		if err != nil {
 			return err
 		}
@@ -713,7 +735,7 @@ func (r *RotationReconciler) evaluateWindowEdge(
 			return nil
 		}
 		r.recorder().WindowMissed(pool.Name)
-		r.warn().EmitWindowMissed(ctx, pool, opened, census)
+		r.warn().EmitWindowMissed(ctx, pool, opened, in.Census)
 		return nil
 	}
 	// WindowNothing and WindowDefer: no write, nothing to announce.

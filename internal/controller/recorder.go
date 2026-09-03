@@ -39,8 +39,10 @@ type Recorder interface {
 	// a graceful surge before its deadline, deleted in-window via the voluntary path.
 	ForcefulFallback(nodePool, nodeClaim string)
 	// WindowMissed records a maintenance window occurrence that closed with
-	// candidates outstanding and no rotation completed inside it (spec §4.2) —
-	// the guaranteed rotation chance was consumed and lost.
+	// candidates outstanding by age and state and no rotation attributable to
+	// that occurrence ever completing (spec §4.2) — the guaranteed rotation
+	// chance was consumed and lost. At most once per occurrence: the pass that
+	// cleared the window-opened-at stamp calls it, after the clear landed.
 	WindowMissed(nodePool string)
 	// ObservePool sets the §4.2 reconcile-time gauges for one NodePool.
 	ObservePool(nodePool string, o PoolObservation)

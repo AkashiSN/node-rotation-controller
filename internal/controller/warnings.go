@@ -196,13 +196,15 @@ func (w *warningEmitter) EmitStaticNodePool(ctx context.Context, pool *karpv1.No
 }
 
 // EmitWindowMissed logs and raises the Warning Event for a maintenance window
-// occurrence that closed with candidates outstanding and no rotation completed
-// inside it (spec §4.2, issue #303). Unlike the other emitters this one carries
-// no dedup state: the caller has already proven it owned the transition by
-// clearing the window-opened-at stamp, so it fires exactly once per occurrence.
+// occurrence that closed with candidates outstanding and no rotation
+// attributable to it ever completing (spec §4.2, issue #303). Unlike the other
+// emitters this one carries no dedup state: the caller has already proven it
+// owned the transition by clearing the window-opened-at stamp, so it fires at
+// most once per occurrence — the clear lands before this call, so a controller
+// that stops in between drops the Event rather than inventing one.
 func (w *warningEmitter) EmitWindowMissed(ctx context.Context, pool *karpv1.NodePool, openedAt string, c selection.Census) {
 	msg := fmt.Sprintf(
-		"maintenance window that opened at %s closed with %d candidate(s) unrotated (%d eligible, %d in retryBackoff) and no rotation completed inside it. The guaranteed rotation chance for those NodeClaims was consumed without a graceful replacement; they remain subject to Karpenter's forceful expiration.",
+		"maintenance window that opened at %s closed with %d candidate(s) unrotated (%d eligible, %d in retryBackoff) and no rotation attributable to that occurrence ever completed — including one started inside it that finished after the boundary. The guaranteed rotation chance for those NodeClaims was consumed without a graceful replacement; they remain subject to Karpenter's forceful expiration.",
 		openedAt, decide.Outstanding(c), c.Eligible, c.InBackoff)
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
 		"maintenance window closed with candidates unrotated",

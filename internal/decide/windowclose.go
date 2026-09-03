@@ -25,7 +25,10 @@ const (
 	// silently.
 	WindowSettled WindowAction = "settled"
 	// WindowMissed: the window closed with candidates outstanding and no rotation
-	// completed inside it — clear the stamp AND report.
+	// attributable to the occurrence ever completing — clear the stamp AND
+	// report. "Attributable to" is wider than "inside it": a window gates only
+	// starts, so an attempt that began in-window and succeeded after the boundary
+	// settles the occurrence too (WindowDefer holds the stamp until it lands).
 	WindowMissed WindowAction = "missed"
 )
 
@@ -38,9 +41,16 @@ type WindowInputs struct {
 	Census      selection.Census  // the pool's claims, classified (spec §3.2)
 }
 
-// Outstanding is the number of claims that were the controller's to rotate in
-// the window that just closed: past the age trigger, and not held back by a
-// reason of the claim's own.
+// Outstanding is the number of claims the window that just closed left undone by
+// AGE AND STATE: past the age trigger, and not held back by a reason of the
+// claim's own.
+//
+// It is not "the claims the controller could have rotated". The window-close
+// evaluation deliberately sits above the pool-level gates (static capacity §3.3,
+// fatal feasibility §5.2), so a claim this counts may be one the controller
+// would never have started — a static pool misses every occurrence, and that is
+// the reported fact, not a contradiction. The signal states what happened to the
+// window, not why the controller did not act.
 //
 // InBackoff is the load-bearing half. noderotation_candidates counts only
 // Eligible, so a pool whose every candidate is inside its escalated retryBackoff

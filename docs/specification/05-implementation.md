@@ -132,11 +132,16 @@ reconcile_nodepool(np):
   #        states what happened to the window, not why the controller did not
   #        act. Reconcile's own governance gates (policy conflict, no governing
   #        policy) already returned before reconcile_nodepool was ever called.
+  #        Every write below is conditional: inside the write loop the verdict is
+  #        re-run against the AUTHORITATIVE annotations (same census, same now)
+  #        and must still yield the same action, and the stamp must still be the
+  #        one that was evaluated. A verdict the fresh object no longer justifies
+  #        is not written — in either direction.
   match window_edge(np, census(np), in_window(now)):
-    case stamp:    annotate(np, window-opened-at=now)        # only-if absent
+    case stamp:    annotate(np, window-opened-at=now)        # only-if still `stamp`
     case defer:    pass                                      # a rotation may still succeed
-    case settled:  clear(np, window-opened-at)               # only-if unchanged
-    case missed:   won := clear(np, window-opened-at)        # only-if unchanged and no anchor
+    case settled:  clear(np, window-opened-at)               # only-if still `settled`
+    case missed:   won := clear(np, window-opened-at)        # only-if still `missed`
                    if won: emit_metrics(window_missed); event(WindowMissed)
 
   # ── 1. Drive in-flight rotation first (serial: at most one per NodePool)
@@ -304,6 +309,7 @@ Each state handler **re-asserts** its phase's desired state rather than performi
 - **Metric emission (completion):** emitted after the anchor-releasing write and only by the pass that performed it, so the counter, the histogram, the completion line and the Event fire once per released anchor. A crash between the write and the emission drops it (at-most-once)
 - **Metric emission (claim-scoped):** both transitions into `expired` — `abortPendingExpiry` and `advanceFailed`'s deletion branch — claim the transition with a conditional NodeClaim write that accepts only the dispatching handler's own pre-state, so `expired` is announced once by the pass that made it. That matches `advanceExpired`, which never re-announces a claim already terminal
 - **Announcement follows the write, never the attempt:** the outcome of a conditional claim write is produced by the write loop itself and reset per attempt, so a first attempt that conflicts and a retry that finds the claim finalized away report *gone*, not success. A claim that vanishes before a terminal write is left anchored and its outcome falls to completion (`expired`, no cooldown) — this covers the `failure` rollback too, which announces an attempt and stamps the failure pause only when the write that records it landed, and reports the retry count that write produced
+- **Metric emission (window close):** the lost-window counter and the `WindowMissed` Event follow the write that cleared the `window-opened-at` stamp, and only the pass whose write landed emits them — at most once per occurrence. A controller that stops between the clear and the emission drops that occurrence's report rather than inventing one; a stop between the counter and the Event can leave one without the other
 - **Emission sits immediately after the write, ahead of the cleanup:** the cleanup is fallible, and an error there hands the next reconcile to `advanceExpired`, which repairs it and deliberately never emits — so an emission placed behind the cleanup would be dropped by an ordinary transient API error rather than retried. The remaining loss window is the irreducible one the completion path already accepts: a controller that dies between the write and the emission (at-most-once)
 
 ## 5.3 State Model
@@ -344,7 +350,9 @@ All keys use the `noderotation.io/` prefix except `karpenter.sh/do-not-disrupt`.
 - **`draining-at`:** write-once at `pending → draining`. The old NodeClaim's `deletionTimestamp` is gone by completion — needs this anchor
 - **`surge-wait`:** write-once at `pending → draining`. The old NodeClaim (`started-at` carrier) is deleted at that transition
 - **`rotation-mode`:** stamped on anchor at forceful-fallback start. Absent = default surge. Cleared with anchor on every end path
-- **`window-opened-at`:** stamped on the first in-window reconcile that finds it absent, cleared on the first out-of-window reconcile that finds it present. Its **presence** is the occurrence's identity, so no occurrence start is derived from the schedule — the weekly projection pins DST to an anchor week and would put a recovered start up to an hour out. An in-flight rotation defers the clear; an unreadable value is re-stamped in-window and cleared silently out of it
+- **`window-opened-at`:** stamped on the first in-window reconcile that finds it absent, cleared on the first out-of-window reconcile that finds it present. Its **presence** is the occurrence's identity, so no occurrence start is derived from the schedule — the weekly projection pins DST to an anchor week and would put a recovered start up to an hour out. An in-flight rotation defers the clear; an unreadable value is re-stamped in-window and cleared silently out of it. Known limits of identifying an occurrence by observation, accepted in v1:
+    - **Two occurrences collapse into one report** when no reconcile ever observes the out-of-window gap between them — a gap shorter than the reconcile interval, a controller down only across the gap, or API errors that persist through it. The first occurrence's stamp survives into the second, and the pair is judged and reported once, under the earlier `window-opened-at`. No stuck rotation is needed for this; it follows from presence being the identity. The narrower, already-implied case is a whole window shorter than the 1-minute self-requeue: never observed, so never stamped and never reported
+    - **A schedule edit that puts the current time out of window while a stamp is held is an immediate close.** The occurrence is judged there and then, against the census as it stands at the edit — the controller has no record of the schedule the stamp was written under
 - **`state`:** `expired` is terminal — blocks re-selection while the claim finalizes under the forceful drain
 - **`started-at`:** write-once per attempt. Cleared by the failed write (single update with `state=failed`). Re-stamped on retry
 - **`surge-claim`:** persisted as soon as placeholder's bind target (`spec.nodeName`) is observable. Cleared with the failed write

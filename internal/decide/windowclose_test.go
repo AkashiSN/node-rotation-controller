@@ -73,6 +73,20 @@ func TestWindowEdge(t *testing.T) {
 			census: outstanding,
 			want:   decide.WindowSettled,
 		},
+		// A window gates only STARTS: an attempt that began in-window keeps
+		// running past the boundary (the stamp is held for it by WindowDefer),
+		// and a success that lands after the close is still attributable to this
+		// occurrence. That is why the operator-facing wording says "attributable
+		// to the occurrence", not "inside it".
+		"closed, then the in-flight rotation succeeded after the boundary: settle quietly": {
+			inWindow: false,
+			ann: map[string]string{
+				annotations.WindowOpenedAt: ts(opened),
+				annotations.LastRotationAt: ts(now.Add(-time.Minute)), // after the 06:30 close
+			},
+			census: outstanding,
+			want:   decide.WindowSettled,
+		},
 		"closed, last success predates this occurrence: missed": {
 			inWindow: false,
 			ann: map[string]string{
@@ -159,11 +173,13 @@ func TestWindowEdge(t *testing.T) {
 	}
 }
 
-// Outstanding counts only the claims the controller could have rotated in the
-// window: past the age trigger and not excluded for a reason of their own. Every
-// other census bucket is deliberately not outstanding — a claim the operator
-// opted out of, one Node Auto Repair owns, or one already counted as expired
-// must never make a window look lost.
+// Outstanding counts the claims the window left undone by AGE AND STATE: past
+// the age trigger and not excluded for a reason of their own. It is not "the
+// claims the controller could have rotated" — a pool-level gate (static
+// capacity, fatal infeasibility) sits BELOW this evaluation and is deliberately
+// not consulted. Every other census bucket is deliberately not outstanding — a
+// claim the operator opted out of, one Node Auto Repair owns, or one already
+// counted as expired must never make a window look lost.
 func TestOutstandingCountsOnlyRotatableClaims(t *testing.T) {
 	t.Parallel()
 

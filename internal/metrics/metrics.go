@@ -61,7 +61,7 @@ func New(reg prometheus.Registerer) *Recorder {
 		}, []string{"nodepool"}),
 		windowMissed: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "noderotation_window_missed_total",
-			Help: "Cumulative maintenance window occurrences that closed with candidates outstanding and no rotation completed (spec §4.2).",
+			Help: "Cumulative maintenance window occurrences that closed with candidates outstanding by age and state and no rotation attributable to the occurrence ever completing (spec §4.2).",
 		}, poolLabel),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "noderotation_duration_seconds",
@@ -150,9 +150,13 @@ func (r *Recorder) ForcefulFallback(nodePool, _ string) {
 }
 
 // WindowMissed increments the lost-window counter for one NodePool: a
-// maintenance window occurrence closed with candidates the controller could have
-// rotated and no rotation completed inside it (spec §4.2). It is incremented
-// once per occurrence, by the pass that cleared the window-opened-at stamp.
+// maintenance window occurrence closed with candidates outstanding by age and
+// state — including ones a later pool-level gate would have stopped — and no
+// rotation attributable to that occurrence ever completing, a rotation that
+// started inside it and finished after the boundary included (spec §4.2). It is
+// incremented at most once per occurrence, by the pass that cleared the
+// window-opened-at stamp: the clear lands first, so a controller that stops
+// between the two drops the increment rather than inventing one.
 func (r *Recorder) WindowMissed(nodePool string) {
 	r.windowMissed.WithLabelValues(nodePool).Inc()
 }

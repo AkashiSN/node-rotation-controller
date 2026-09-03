@@ -55,11 +55,17 @@ spec:
         # retryBackoff is not eligible, so noderotation_candidates falls to 0
         # while the pool still has work outstanding (issue #303). Without it this
         # alert is silent through a window spent entirely on failed attempts.
+        # The outcome="success" selector on the suppression arm is load-bearing
+        # for the same incident: noderotation_completed_total counts failure and
+        # expired too, and a readyTimeout rollback records a failure — so an
+        # unselected `unless` arm turns every failed attempt into "progress" and
+        # suppresses the alert exactly when it is needed. The condition is "the
+        # window is open, work is outstanding, and nothing is SUCCEEDING".
         - alert: NodeRotationStalledInWindow
           expr: |-
             noderotation_window_active == 1
             and on(nodepool) (noderotation_candidates > 0 or on(nodepool) noderotation_retry_count > 0)
-            unless on(nodepool) (sum by(nodepool) (increase(noderotation_completed_total[{{ .Values.prometheusRule.stalledInWindow.completionRange }}])) > 0)
+            unless on(nodepool) (sum by(nodepool) (increase(noderotation_completed_total{outcome="success"}[{{ .Values.prometheusRule.stalledInWindow.completionRange }}])) > 0)
           for: {{ .Values.prometheusRule.stalledInWindow.for }}
           labels:
             severity: {{ .Values.prometheusRule.stalledInWindow.severity }}
@@ -67,7 +73,7 @@ spec:
             summary: node-rotation-controller window active with no completions
             description: >-
               NodePool {{`{{ $labels.nodepool }}`}} has its maintenance window active
-              with non-zero candidates but zero completions for
+              with non-zero candidates but zero SUCCESSFUL completions for
               {{ .Values.prometheusRule.stalledInWindow.for }} — rotation appears
               wedged (spec §4.2). See docs/runbook.md.
         # The in-flight drain has exceeded tGP + buffer: a blocking PDB or a
@@ -131,12 +137,14 @@ spec:
               {{`{{ $labels.nodepool }}`}} in the last hour — graceful surges are
               losing the race to the deadline (spec §3.3, ADR-0001). See
               docs/runbook.md.
-        # A maintenance window occurrence closed with candidates the controller
-        # could have rotated and nothing rotated inside it: the guaranteed
-        # rotation chance was consumed and lost, and with minRotationChances: 1
-        # those nodes now reach expireAfter with no graceful replacement (spec
-        # §4.2). This is the post-hoc fact; NodeRotationStalledInWindow is the
-        # in-window early warning for the same failure.
+        # A maintenance window occurrence closed with candidates still outstanding
+        # by age and state, and no rotation attributable to that occurrence ever
+        # completed — including one that started inside it and finished after the
+        # boundary. The guaranteed rotation chance was consumed and lost, and with
+        # minRotationChances: 1 those nodes now reach expireAfter with no graceful
+        # replacement (spec §4.2). This is the post-hoc fact;
+        # NodeRotationStalledInWindow is the in-window early warning for the same
+        # failure.
         - alert: NodeRotationWindowMissed
           expr: increase(noderotation_window_missed_total[{{ .Values.prometheusRule.windowMissed.range }}]) > 0
           for: {{ .Values.prometheusRule.windowMissed.for }}
@@ -146,7 +154,7 @@ spec:
             summary: node-rotation-controller lost a maintenance window
             description: >-
               NodePool {{`{{ $labels.nodepool }}`}} had a maintenance window close
-              with candidates unrotated and no rotation completed inside it — the
-              guaranteed rotation chance was consumed (spec §4.2). See
-              docs/runbook.md.
+              with candidates unrotated and no rotation attributable to that
+              occurrence ever completing — the guaranteed rotation chance was
+              consumed (spec §4.2). See docs/runbook.md.
 {{- end }}
