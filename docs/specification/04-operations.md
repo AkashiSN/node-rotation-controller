@@ -34,6 +34,7 @@ Exposed on `/metrics`:
 | `noderotation_in_progress` | Gauge | `nodepool` |
 | `noderotation_completed_total` | Counter | `nodepool`, `outcome` |
 | `noderotation_forceful_fallback_total` | Counter | `nodepool` |
+| `noderotation_window_missed_total` | Counter | `nodepool` |
 | `noderotation_duration_seconds` | Histogram | `nodepool`, `phase` |
 | `noderotation_window_active` | Gauge | `nodepool` |
 | `noderotation_policy_conflict` | Gauge | `nodepool` |
@@ -54,6 +55,7 @@ Exposed on `/metrics`:
 - **`noderotation_in_progress`:** active rotation count per pool
 - **`noderotation_completed_total`:** cumulative completions; `outcome` ∈ {`success`, `failure`, `expired`}. `expired` = force-expired before graceful rotation completed (emitted once, never counted as success)
 - **`noderotation_forceful_fallback_total`:** surge-less forceful-fallback rotations initiated (§3.6); incremented at start, not completion
+- **`noderotation_window_missed_total`:** maintenance window occurrences that closed with candidates outstanding (eligible or inside `retryBackoff`) and no rotation completed inside them (§5.2); incremented once per occurrence, by the pass that clears the `window-opened-at` stamp
 - **`noderotation_duration_seconds`:** per-phase; `phase` ∈ {`surge_wait`, `drain`}. `surge_wait` = `started-at → surge_ready`; `drain` = `draining-at → old-NodeClaim finalization`. Observed at most once per successful transition (no double-count on retried writes; dropped sample preferred over phantom sample)
 - **`noderotation_window_active`:** 0/1 window membership indicator
 - **`noderotation_policy_conflict`:** 0/1 blocked by selector tie or invalid policy (§5.4)
@@ -92,6 +94,7 @@ Warning-level conditions surfaced via `kubectl describe`:
 | NodeClaim | `ShortLead` | Claim can't guarantee `K` chances |
 | NodePool | `ForcefulFallback` | Surge-less rotation begins |
 | NodePool | `StaticNodePool` | `spec.replicas` set — surge can never rotate the pool (§3.3) |
+| NodePool | `WindowMissed` | Window closed with candidates unrotated and no rotation (§4.2) |
 | NodePool | `PolicyConflict` | Equal-specificity RotationPolicy tie — the pool is not rotated (§5.4) |
 | NodePool | `GovernanceLost` | In-flight rotation rolled back after the pool left governance (§5.4) |
 | NodePool | `RotationStarted` | Candidate picked (`Normal`) |
@@ -119,6 +122,7 @@ Every state transition emits one `INFO` log line (after the durable annotation w
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
 | `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `total` |
+| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoff` |
 
 - **Level-triggered lines** (`no rotation candidate`, `surge placeholder is not schedulable`) use transition dedup — re-fire only when reason/census/message changes
 - **Debug verbosity** (`V(1)`) adds un-deduplicated per-pass findings and a heartbeat
@@ -130,11 +134,14 @@ Every state transition emits one `INFO` log line (after the durable annotation w
 |-------|-----------|
 | Failure/expired | `increase(noderotation_completed_total{outcome=~"failure|expired"}[1h]) > 0` |
 | Falling behind | `noderotation_candidates > 0` for two consecutive windows |
-| Window wasted | `window_active == 1` full window, zero completions, non-zero candidates |
+| Window lost | `increase(noderotation_window_missed_total[24h]) > 0` |
+| Window wedged (in-window) | `window_active == 1`, zero completions, and `noderotation_candidates > 0 or noderotation_retry_count > 0` |
 | Drain stuck | `noderotation_drain_stuck == 1` |
 | Short lead | `noderotation_short_lead_nodes > 0` |
 | Systematic failure | `noderotation_retry_count >= 3` |
 | Forceful fallback | `increase(noderotation_forceful_fallback_total[1h]) > 0` (severity: info) |
+
+The `retry_count` arm of the in-window condition is load-bearing: a NodeClaim inside its escalated `retryBackoff` is not eligible, so `noderotation_candidates` falls to `0` while the pool still has work outstanding. A condition resting on `candidates` alone is silent through a window spent entirely on failed attempts — which is the case `window_missed_total` was added to report.
 
 The Helm chart ships these as an optional `PrometheusRule` (gated behind `prometheusRule.enabled`, default `false`). See the [production runbook](../runbook.md) for tuning.
 

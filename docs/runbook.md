@@ -95,6 +95,7 @@ Per-NodePool series are cleared when the NodePool is deleted or loses its govern
 | `noderotation_in_progress` | Gauge | 0 or 1 (serial per pool in v1) |
 | `noderotation_completed_total{outcome}` | Counter | `outcome ∈ {success, failure, expired}`. Any `failure`/`expired` → investigate |
 | `noderotation_forceful_fallback_total` | Counter | Rising → graceful surges losing the race to deadlines |
+| `noderotation_window_missed_total` | Counter | Per pool — window occurrences that closed with candidates unrotated |
 | `noderotation_duration_seconds{phase}` | Histogram | `phase ∈ {surge_wait, drain}`. Use these to set your estimates |
 | `noderotation_drain_stuck` | Gauge | `1` → operator action needed ([§5](#5-handling-a-stuck-drain)) |
 | `noderotation_retry_count` | Gauge | `≥ 3` → systematic failure (preemption or AZ shortage) |
@@ -206,18 +207,33 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 |-------|------------|--------|
 | `NodeRotationCompletedFailureOrExpired` | A rotation failed or expired in the last hour | Check §1 (AZ capacity) and §5 (stuck drain) |
 | `NodeRotationCandidatesNotDraining` | Candidates haven't cleared across two windows | Check §2 (throughput) |
-| `NodeRotationStalledInWindow` | Window open, candidates exist, zero completions | Check §1 or §5 |
+| `NodeRotationStalledInWindow` | Window open, candidates or retrying claims exist, zero completions | Check §1 or §5 |
 | `NodeRotationDrainStuck` | Drain exceeds `tGP + buffer` | Follow §5 |
 | `NodeRotationShortLeadNodes` | Nodes can't get K chances before expiry | Raise `expireAfter` or add windows |
 | `NodeRotationRetryCountHigh` | Same rotation failing ≥ 3 times | Systematic cause — check §1 |
 | `NodeRotationForcefulFallback` | A rotation went surge-less (by design) | Check §2 if rising; single occurrence is expected |
+| `NodeRotationWindowMissed` | A maintenance window closed with candidates unrotated | See [below](#responding-to-a-lost-window-noderotationwindowmissed) |
 
 **Tune schedule-dependent ranges** in your values:
 
 - `prometheusRule.candidatesNotDraining.windowRange` → `2·P` (default `8d` for `{Wed, Sat}`)
 - `prometheusRule.stalledInWindow.completionRange` → window duration `D` (default `4h`)
+- `prometheusRule.windowMissed.range` → comfortably longer than one window period (default `24h`; widen for a weekly schedule)
 
 See [`values.yaml`](https://github.com/AkashiSN/node-rotation-controller/blob/main/charts/node-rotation-controller/values.yaml) for all tunable fields.
+
+### Responding to a lost window (`NodeRotationWindowMissed`)
+
+**What it means:** a maintenance window occurrence closed with candidates the controller could have rotated (eligible, or inside `retryBackoff`) and nothing rotated inside it. The guaranteed rotation chance for that occurrence was consumed and lost — with `minRotationChances: 1` (the floor), those nodes now reach `expireAfter` with no graceful replacement.
+
+**What to check:**
+
+- The `WindowMissed` Event on the NodePool — its counts (`windowOpenedAt`, eligible, in-backoff) say how much of the window's work went unrotated.
+- The preceding `rotation attempt failed` log lines and their `reason` — a lost window is usually the tail of one or more failed attempts, not a cold start.
+- `noderotation_retry_count` — climbing toward the escalated backoff cap means attempts are repeatedly failing, not merely running out of time.
+- Whether the pool is static (`StaticNodePool` Warning Event, [spec §3.3](specification/03-design.md)) — a static NodePool never attempts a surge rotation and will always miss its windows; see issue #302.
+
+**What to do:** address the underlying failure surfaced by the `rotation attempt failed` lines (see [§1](#1-per-az-surge-headroom-zonal-pv) and [§5](#5-handling-a-stuck-drain)). If attempts are healthy but genuinely cannot fit the window — the batch is too large for the schedule — widen the maintenance window so more attempts complete per occurrence, or raise `minRotationChances` (`K`) so a single missed window still leaves guaranteed chances in reserve before the `expireAfter` backstop.
 
 ---
 

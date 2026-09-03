@@ -128,6 +128,15 @@ Reconcile(req):
   return reconcile_nodepool(nodepool(req.obj))
 
 reconcile_nodepool(np):
+  # ── 0. Window-close evaluation (§4.2). Above every gate: it states what
+  #        happened to the window, not why the controller did not act.
+  match window_edge(np, census(np), in_window(now)):
+    case stamp:    annotate(np, window-opened-at=now)        # only-if absent
+    case defer:    pass                                      # a rotation may still succeed
+    case settled:  clear(np, window-opened-at)               # only-if present
+    case missed:   won := clear(np, window-opened-at)        # only-if unchanged and no anchor
+                   if won: emit_metrics(window_missed); event(WindowMissed)
+
   # ── 1. Drive in-flight rotation first (serial: at most one per NodePool)
   if name := np[active-rotation]:
       return advance(np, name)
@@ -310,6 +319,7 @@ All state lives on Kubernetes objects — no external datastore. The NodePool's 
 | `draining-at` | NodePool | RFC3339 | Drain-duration anchor (§4.2) |
 | `surge-wait` | NodePool | Go duration | Surge-phase duration for completion log |
 | `rotation-mode` | NodePool | `forceful-fallback` | Surge-less path marker |
+| `window-opened-at` | NodePool | RFC3339 | Observed window occurrence (§4.2) |
 | `state` | Old NodeClaim | `pending`/`draining`/`failed`/`expired` | Progress state |
 | `started-at` | Old NodeClaim | RFC3339 | `readyTimeout` deadline |
 | `failed-at` | Old NodeClaim | RFC3339 | Backoff anchor |
@@ -332,6 +342,7 @@ All keys use the `noderotation.io/` prefix except `karpenter.sh/do-not-disrupt`.
 - **`draining-at`:** write-once at `pending → draining`. The old NodeClaim's `deletionTimestamp` is gone by completion — needs this anchor
 - **`surge-wait`:** write-once at `pending → draining`. The old NodeClaim (`started-at` carrier) is deleted at that transition
 - **`rotation-mode`:** stamped on anchor at forceful-fallback start. Absent = default surge. Cleared with anchor on every end path
+- **`window-opened-at`:** stamped on the first in-window reconcile that finds it absent, cleared on the first out-of-window reconcile that finds it present. Its **presence** is the occurrence's identity, so no occurrence start is derived from the schedule — the weekly projection pins DST to an anchor week and would put a recovered start up to an hour out. An in-flight rotation defers the clear; an unreadable value is re-stamped in-window and cleared silently out of it
 - **`state`:** `expired` is terminal — blocks re-selection while the claim finalizes under the forceful drain
 - **`started-at`:** write-once per attempt. Cleared by the failed write (single update with `state=failed`). Re-stamped on retry
 - **`surge-claim`:** persisted as soon as placeholder's bind target (`spec.nodeName`) is observable. Cleared with the failed write

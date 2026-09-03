@@ -128,6 +128,15 @@ Reconcile(req):
   return reconcile_nodepool(nodepool(req.obj))
 
 reconcile_nodepool(np):
+  # ── 0. ウィンドウクローズ評価（§4.2）。すべてのゲートより前段: これはウィンドウに
+  #        何が起きたかを述べるものであり、コントローラーが動かなかった理由ではない。
+  match window_edge(np, census(np), in_window(now)):
+    case stamp:    annotate(np, window-opened-at=now)        # only-if absent
+    case defer:    pass                                      # ローテーションがまだ成功しうる
+    case settled:  clear(np, window-opened-at)               # only-if present
+    case missed:   won := clear(np, window-opened-at)        # only-if unchanged and no anchor
+                   if won: emit_metrics(window_missed); event(WindowMissed)
+
   # ── 1. 進行中のローテーションを先に駆動（シリアル: NodePool あたり最大 1）
   if name := np[active-rotation]:
       return advance(np, name)
@@ -309,6 +318,7 @@ advance(np, name):
 | `draining-at` | NodePool | RFC3339 | ドレイン所要時間 anchor（§4.2） |
 | `surge-wait` | NodePool | Go duration | 完了ログの surge フェーズ所要時間 |
 | `rotation-mode` | NodePool | `forceful-fallback` | surge なしパスマーカー |
+| `window-opened-at` | NodePool | RFC3339 | 観測されたウィンドウの発生（§4.2） |
 | `state` | 旧 NodeClaim | `pending`/`draining`/`failed`/`expired` | 進捗状態 |
 | `started-at` | 旧 NodeClaim | RFC3339 | `readyTimeout` 期限 |
 | `failed-at` | 旧 NodeClaim | RFC3339 | バックオフ anchor |
@@ -331,6 +341,7 @@ advance(np, name):
 - **`draining-at`:** `pending → draining` で write-once。旧 NodeClaim の `deletionTimestamp` は完了時に消失 — この anchor が必要
 - **`surge-wait`:** `pending → draining` で write-once。旧 NodeClaim（`started-at` のキャリア）がその遷移で削除される
 - **`rotation-mode`:** forceful-fallback 開始時に anchor にスタンプ。不在 = デフォルト surge。すべての終了パスで anchor とともにクリア
+- **`window-opened-at`:** in-window の reconcile でこのアノテーションが不在だと判明した最初の回にスタンプされ、window 外の reconcile で存在すると判明した最初の回にクリアされる。その**存在**が発生の識別子であり、スケジュールから発生の開始時刻を導出することはしない — 週次の投影は DST をアンカー週に固定しているため、復元した壁時計上の開始時刻は最大 1 時間ずれうる。in-flight のローテーションはクリアを遅延させる; 読み取れない値は in-window では再スタンプされ、window 外では黙ってクリアされる
 - **`state`:** `expired` は終端 — forceful drain 下でファイナライズ中の claim の再選定をブロック
 - **`started-at`:** 試行ごとに write-once。failed 書き込み時にクリア（`state=failed` と単一更新）。リトライ時に再スタンプ
 - **`surge-claim`:** placeholder の bind ターゲット（`spec.nodeName`）が観測可能になり次第永続化。failed 書き込み時にクリア
