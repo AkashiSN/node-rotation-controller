@@ -641,6 +641,12 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 // raced pass cannot double-count. A crash between the write and the emission
 // drops the signal rather than inventing one, which is the same stance §4.2
 // takes for the duration histogram.
+//
+// A successful write refreshes *pool in place (patchPoolIf's *pool = fresh),
+// so on return the pool object can be newer than the res/views/excluded
+// snapshot the caller took earlier in the same pass — those still reflect the
+// claims as listed before this call, not as of the fresh annotations now on
+// pool.
 func (r *RotationReconciler) evaluateWindowEdge(
 	ctx context.Context,
 	pool *karpv1.NodePool,
@@ -671,8 +677,13 @@ func (r *RotationReconciler) evaluateWindowEdge(
 		return err
 
 	case decide.WindowSettled:
+		opened := pool.Annotations[annotations.WindowOpenedAt]
 		_, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
-			if _, present := m[annotations.WindowOpenedAt]; !present {
+			// Veto unless the fresh read still shows the exact stamp this pass
+			// evaluated: a boundary race in which the authoritative annotation is
+			// already a NEWER occurrence's stamp must not have that occurrence
+			// silently cleared.
+			if m[annotations.WindowOpenedAt] != opened {
 				return false
 			}
 			delete(m, annotations.WindowOpenedAt)

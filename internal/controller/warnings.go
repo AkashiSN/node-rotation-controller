@@ -12,6 +12,7 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/adapt"
+	"github.com/AkashiSN/node-rotation-controller/internal/decide"
 	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
 	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 )
@@ -200,13 +201,12 @@ func (w *warningEmitter) EmitStaticNodePool(ctx context.Context, pool *karpv1.No
 // no dedup state: the caller has already proven it owned the transition by
 // clearing the window-opened-at stamp, so it fires exactly once per occurrence.
 func (w *warningEmitter) EmitWindowMissed(ctx context.Context, pool *karpv1.NodePool, openedAt string, c selection.Census) {
-	out := selection.Census{Eligible: c.Eligible, InBackoff: c.InBackoff}
 	msg := fmt.Sprintf(
 		"maintenance window that opened at %s closed with %d candidate(s) unrotated (%d eligible, %d in retryBackoff) and no rotation completed inside it. The guaranteed rotation chance for those NodeClaims was consumed without a graceful replacement; they remain subject to Karpenter's forceful expiration.",
-		openedAt, out.Eligible+out.InBackoff, out.Eligible, out.InBackoff)
+		openedAt, decide.Outstanding(c), c.Eligible, c.InBackoff)
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
 		"maintenance window closed with candidates unrotated",
-		"windowOpenedAt", openedAt, "eligible", out.Eligible, "inBackoff", out.InBackoff)
+		"windowOpenedAt", openedAt, "eligible", c.Eligible, "inBackoff", c.InBackoff)
 	if w.events != nil {
 		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonWindowMissed, actionEvaluateSchedule, "%s", msg)
 	}
