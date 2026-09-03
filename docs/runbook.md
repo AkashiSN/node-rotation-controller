@@ -235,6 +235,8 @@ See [`values.yaml`](https://github.com/AkashiSN/node-rotation-controller/blob/ma
 
 **What to do:** address the underlying failure surfaced by the `rotation attempt failed` lines (see [§1](#1-per-az-surge-headroom-zonal-pv) and [§5](#5-handling-a-stuck-drain)). If attempts are healthy but genuinely cannot fit the window — the batch is too large for the schedule — widen the maintenance window so more attempts complete per occurrence, or raise `minRotationChances` (`K`) so a single missed window still leaves guaranteed chances in reserve before the `expireAfter` backstop.
 
+**Note:** `NodeRotationStalledInWindow`'s `retry_count` arm can fire without `NodeRotationWindowMissed` following it. `noderotation_retry_count` is the highest retry count across all of a pool's NodeClaims regardless of eligibility, so it can stay elevated for a claim `noderotation_window_missed_total` deliberately does not count — one whose Node has since been marked `karpenter.sh/do-not-disrupt`, or one that is deleting or already expired. Seeing the two disagree in that direction does not mean either signal is broken.
+
 ---
 
 ## 7. Troubleshooting

@@ -128,12 +128,14 @@ Reconcile(req):
   return reconcile_nodepool(nodepool(req.obj))
 
 reconcile_nodepool(np):
-  # ── 0. Window-close evaluation (§4.2). Above every gate: it states what
-  #        happened to the window, not why the controller did not act.
+  # ── 0. Window-close evaluation (§4.2). Above every gate in this function: it
+  #        states what happened to the window, not why the controller did not
+  #        act. Reconcile's own governance gates (policy conflict, no governing
+  #        policy) already returned before reconcile_nodepool was ever called.
   match window_edge(np, census(np), in_window(now)):
     case stamp:    annotate(np, window-opened-at=now)        # only-if absent
     case defer:    pass                                      # a rotation may still succeed
-    case settled:  clear(np, window-opened-at)               # only-if present
+    case settled:  clear(np, window-opened-at)               # only-if unchanged
     case missed:   won := clear(np, window-opened-at)        # only-if unchanged and no anchor
                    if won: emit_metrics(window_missed); event(WindowMissed)
 

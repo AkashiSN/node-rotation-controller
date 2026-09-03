@@ -52,6 +52,12 @@ type WindowInputs struct {
 // already going away, NotReady belongs to Node Auto Repair, Terminal is already
 // counted by completed_total{outcome="expired"}, and InFlight cannot reach the
 // verdict because an in-flight rotation defers it.
+//
+// A frozen pool never reaches this count at all: WindowEdge checks the freeze
+// annotation before calling Outstanding, because freeze is a pool-level
+// instruction to stop rotating — the same operator choice OptedOut represents
+// at the claim level. A window that closed under a freeze was declined, not
+// lost, so the stamp is still cleared, and the next occurrence starts clean.
 func Outstanding(c selection.Census) int { return c.Eligible + c.InBackoff }
 
 // WindowEdge reports what to do about the maintenance window on this pass.
@@ -66,6 +72,15 @@ func Outstanding(c selection.Census) int { return c.Eligible + c.InBackoff }
 // heals on the next pass) and as nothing to report out-of-window (so an
 // unreadable annotation can never manufacture a WindowMissed). Both directions
 // fail toward silence on the emitting side.
+//
+// A pool frozen at close settles quietly too, but only once any in-flight
+// rotation has been given its chance to defer: freeze is set only by the
+// operator (spec: "Use freeze to suppress rotation"), so it is the pool-level
+// twin of a Node's karpenter.sh/do-not-disrupt, which Outstanding already
+// excludes for the same reason — this is the operator's own choice, not a
+// controller failure. A window that closed under a freeze was declined, not
+// lost. The stamp is still cleared, not held, so the next occurrence starts
+// clean.
 func WindowEdge(in WindowInputs) WindowAction {
 	raw := in.Annotations[annotations.WindowOpenedAt]
 	opened, parsed := parseTime(raw)
@@ -83,6 +98,8 @@ func WindowEdge(in WindowInputs) WindowAction {
 		return WindowSettled
 	case in.Annotations[annotations.ActiveRotation] != "":
 		return WindowDefer
+	case Frozen(in.Annotations, in.Now):
+		return WindowSettled
 	case Outstanding(in.Census) == 0:
 		return WindowSettled
 	}

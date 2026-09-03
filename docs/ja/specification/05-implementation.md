@@ -128,12 +128,14 @@ Reconcile(req):
   return reconcile_nodepool(nodepool(req.obj))
 
 reconcile_nodepool(np):
-  # ── 0. ウィンドウクローズ評価（§4.2）。すべてのゲートより前段: これはウィンドウに
-  #        何が起きたかを述べるものであり、コントローラーが動かなかった理由ではない。
+  # ── 0. ウィンドウクローズ評価（§4.2）。この関数内のすべてのゲートより前段: これは
+  #        ウィンドウに何が起きたかを述べるものであり、コントローラーが動かなかった
+  #        理由ではない。Reconcile 自身のガバナンスゲート（ポリシー競合、ガバナンス
+  #        ポリシーなし）は reconcile_nodepool が呼ばれる前にすでに return している。
   match window_edge(np, census(np), in_window(now)):
     case stamp:    annotate(np, window-opened-at=now)        # only-if absent
     case defer:    pass                                      # ローテーションがまだ成功しうる
-    case settled:  clear(np, window-opened-at)               # only-if present
+    case settled:  clear(np, window-opened-at)               # only-if unchanged
     case missed:   won := clear(np, window-opened-at)        # only-if unchanged and no anchor
                    if won: emit_metrics(window_missed); event(WindowMissed)
 

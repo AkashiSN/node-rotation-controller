@@ -3,8 +3,10 @@
 // window-bounded surge-less path (ADR-0001), and did the maintenance window just
 // close with candidates unrotated (§4.2). They read nothing but annotations,
 // resolved durations and the clock — no client, no recorder, no metrics — so the
-// policy simulator (which compiles to wasm) calls the very same functions the
-// controller does, and the two cannot drift.
+// start-gate and surge-less decisions the policy simulator (which compiles to
+// wasm) shares are the very same functions the controller calls, and the two
+// cannot drift on those. WindowEdge has no simulator counterpart: the window-close
+// verdict stays controller-only.
 package decide
 
 import (

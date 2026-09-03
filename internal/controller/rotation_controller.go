@@ -511,8 +511,10 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	r.warn().EmitShortLead(ctx, pool, claims, res.leadTime)
 
 	// Record the maintenance window's open, and report an occurrence that closed
-	// with candidates unrotated (§4.2, issue #303). Above every gate: the signal
-	// states what happened to the window, not why the controller did not act.
+	// with candidates unrotated (§4.2, issue #303). Above every gate in this
+	// function — Reconcile's governance branches already returned before this
+	// point — the signal states what happened to the window, not why the
+	// controller did not act.
 	if err := r.evaluateWindowEdge(ctx, pool, res, now, views, excluded, sched.InWindow(now)); err != nil {
 		return ctrl.Result{}, err
 	}

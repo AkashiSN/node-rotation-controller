@@ -123,6 +123,24 @@ func TestWindowEdge(t *testing.T) {
 			census: selection.Census{Total: 1, InFlight: 1},
 			want:   decide.WindowDefer,
 		},
+		"closed under an operator freeze: settle quietly": {
+			inWindow: false,
+			ann: map[string]string{
+				annotations.WindowOpenedAt: ts(opened),
+				annotations.Freeze:         ts(now.Add(time.Hour)),
+			},
+			census: outstanding,
+			want:   decide.WindowSettled,
+		},
+		"closed after the freeze expired: still missed": {
+			inWindow: false,
+			ann: map[string]string{
+				annotations.WindowOpenedAt: ts(opened),
+				annotations.Freeze:         ts(now.Add(-time.Hour)),
+			},
+			census: outstanding,
+			want:   decide.WindowMissed,
+		},
 	}
 
 	for name, tc := range tests {

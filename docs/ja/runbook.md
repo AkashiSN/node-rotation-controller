@@ -235,6 +235,8 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 
 **何をするか:** `rotation attempt failed` 行が示す根本原因に対処する（[§1](#1-az-ごとの-surge-ヘッドルームゾーン-pv) と [§5](#5-drain-が詰まったときの対処) を参照）。試行自体は健全だが、バッチがスケジュールに対して大きすぎて本当に収まらない場合は、メンテナンスウィンドウを拡張して 1 回の発生あたりの完了数を増やすか、`minRotationChances`（`K`）を引き上げて、1 回のウィンドウ喪失があっても `expireAfter` バックストップ前に保証された機会を残すようにする。
 
+**注記:** `NodeRotationStalledInWindow` の `retry_count` アームは、`NodeRotationWindowMissed` を伴わずに単独で発火することがある。`noderotation_retry_count` は eligibility のバケットに関係なく、プールの NodeClaim 全体での最大リトライ回数なので、`noderotation_window_missed_total` が意図的にカウントしない claim（Node が後から `karpenter.sh/do-not-disrupt` を付与された、または削除中・期限切れ済みの claim）でも高いまま残りうる。この向きの不一致は、どちらかの信号が壊れていることを意味しない。
+
 ---
 
 ## 7. トラブルシューティング
