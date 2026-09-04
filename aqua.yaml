@@ -28,7 +28,7 @@ packages:
   # directive in go.mod — bump both together (the check-go-toolchain-sync.sh CI
   # guard enforces this), or Go's GOTOOLCHAIN=auto will silently download a
   # newer toolchain and bypass this pin.
-  - name: golang/go@go1.26.5
+  - name: golang/go@go1.27.1
   # --- Go test / lint / language-server tooling (was `go install` in Makefile) ---
   # setup-envtest only fetches the envtest control-plane binaries; `make test`
   # still downloads the matching Kubernetes assets on first run (ENVTEST_K8S_VERSION).
