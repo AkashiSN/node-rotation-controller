@@ -234,7 +234,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 
 **何を確認するか:**
 
-- NodePool 上の `WindowMissed` Event — そのカウント（`windowOpenedAt`、`eligible`、`inBackoff`）が、ウィンドウのどれだけの作業が未ローテーションだったかを示す。
+- NodePool 上の `WindowMissed` Event — そのカウント（`windowOpenedAt`、`eligible`、`inBackoffTriggered`）が、ウィンドウのどれだけの作業が未ローテーションだったかを示す。`no rotation candidate` 行の `inBackoff` が別の値になるのは意図的である: そちらは生の census バケットで、年齢がトリガーを越えなくなり窓が何も負っていない claim も含む。census 行の `inBackoff` がこの Event の `inBackoffTriggered` より大きいのはその差であって、不整合ではない。
 - 直前の `rotation attempt failed` ログ行とその `reason` — ウィンドウ喪失は通常、コールドスタートではなく 1 件以上の失敗した試行の末尾である。
 - `noderotation_retry_count` — エスカレートするバックオフの上限に向かって増加している場合、試行が時間切れではなく繰り返し失敗している。
 - プールが static かどうか（`StaticNodePool` Warning Event、[spec §3.3](specification/03-design.md)）— static な NodePool は surge ローテーションを一切試みないため、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびにウィンドウを逃す。issue #302 を参照。

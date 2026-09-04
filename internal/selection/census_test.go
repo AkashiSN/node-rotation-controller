@@ -113,7 +113,7 @@ func TestTakeCensusFailedPastBackoffIsEligibleNotInBackoff(t *testing.T) {
 //
 // The partition files a claim under its FIRST disqualifier and state is checked
 // before age, so a claim that failed while it was due, and whose age stopped
-// being due afterwards — an ageThresholdOverride raised, a lead time widened, an
+// being due afterwards — an ageThresholdOverride raised, a lead time shortened, an
 // expireAfter extended — stays in InBackoff. It is genuinely blocked by the
 // backoff right now, which is what the issue-#221 log line should say. But the
 // window owed it nothing, so decide.Outstanding must not count it, and the

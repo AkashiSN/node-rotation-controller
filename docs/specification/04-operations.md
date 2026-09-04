@@ -53,7 +53,7 @@ Exposed on `/metrics`:
 ::: details Metric details — click to expand
 
 - **`noderotation_candidates`:** eligible NodeClaim count per pool
-- **`noderotation_in_backoff`:** NodeClaims **past the age trigger** that are held out of the candidate count *only* because a failed attempt put them inside their escalated `retryBackoff`. The age qualifier is load-bearing: a claim that failed while it was due and whose age stopped being due afterwards — a raised `ageThresholdOverride`, a widened lead time, an extended `expireAfter` — is still blocked by its backoff but is owed nothing, and neither this gauge nor `window_missed_total` counts it. `candidates + in_backoff` is exactly the outstanding-by-age-and-state count `window_missed_total` judges a closed occurrence by, so an in-window alert can apply that same test live (§5.2)
+- **`noderotation_in_backoff`:** NodeClaims **past the age trigger** that are held out of the candidate count *only* because a failed attempt put them inside their escalated `retryBackoff`. The age qualifier is load-bearing: a claim that failed while it was due and whose age stopped being due afterwards — a raised `ageThresholdOverride`, a *shortened* lead time (the trigger is `age > expireAfter − leadTime`, so a wider lead time triggers earlier), an extended `expireAfter` — is still blocked by its backoff but is owed nothing, and neither this gauge nor `window_missed_total` counts it. `candidates + in_backoff` is exactly the outstanding-by-age-and-state count `window_missed_total` judges a closed occurrence by, so an in-window alert can apply that same test live (§5.2)
 - **`noderotation_in_progress`:** active rotation count per pool
 - **`noderotation_completed_total`:** cumulative completions; `outcome` ∈ {`success`, `failure`, `expired`}. `expired` = force-expired before graceful rotation completed (emitted once, never counted as success)
 - **`noderotation_forceful_fallback_total`:** surge-less forceful-fallback rotations initiated (§3.6); incremented at start, not completion
@@ -124,7 +124,7 @@ Every state transition emits one `INFO` log line (after the durable annotation w
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
 | `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `total` |
-| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoff` |
+| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoffTriggered` |
 
 - **Level-triggered lines** (`no rotation candidate`, `surge placeholder is not schedulable`) use transition dedup — re-fire only when reason/census/message changes
 - **Debug verbosity** (`V(1)`) adds un-deduplicated per-pass findings and a heartbeat

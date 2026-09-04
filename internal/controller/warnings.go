@@ -204,11 +204,15 @@ func (w *warningEmitter) EmitStaticNodePool(ctx context.Context, pool *karpv1.No
 // that stops in between drops the Event rather than inventing one.
 func (w *warningEmitter) EmitWindowMissed(ctx context.Context, pool *karpv1.NodePool, openedAt string, c selection.Census) {
 	msg := fmt.Sprintf(
-		"maintenance window first observed open at %s closed with %d candidate(s) unrotated (%d eligible, %d in retryBackoff): even after allowing an in-flight attempt to finish past the boundary, no rotation attributable to that occurrence completed. The guaranteed rotation chance for those NodeClaims was consumed without a graceful replacement; they remain subject to Karpenter's forceful expiration.",
+		"maintenance window first observed open at %s closed with %d candidate(s) unrotated (%d eligible, %d still due and in retryBackoff): even after allowing an in-flight attempt to finish past the boundary, no rotation attributable to that occurrence completed. The guaranteed rotation chance for those NodeClaims was consumed without a graceful replacement; they remain subject to Karpenter's forceful expiration.",
 		openedAt, decide.Outstanding(c), c.Eligible, c.InBackoffTriggered)
+	// inBackoffTriggered, not inBackoff: the "no rotation candidate" census line
+	// logs the raw first-disqualifier bucket under inBackoff, which also holds
+	// claims the schedule stopped asking for. Two different numbers under one key
+	// would read as an inconsistency, so this one carries the qualified name.
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
 		"maintenance window closed with candidates unrotated",
-		"windowOpenedAt", openedAt, "eligible", c.Eligible, "inBackoff", c.InBackoffTriggered)
+		"windowOpenedAt", openedAt, "eligible", c.Eligible, "inBackoffTriggered", c.InBackoffTriggered)
 	if w.events != nil {
 		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonWindowMissed, actionEvaluateSchedule, "%s", msg)
 	}

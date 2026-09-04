@@ -53,7 +53,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 ::: details メトリクス詳細 — クリックで展開
 
 - **`noderotation_candidates`:** プールあたりの適格 NodeClaim 数
-- **`noderotation_in_backoff`:** **年齢トリガーを越えている**うえで、失敗した試行によってエスカレートした `retryBackoff` 中にある*という理由だけで*候補カウントから外れている NodeClaim 数。年齢の限定はロードベアリングである: 期限が来ていたときに失敗し、その後に年齢が期限外になった claim（`ageThresholdOverride` の引き上げ、リードタイムの拡大、`expireAfter` の延長）は、いま backoff に阻まれてはいるが何も負われておらず、このゲージも `window_missed_total` もそれを数えない。`candidates + in_backoff` は `window_missed_total` が閉じた occurrence を判定する「年齢と状態による未処理」カウントそのものであり、in-window のアラートは同じ判定をライブに適用できる（§5.2）
+- **`noderotation_in_backoff`:** **年齢トリガーを越えている**うえで、失敗した試行によってエスカレートした `retryBackoff` 中にある*という理由だけで*候補カウントから外れている NodeClaim 数。年齢の限定はロードベアリングである: 期限が来ていたときに失敗し、その後に年齢が期限外になった claim（`ageThresholdOverride` の引き上げ、リードタイムの*短縮* — トリガーは `age > expireAfter − leadTime` なので、リードタイムを広げると期限は早く来る — 、`expireAfter` の延長）は、いま backoff に阻まれてはいるが何も負われておらず、このゲージも `window_missed_total` もそれを数えない。`candidates + in_backoff` は `window_missed_total` が閉じた occurrence を判定する「年齢と状態による未処理」カウントそのものであり、in-window のアラートは同じ判定をライブに適用できる（§5.2）
 - **`noderotation_in_progress`:** プールあたりのアクティブローテーション数
 - **`noderotation_completed_total`:** 累積完了数; `outcome` ∈ {`success`, `failure`, `expired`}。`expired` = graceful ローテーション完了前に force-expire（1回のみ発行、success としてカウントしない）
 - **`noderotation_forceful_fallback_total`:** surge なし forceful fallback ローテーション開始数（§3.6）; 開始時にインクリメント
@@ -124,7 +124,7 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
 | `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `total` |
-| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoff` |
+| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoffTriggered` |
 
 - **レベルトリガー行**（`no rotation candidate`、`surge placeholder is not schedulable`）は遷移 dedup を使用 — reason/census/message が変化した場合のみ再発行
 - **デバッグ冗長性**（`V(1)`）で dedup なしの各パス findings とハートビートを追加

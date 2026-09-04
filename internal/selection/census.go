@@ -38,8 +38,10 @@ type Census struct {
 	// The partition files a claim under its FIRST disqualifier, and state is
 	// checked before age, so InBackoff also holds claims that would fall to
 	// NotTriggered if the backoff were lifted — reachable when a RotationPolicy
-	// edit raises ageThresholdOverride or the lead time, or when a claim's own
-	// expireAfter is extended, after its attempt failed. That is the right answer
+	// edit raises ageThresholdOverride or SHORTENS the lead time (the trigger is
+	// age > expireAfter - leadTime, so a wider lead time triggers earlier, not
+	// later), or when a claim's own expireAfter is extended, after its attempt
+	// failed. That is the right answer
 	// for the issue-#221 log line, which reports what is blocking the claim now,
 	// but the wrong one for "what did this window leave undone": a claim whose age
 	// is no longer due was owed nothing. decide.Outstanding therefore counts this

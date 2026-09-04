@@ -234,7 +234,7 @@ Two words in that sentence are narrower than they look:
 
 **What to check:**
 
-- The `WindowMissed` Event on the NodePool — its counts (`windowOpenedAt`, `eligible`, `inBackoff`) say how much of the window's work went unrotated.
+- The `WindowMissed` Event on the NodePool — its counts (`windowOpenedAt`, `eligible`, `inBackoffTriggered`) say how much of the window's work went unrotated. The `no rotation candidate` line's `inBackoff` is a different number on purpose: it is the raw census bucket, which also holds claims whose age stopped crossing the trigger and which the window therefore owed nothing. Seeing the census line's `inBackoff` exceed this Event's `inBackoffTriggered` is that difference, not an inconsistency.
 - The preceding `rotation attempt failed` log lines and their `reason` — a lost window is usually the tail of one or more failed attempts, not a cold start.
 - `noderotation_retry_count` — climbing toward the escalated backoff cap means attempts are repeatedly failing, not merely running out of time.
 - Whether the pool is static (`StaticNodePool` Warning Event, [spec §3.3](specification/03-design.md)) — a static NodePool never attempts a surge rotation, so it misses every occurrence that closes with age/state-outstanding claims; see issue #302.

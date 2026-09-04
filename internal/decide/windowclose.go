@@ -61,8 +61,10 @@ type WindowInputs struct {
 // It counts InBackoffTriggered rather than the InBackoff bucket, because the
 // bucket files a claim by its FIRST disqualifier and state is checked before
 // age: a claim whose age stopped being due after its attempt failed — a
-// RotationPolicy edit raising the override or the lead time, an extended
-// expireAfter — sits in InBackoff while being owed nothing. Counting the bucket
+// RotationPolicy edit raising the override or shortening the lead time (the
+// trigger is age > expireAfter - leadTime, so a wider lead time triggers
+// earlier), an extended expireAfter — sits in InBackoff while being owed
+// nothing. Counting the bucket
 // would report a lost window for a claim the schedule no longer asks for
 // (issue #321 review).
 //
