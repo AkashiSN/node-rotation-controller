@@ -92,7 +92,7 @@ Per-NodePool series are cleared when the NodePool is deleted or loses its govern
 | Metric | Type | What to watch for |
 |--------|------|-------------------|
 | `noderotation_candidates` | Gauge | Should trend to 0 after each window. Stuck > 0 for two windows → falling behind |
-| `noderotation_in_backoff` | Gauge | Claims that would be candidates but for a failed attempt's `retryBackoff`. `candidates + in_backoff` is what a window has left to do |
+| `noderotation_in_backoff` | Gauge | Claims still due by age that would be candidates but for a failed attempt's `retryBackoff`. `candidates + in_backoff` is what a window has left to do |
 | `noderotation_in_progress` | Gauge | 0 or 1 (serial per pool in v1) |
 | `noderotation_completed_total{outcome}` | Counter | `outcome ∈ {success, failure, expired}`. Any `failure`/`expired` → investigate |
 | `noderotation_forceful_fallback_total` | Counter | Rising → graceful surges losing the race to deadlines |
@@ -247,7 +247,7 @@ Two words in that sentence are narrower than they look:
 - **A schedule edit can close a window immediately.** Editing a policy's `maintenanceWindows` while a stamp is held, such that the current time is no longer in-window, is treated as the occurrence closing right then — it is judged against the census as it stands at the edit.
 - **The report is at-most-once, never more.** The stamp is cleared before the counter and the Event, so a controller that stops in between drops that occurrence's report rather than inventing one, and a stop between the counter and the Event can leave one without the other. Alert on `increase(...) > 0`, not on an exact count.
 
-**Note:** `NodeRotationStalledInWindow` is the in-window early warning for this same failure, and since issue #321 the two judge a pool by one predicate — `noderotation_candidates + noderotation_in_backoff > 0`, both excluding a frozen pool. They still differ in *when*: the alert evaluates live and repeatedly while the window is open, the counter once at its close. So the alert can fire and then resolve without a lost window following it, whenever the pool recovers and completes a rotation before the boundary. That is the signal working, not disagreeing.
+**Note:** `NodeRotationStalledInWindow` is the in-window early warning for this same failure, but it is not a predictor of it. Since issue #321 the two apply the same *outstanding-work* test — `noderotation_candidates + noderotation_in_backoff > 0`, both excluding a frozen pool — so the alert no longer fires for claims the counter never counts. Three things still separate them, all by design. The alert evaluates live and repeatedly while the window is open and the counter once at its close, so the alert can fire and then resolve when the pool recovers before the boundary. The alert's suppression arm is a rolling `completionRange` lookback while the counter attributes a success by `last-rotation-at ≥ window-opened-at`, so a success just before an occurrence can suppress the alert without settling that occurrence, and in a window longer than `completionRange` an attributable success can age out and let the alert fire although the occurrence will settle — keep `completionRange` near one window's duration. And a claim whose backoff has elapsed and has been re-selected is in flight, counted by neither arm, so the alert is silent from re-selection until `readyTimeout` rolls the attempt back.
 
 ---
 

@@ -425,6 +425,13 @@ func TestObserveSurgeWaitDuration(t *testing.T) {
 //   - nc-past has failed too, but its backoff has elapsed, so it is Eligible
 //     again and belongs to Candidates. Counting it in both would double-count it
 //     in the Candidates + InBackoff sum the in-window alert reads.
+//   - nc-notdue is failed and inside its backoff, but its age no longer crosses
+//     the trigger, so the window owes it nothing. It sits in the census's
+//     InBackoff bucket — the backoff really is what blocks it now — while the
+//     InBackoffTriggered tally this gauge reports leaves it out (issue #321
+//     review). nc-notdue is byte-identical to nc-b1 except for its age, so its
+//     exclusion can only be the trigger: withExpireAfter gives the pool a 14d
+//     template and K=2, putting a 2-day claim well below it.
 func TestObserveInBackoffCountsCensusBucketNotFailedClaims(t *testing.T) {
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
 	optOutNode := "node-optout"
@@ -447,9 +454,16 @@ func TestObserveInBackoffCountsCensusBucketNotFailedClaims(t *testing.T) {
 		annotations.FailedAt, rfc(testNow.Add(-1*time.Minute)),
 		annotations.RetryCount, "9"))
 
+	// Failed and inside its backoff, but too young to be due: counted by the
+	// census bucket, not by the gauge.
+	notDue := testClaim("nc-notdue", 2*24*time.Hour, ncAnn(
+		annotations.State, annotations.StateFailed,
+		annotations.FailedAt, rfc(testNow.Add(-1*time.Minute)),
+		annotations.RetryCount, "1"))
+
 	rec := &fakeRecorder{}
 	r := newReconciler(t, testNow, rec,
-		pool, cand, past, optOut,
+		pool, cand, past, optOut, notDue,
 		inBackoff("nc-b1", "1"), inBackoff("nc-b2", "2"), inBackoff("nc-b3", "3"),
 		testK8sNode(candNode, true, nil, false),
 		testK8sNode(optOutNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true"}, false),

@@ -18,7 +18,7 @@ func TestWindowEdge(t *testing.T) {
 
 	now := time.Date(2026, 9, 3, 6, 31, 0, 0, time.UTC)
 	opened := now.Add(-91 * time.Minute) // the window ran 05:00–06:30
-	outstanding := selection.Census{Total: 2, InBackoff: 2}
+	outstanding := selection.Census{Total: 2, InBackoff: 2, InBackoffTriggered: 2}
 
 	tests := map[string]struct {
 		inWindow bool
@@ -57,6 +57,17 @@ func TestWindowEdge(t *testing.T) {
 			ann:      map[string]string{annotations.WindowOpenedAt: ts(opened)},
 			census:   selection.Census{Total: 1, Eligible: 1},
 			want:     decide.WindowMissed,
+		},
+		// The claims are inside their backoff but their age no longer crosses the
+		// trigger — a policy edit raised the threshold after the attempts failed.
+		// They are still blocked by the backoff, so the census bucket holds them,
+		// but the window owed them nothing and losing it cost them nothing
+		// (issue #321 review).
+		"closed with backed-off claims the schedule no longer asks for: settle quietly": {
+			inWindow: false,
+			ann:      map[string]string{annotations.WindowOpenedAt: ts(opened)},
+			census:   selection.Census{Total: 2, InBackoff: 2, InBackoffTriggered: 0},
+			want:     decide.WindowSettled,
 		},
 		"closed with nothing outstanding: settle quietly": {
 			inWindow: false,
@@ -184,11 +195,19 @@ func TestOutstandingCountsOnlyRotatableClaims(t *testing.T) {
 	t.Parallel()
 
 	full := selection.Census{
-		Total: 8, Eligible: 1, InBackoff: 1,
+		Total: 8, Eligible: 1, InBackoff: 1, InBackoffTriggered: 1,
 		OptedOut: 1, Deleting: 1, NotReady: 1, InFlight: 1, Terminal: 1, NotTriggered: 1,
 	}
 	if got := decide.Outstanding(full); got != 2 {
-		t.Errorf("Outstanding = %d, want 2 (Eligible + InBackoff only)", got)
+		t.Errorf("Outstanding = %d, want 2 (Eligible + InBackoffTriggered only)", got)
+	}
+	// A claim that failed while it was due and is no longer due sits in InBackoff
+	// without being owed this window: the bucket is 2, the outstanding count is 1.
+	// Counting the bucket instead would report a lost window for a claim the
+	// schedule stopped asking for (issue #321 review).
+	notDue := selection.Census{Total: 2, InBackoff: 2, InBackoffTriggered: 1}
+	if got := decide.Outstanding(notDue); got != 1 {
+		t.Errorf("Outstanding = %d, want 1 — InBackoff holds a claim past the age trigger and one below it", got)
 	}
 	for name, c := range map[string]selection.Census{
 		"opted out":     {Total: 1, OptedOut: 1},

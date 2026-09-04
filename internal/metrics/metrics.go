@@ -75,7 +75,7 @@ func New(reg prometheus.Registerer) *Recorder {
 		}, poolLabel),
 		inBackoff: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "noderotation_in_backoff",
-			Help: "NodeClaims excluded from the candidate count only because a failed attempt put them inside their escalated retryBackoff (spec §4.2).",
+			Help: "NodeClaims past the rotation trigger that are excluded from the candidate count only because a failed attempt put them inside their escalated retryBackoff (spec §4.2).",
 		}, poolLabel),
 		inProgress: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "noderotation_in_progress",

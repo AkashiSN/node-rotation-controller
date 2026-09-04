@@ -53,10 +53,18 @@ type WindowInputs struct {
 // contradiction. The signal states what happened to the window, not why the
 // controller did not act.
 //
-// InBackoff is the load-bearing half. noderotation_candidates counts only
+// The backoff half is load-bearing. noderotation_candidates counts only
 // Eligible, so a pool whose every candidate is inside its escalated retryBackoff
 // reports zero candidates while the window drains away — the exact shape of
 // issue #303, and the reason a "candidates > 0" alert stayed silent through it.
+//
+// It counts InBackoffTriggered rather than the InBackoff bucket, because the
+// bucket files a claim by its FIRST disqualifier and state is checked before
+// age: a claim whose age stopped being due after its attempt failed — a
+// RotationPolicy edit raising the override or the lead time, an extended
+// expireAfter — sits in InBackoff while being owed nothing. Counting the bucket
+// would report a lost window for a claim the schedule no longer asks for
+// (issue #321 review).
 //
 // Every other bucket is excluded deliberately: NotTriggered was never owed this
 // window, OptedOut is the operator's own karpenter.sh/do-not-disrupt, Deleting is
@@ -69,7 +77,7 @@ type WindowInputs struct {
 // instruction to stop rotating — the same operator choice OptedOut represents
 // at the claim level. A window that closed under a freeze was declined, not
 // lost, so the stamp is still cleared, and the next occurrence starts clean.
-func Outstanding(c selection.Census) int { return c.Eligible + c.InBackoff }
+func Outstanding(c selection.Census) int { return c.Eligible + c.InBackoffTriggered }
 
 // WindowEdge reports what to do about the maintenance window on this pass.
 //

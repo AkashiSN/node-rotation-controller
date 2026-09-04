@@ -205,10 +205,10 @@ func (w *warningEmitter) EmitStaticNodePool(ctx context.Context, pool *karpv1.No
 func (w *warningEmitter) EmitWindowMissed(ctx context.Context, pool *karpv1.NodePool, openedAt string, c selection.Census) {
 	msg := fmt.Sprintf(
 		"maintenance window first observed open at %s closed with %d candidate(s) unrotated (%d eligible, %d in retryBackoff): even after allowing an in-flight attempt to finish past the boundary, no rotation attributable to that occurrence completed. The guaranteed rotation chance for those NodeClaims was consumed without a graceful replacement; they remain subject to Karpenter's forceful expiration.",
-		openedAt, decide.Outstanding(c), c.Eligible, c.InBackoff)
+		openedAt, decide.Outstanding(c), c.Eligible, c.InBackoffTriggered)
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
 		"maintenance window closed with candidates unrotated",
-		"windowOpenedAt", openedAt, "eligible", c.Eligible, "inBackoff", c.InBackoff)
+		"windowOpenedAt", openedAt, "eligible", c.Eligible, "inBackoff", c.InBackoffTriggered)
 	if w.events != nil {
 		w.events.Eventf(pool, nil, corev1.EventTypeWarning, reasonWindowMissed, actionEvaluateSchedule, "%s", msg)
 	}

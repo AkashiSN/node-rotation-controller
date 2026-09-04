@@ -92,7 +92,7 @@ NodePool 単位の系列は NodePool 削除時、または統治 `RotationPolicy
 | メトリクス | 型 | 見るべきポイント |
 |-----------|------|-----------------|
 | `noderotation_candidates` | Gauge | 各ウィンドウ後に 0 へ向かうべき。2 ウィンドウ跨いで > 0 → 処理が追いついていない |
-| `noderotation_in_backoff` | Gauge | 失敗した試行の `retryBackoff` 中でなければ候補だった claim 数。`candidates + in_backoff` がそのウィンドウの残作業 |
+| `noderotation_in_backoff` | Gauge | 年齢的にまだ期限が来ていて、失敗した試行の `retryBackoff` 中でなければ候補だった claim 数。`candidates + in_backoff` がそのウィンドウの残作業 |
 | `noderotation_in_progress` | Gauge | 0 か 1（v1 は pool ごとに直列） |
 | `noderotation_completed_total{outcome}` | Counter | `outcome ∈ {success, failure, expired}`。failure/expired → 調査 |
 | `noderotation_forceful_fallback_total` | Counter | 増加中 → graceful surge がデッドラインに間に合っていない |
@@ -247,7 +247,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 - **スケジュールの編集がウィンドウを即座に閉じうる。** スタンプ保持中にポリシーの `maintenanceWindows` を編集して現在時刻が window 外になると、その時点で発生が閉じたものとして扱われ、その時点の census に対して判定される。
 - **報告は最大 1 回で、それ以上にはならない。** スタンプのクリアはカウンターと Event より先に行われるため、その間に停止したコントローラーはその発生の報告を捏造せず落とし、カウンターと Event の間で停止すれば片方だけが残りうる。正確な回数ではなく `increase(...) > 0` でアラートすること。
 
-**注記:** `NodeRotationStalledInWindow` は同じ失敗に対する in-window の早期警告であり、issue #321 以降、両者は 1 つの述語 — `noderotation_candidates + noderotation_in_backoff > 0`、どちらも freeze 中のプールを除外 — でプールを判定する。違いは*いつ*評価するかだけである: アラートはウィンドウが開いている間に繰り返しライブに評価し、カウンタはその閉鎖時に一度だけ評価する。したがってプールが持ち直して境界前にローテーションを完了すれば、アラートが発火してから解決し、ウィンドウ喪失が続かないことがある。これは信号が食い違っているのではなく、正しく機能している。
+**注記:** `NodeRotationStalledInWindow` は同じ失敗に対する in-window の早期警告だが、その予測子ではない。issue #321 以降、両者は同じ*未処理作業*の判定 — `noderotation_candidates + noderotation_in_backoff > 0`、どちらも freeze 中のプールを除外 — を適用するので、カウンタが決して数えない claim でアラートが発火することはなくなった。ただし設計上、次の 3 点は依然として異なる。アラートはウィンドウが開いている間に繰り返しライブに評価し、カウンタは閉鎖時に一度だけ評価するので、プールが境界前に持ち直せばアラートは発火してから解決する。アラートの抑止アームは `completionRange` のローリング参照だが、カウンタは `last-rotation-at ≥ window-opened-at` で成功を帰属させるので、occurrence の直前の成功がその occurrence を settle しないままアラートを抑止することがあり、`completionRange` より長いウィンドウでは帰属する成功が参照範囲から抜け落ち、occurrence は settle されるのにアラートが発火しうる — `completionRange` は 1 ウィンドウ分程度に保つこと。そして backoff が明けて再選択された claim は in-flight であり、どちらのアームにも数えられないため、再選択から `readyTimeout` のロールバックまでアラートは沈黙する。
 
 ---
 

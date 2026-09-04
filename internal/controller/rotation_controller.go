@@ -760,7 +760,7 @@ func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now ti
 	census := selection.TakeCensus(views, r.selInputs(res, now, excluded))
 	o := PoolObservation{
 		Candidates:      census.Eligible,
-		InBackoff:       census.InBackoff,
+		InBackoff:       census.InBackoffTriggered,
 		ShortLeadNodes:  selection.CountShortLead(views, res.leadTime),
 		RetryCount:      highestRetry(claims),
 		DrainStuck:      r.drainStuck(pool, claims, res, now),
