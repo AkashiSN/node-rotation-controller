@@ -77,6 +77,14 @@ const (
 type PoolObservation struct {
 	// Candidates is the eligible NodeClaim count (noderotation_candidates).
 	Candidates int
+	// InBackoff is the count of claims past the age trigger that are held out of
+	// Candidates only because a failed attempt put them inside their escalated
+	// retryBackoff (noderotation_in_backoff) — selection.Census.InBackoffTriggered,
+	// not the InBackoff bucket, which also holds claims the schedule stopped
+	// asking for. Candidates + InBackoff is decide.Outstanding, the count the
+	// lost-window counter judges an occurrence by, so an in-window alert can test
+	// the outstanding-work half of that verdict live (issue #321).
+	InBackoff int
 	// InProgress is the active rotation count (noderotation_in_progress); 0 or 1
 	// in v1 (serial per NodePool).
 	InProgress int

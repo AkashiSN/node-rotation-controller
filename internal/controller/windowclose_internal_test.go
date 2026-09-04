@@ -82,7 +82,7 @@ func TestWindowCloseMissedEmitsOnceAndClearsTheStamp(t *testing.T) {
 	if !strings.Contains(evs[0], "WindowMissed") {
 		t.Errorf("the Event must carry reason WindowMissed, got %q", evs[0])
 	}
-	if !strings.Contains(evs[0], "1 candidate") || !strings.Contains(evs[0], "0 eligible") || !strings.Contains(evs[0], "1 in retryBackoff") {
+	if !strings.Contains(evs[0], "1 candidate") || !strings.Contains(evs[0], "0 eligible") || !strings.Contains(evs[0], "1 still due and in retryBackoff") {
 		t.Errorf("the Event message must name the counts, got %q", evs[0])
 	}
 }

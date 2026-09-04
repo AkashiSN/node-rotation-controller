@@ -31,6 +31,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 | メトリクス | タイプ | ラベル |
 |--------|------|--------|
 | `noderotation_candidates` | Gauge | `nodepool` |
+| `noderotation_in_backoff` | Gauge | `nodepool` |
 | `noderotation_in_progress` | Gauge | `nodepool` |
 | `noderotation_completed_total` | Counter | `nodepool`, `outcome` |
 | `noderotation_forceful_fallback_total` | Counter | `nodepool` |
@@ -52,10 +53,11 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 ::: details メトリクス詳細 — クリックで展開
 
 - **`noderotation_candidates`:** プールあたりの適格 NodeClaim 数
+- **`noderotation_in_backoff`:** **年齢トリガーを越えている**うえで、失敗した試行によってエスカレートした `retryBackoff` 中にある*という理由だけで*候補カウントから外れている NodeClaim 数。年齢の限定はロードベアリングである: 期限が来ていたときに失敗し、その後に年齢が期限外になった claim（`ageThresholdOverride` の引き上げ、リードタイムの*短縮* — トリガーは `age > expireAfter − leadTime` なので、リードタイムを広げると期限は早く来る — 、`expireAfter` の延長）は、いま backoff に阻まれてはいるが何も負われておらず、このゲージも `window_missed_total` もそれを数えない。`candidates + in_backoff` は `window_missed_total` が閉じた occurrence を判定する「年齢と状態による未処理」カウントそのものであり、in-window のアラートは同じ判定をライブに適用できる（§5.2）
 - **`noderotation_in_progress`:** プールあたりのアクティブローテーション数
 - **`noderotation_completed_total`:** 累積完了数; `outcome` ∈ {`success`, `failure`, `expired`}。`expired` = graceful ローテーション完了前に force-expire（1回のみ発行、success としてカウントしない）
 - **`noderotation_forceful_fallback_total`:** surge なし forceful fallback ローテーション開始数（§3.6）; 開始時にインクリメント
-- **`noderotation_window_missed_total`:** 年齢と状態から見て未処理の候補（eligible または `retryBackoff` 中）が残ったまま、その発生に帰属するローテーションが 1 件も完了しないままメンテナンスウィンドウの発生が閉じた回数（§5.2）。ウィンドウがゲートするのはローテーションの*開始*だけなので、発生の中で始まり境界の後に成功した試行はその発生に帰属し、発生を settle させる。ここでの「残っている」は「コントローラーがローテーションできたはず」ではない: この評価は意図的にプールレベルのゲートより前段で走る（§5.2）ため、static なプールやスケジュールが致命的に実行不能なプールは、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびに報告する。発生ごとに**最大** 1 回、`window-opened-at` スタンプをクリアしたパスがインクリメント — クリアが発行より先に着地するため、その間に停止したコントローラーはシグナルを捏造せず落とす
+- **`noderotation_window_missed_total`:** 年齢と状態から見て未処理の候補（eligible、または年齢トリガーを越えていて `retryBackoff` 中）が残ったまま、その発生に帰属するローテーションが 1 件も完了しないままメンテナンスウィンドウの発生が閉じた回数（§5.2）。ウィンドウがゲートするのはローテーションの*開始*だけなので、発生の中で始まり境界の後に成功した試行はその発生に帰属し、発生を settle させる。ここでの「残っている」は「コントローラーがローテーションできたはず」ではない: この評価は意図的にプールレベルのゲートより前段で走る（§5.2）ため、static なプールやスケジュールが致命的に実行不能なプールは、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびに報告する。発生ごとに**最大** 1 回、`window-opened-at` スタンプをクリアしたパスがインクリメント — クリアが発行より先に着地するため、その間に停止したコントローラーはシグナルを捏造せず落とす
 - **`noderotation_duration_seconds`:** フェーズごと; `phase` ∈ {`surge_wait`, `drain`}。`surge_wait` = `started-at → surge_ready`; `drain` = `draining-at → 旧 NodeClaim ファイナライズ`。成功遷移ごとに最大 1 回観測（リトライ書き込みでの二重カウントなし）
 - **`noderotation_window_active`:** 0/1 ウィンドウメンバーシップ表示
 - **`noderotation_policy_conflict`:** 0/1 セレクタータイまたは無効ポリシーによりブロック（§5.4）
@@ -122,7 +124,7 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
 | `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `total` |
-| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoff` |
+| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoffTriggered` |
 
 - **レベルトリガー行**（`no rotation candidate`、`surge placeholder is not schedulable`）は遷移 dedup を使用 — reason/census/message が変化した場合のみ再発行
 - **デバッグ冗長性**（`V(1)`）で dedup なしの各パス findings とハートビートを追加
@@ -135,13 +137,19 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | 失敗/expired | `increase(noderotation_completed_total{outcome=~"failure|expired"}[1h]) > 0` |
 | 追いつけない | `noderotation_candidates > 0` が 2 回連続ウィンドウ |
 | ウィンドウ喪失 | `increase(noderotation_window_missed_total[24h]) > 0` |
-| ウィンドウ詰まり（in-window） | `window_active == 1`、**成功**完了ゼロ、かつ `noderotation_candidates > 0 or noderotation_retry_count > 0` |
+| ウィンドウ詰まり（in-window） | `window_active == 1`、freeze 中でない、**成功**完了ゼロ、かつ `noderotation_candidates > 0 or noderotation_in_backoff > 0` |
 | ドレイン停滞 | `noderotation_drain_stuck == 1` |
 | Short lead | `noderotation_short_lead_nodes > 0` |
 | 体系的失敗 | `noderotation_retry_count >= 3` |
 | Forceful fallback | `increase(noderotation_forceful_fallback_total[1h]) > 0`（severity: info） |
 
-in-window 条件の `retry_count` 側はロードベアリングである: エスカレートした `retryBackoff` 中の NodeClaim は eligible ではないため、プールに未処理の作業が残っていても `noderotation_candidates` は `0` に落ちる。`candidates` だけに依存する条件は、ウィンドウ全体が失敗した試行だけで費やされた場合に沈黙する — これはまさに `window_missed_total` が報告するために追加されたケースである。
+in-window 条件の `in_backoff` 側はロードベアリングである: エスカレートした `retryBackoff` 中の NodeClaim は eligible ではないため、プールに未処理の作業が残っていても `noderotation_candidates` は `0` に落ちる。`candidates` だけに依存する条件は、ウィンドウ全体が失敗した試行だけで費やされた場合に沈黙する — これはまさに `window_missed_total` が報告するために追加されたケースである。
+
+このアームが `retry_count` ではなく `in_backoff` であるのは、条件のこの半分をウィンドウ閉鎖時の評価と*同一の判定*にするためである。`candidates + in_backoff` はその未処理カウントそのものだが、`retry_count` はバケットに関係なくプールの*すべての* NodeClaim にわたる最大リトライ回数であり、カウンタが意図的に除外する claim — Node に運用者が `karpenter.sh/do-not-disrupt` を付与したもの、削除中のもの、既に期限切れのもの — でも高いまま残る。freeze の除外はその一致を広げる: freeze は運用者がプールにローテーション停止を指示するものなので、freeze 下で閉じたウィンドウは喪失ではなく辞退であり、カウンタはそれを記録しない（§5.2）。in-window 条件も同じ根拠でそれを辞退する。
+
+ただし 2 つのシグナルはこのアームを超えては等価**ではなく**、アラートはカウンタの予測子ではない。完了側のアームは `completionRange` のローリング参照だが、カウンタは `last-rotation-at ≥ window-opened-at` で成功を帰属させるため、両方向にずれる: occurrence の直*前*の成功はその occurrence を settle できないのにアラートを抑止し、`completionRange` より長いウィンドウでは帰属する成功が参照範囲から抜け落ち、occurrence は settle されるのにアラートが発火しうる。どちらも小さく保つには `completionRange` をおよそ 1 ウィンドウ分に設定する。
+
+意図的にアラートしないケースが 1 つある: backoff が明けて再選択された claim は `InFlight` であり、どちらのアームにも数えられないため、再選択から `readyTimeout` が試行をロールバックして `retryBackoff` に戻すまでこの条件は沈黙する。以前の `retry_count` アームはその間ずっと発火していた。この縮小は受け入れる — 実際に走っているローテーションは詰まったウィンドウではない — うえで、最終的なシグナルは失敗アラートと、occurrence がその claim を未処理のまま閉じた場合の `window_missed_total` である。
 
 完了側を `outcome="success"` に限定することも、同じインシデントに対して同じ向きにロードベアリングである。`noderotation_completed_total` は `failure` と `expired` も数え、`readyTimeout` のロールバックは failure を記録する。したがって*あらゆる*完了を進捗とみなす条件では、失敗した試行 1 件ごとにアラートが抑止され、ウィンドウ全体が失敗した試行だけで費やされたときにちょうど沈黙する。表明すべき条件は「ウィンドウが開いていて、作業が残っていて、何も成功していない」である。
 

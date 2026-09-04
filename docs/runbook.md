@@ -92,6 +92,7 @@ Per-NodePool series are cleared when the NodePool is deleted or loses its govern
 | Metric | Type | What to watch for |
 |--------|------|-------------------|
 | `noderotation_candidates` | Gauge | Should trend to 0 after each window. Stuck > 0 for two windows → falling behind |
+| `noderotation_in_backoff` | Gauge | Claims still due by age that would be candidates but for a failed attempt's `retryBackoff`. `candidates + in_backoff` is what a window has left to do |
 | `noderotation_in_progress` | Gauge | 0 or 1 (serial per pool in v1) |
 | `noderotation_completed_total{outcome}` | Counter | `outcome ∈ {success, failure, expired}`. Any `failure`/`expired` → investigate |
 | `noderotation_forceful_fallback_total` | Counter | Rising → graceful surges losing the race to deadlines |
@@ -207,7 +208,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 |-------|------------|--------|
 | `NodeRotationCompletedFailureOrExpired` | A rotation failed or expired in the last hour | Check §1 (AZ capacity) and §5 (stuck drain) |
 | `NodeRotationCandidatesNotDraining` | Candidates haven't cleared across two windows | Check §2 (throughput) |
-| `NodeRotationStalledInWindow` | Window open, candidates or retrying claims exist, zero **successful** completions | Check §1 or §5 |
+| `NodeRotationStalledInWindow` | Window open and unfrozen, `candidates + in_backoff > 0`, zero **successful** completions | Check §1 or §5 |
 | `NodeRotationDrainStuck` | Drain exceeds `tGP + buffer` | Follow §5 |
 | `NodeRotationShortLeadNodes` | Nodes can't get K chances before expiry | Raise `expireAfter` or add windows |
 | `NodeRotationRetryCountHigh` | Same rotation failing ≥ 3 times | Systematic cause — check §1 |
@@ -233,7 +234,7 @@ Two words in that sentence are narrower than they look:
 
 **What to check:**
 
-- The `WindowMissed` Event on the NodePool — its counts (`windowOpenedAt`, `eligible`, `inBackoff`) say how much of the window's work went unrotated.
+- The `WindowMissed` Event on the NodePool — its counts (`windowOpenedAt`, `eligible`, `inBackoffTriggered`) say how much of the window's work went unrotated. The `no rotation candidate` line's `inBackoff` is a different number on purpose: it is the raw census bucket, which also holds claims whose age stopped crossing the trigger and which the window therefore owed nothing. Seeing the census line's `inBackoff` exceed this Event's `inBackoffTriggered` is that difference, not an inconsistency.
 - The preceding `rotation attempt failed` log lines and their `reason` — a lost window is usually the tail of one or more failed attempts, not a cold start.
 - `noderotation_retry_count` — climbing toward the escalated backoff cap means attempts are repeatedly failing, not merely running out of time.
 - Whether the pool is static (`StaticNodePool` Warning Event, [spec §3.3](specification/03-design.md)) — a static NodePool never attempts a surge rotation, so it misses every occurrence that closes with age/state-outstanding claims; see issue #302.
@@ -246,7 +247,7 @@ Two words in that sentence are narrower than they look:
 - **A schedule edit can close a window immediately.** Editing a policy's `maintenanceWindows` while a stamp is held, such that the current time is no longer in-window, is treated as the occurrence closing right then — it is judged against the census as it stands at the edit.
 - **The report is at-most-once, never more.** The stamp is cleared before the counter and the Event, so a controller that stops in between drops that occurrence's report rather than inventing one, and a stop between the counter and the Event can leave one without the other. Alert on `increase(...) > 0`, not on an exact count.
 
-**Note:** `NodeRotationStalledInWindow`'s `retry_count` arm can fire without `NodeRotationWindowMissed` following it. `noderotation_retry_count` is the highest retry count across all of a pool's NodeClaims regardless of eligibility, so it can stay elevated for a claim `noderotation_window_missed_total` deliberately does not count — one whose Node has since been marked `karpenter.sh/do-not-disrupt`, or one that is deleting or already expired. Seeing the two disagree in that direction does not mean either signal is broken.
+**Note:** `NodeRotationStalledInWindow` is the in-window early warning for this same failure, but it is not a predictor of it. Since issue #321 the two apply the same *outstanding-work* test — `noderotation_candidates + noderotation_in_backoff > 0`, both excluding a frozen pool — so the alert no longer fires for claims the counter never counts. Three things still separate them, all by design. The alert evaluates live and repeatedly while the window is open and the counter once at its close, so the alert can fire and then resolve when the pool recovers before the boundary. The alert's suppression arm is a rolling `completionRange` lookback while the counter attributes a success by `last-rotation-at ≥ window-opened-at`, so a success just before an occurrence can suppress the alert without settling that occurrence, and in a window longer than `completionRange` an attributable success can age out and let the alert fire although the occurrence will settle — keep `completionRange` near one window's duration. And a claim whose backoff has elapsed and has been re-selected is in flight, counted by neither arm, so the alert is silent from re-selection until `readyTimeout` rolls the attempt back.
 
 ---
 
@@ -260,7 +261,7 @@ Start from what you **see**, confirm with the **signal**, then jump to the **fix
 | Candidates never clear across windows | `NodeRotationCandidatesNotDraining` alert | [§2](#2-tuning-throughput-and-tgp) — throughput too low |
 | `ThroughputBurstShortfall` warning every window | Warning Event on NodePool | [§2](#2-tuning-throughput-and-tgp) — window too short for the batch |
 | Drain hangs, no new completions | `noderotation_drain_stuck == 1` | [§5](#5-handling-a-stuck-drain) — PDB or finalizer |
-| `noderotation_in_progress` stuck at 1 | `NodeRotationStalledInWindow` | Surge not landing (→ §1) or drain stuck (→ §5) |
+| `noderotation_in_progress` stuck at 1 | `noderotation_drain_stuck == 1`; also `NodeRotationStalledInWindow` when the pool has other claims outstanding — an in-flight rotation is in neither `candidates` nor `in_backoff`, so it alone does not raise that alert | Surge not landing (→ §1) or drain stuck (→ §5) |
 | NodePool never rotates, candidates accumulate | `noderotation_policy_conflict == 1` | Fix the RotationPolicy selector overlap |
 | NodePool never rotates, no attempt is ever made | `StaticNodePool` Warning Event on the NodePool | The pool sets `spec.replicas` (static capacity), which surge cannot rotate. Karpenter forbids adding or removing `spec.replicas` on an existing NodePool, so migrate the workload to a dynamic NodePool or drop this one from the policy selector |
 | NodePool stopped rotating quietly | `noderotation_freeze_until_timestamp > 0` | Forgotten freeze — [§4](#4-the-freeze-workflow) |

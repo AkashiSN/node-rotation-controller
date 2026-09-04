@@ -46,27 +46,50 @@ spec:
               NodePool {{`{{ $labels.nodepool }}`}} has had eligible candidates
               for two consecutive windows without clearing them — rotation
               throughput may be too low (spec §4.2, R2). See docs/runbook.md.
-        # A pool's window is active with candidates or retries outstanding but
-        # nothing is completing for that pool: rotation is wedged inside the
-        # window (spec §4.2).
+        # A pool's window is active with candidates outstanding but nothing is
+        # completing for that pool: rotation is wedged inside the window
+        # (spec §4.2).
         # Correlated per NodePool, because maintenanceWindows is now per-policy and
         # noderotation_window_active carries a nodepool label (spec §5.4): each pool
         # is judged against its OWN candidates and completions, not a cluster-wide sum.
-        # The retry_count arm is load-bearing: a claim inside its escalated
+        # The in_backoff arm is load-bearing: a claim inside its escalated
         # retryBackoff is not eligible, so noderotation_candidates falls to 0
         # while the pool still has work outstanding (issue #303). Without it this
         # alert is silent through a window spent entirely on failed attempts.
+        # candidates + in_backoff is exactly decide.Outstanding, so this arm is the
+        # SAME outstanding-work test noderotation_window_missed_total applies at
+        # the close (#321). Only this arm matches; the suppression arm below is a
+        # rolling approximation of the counter's attribution rule, not a copy of
+        # it, so the two signals are not equivalent overall.
         # The outcome="success" selector on the suppression arm is load-bearing
         # for the same incident: noderotation_completed_total counts failure and
         # expired too, and a readyTimeout rollback records a failure — so an
         # unselected `unless` arm turns every failed attempt into "progress" and
         # suppresses the alert exactly when it is needed. The condition is "the
         # window is open, work is outstanding, and nothing is SUCCEEDING".
+        # The counter instead attributes a success by last-rotation-at >=
+        # window-opened-at, so completionRange diverges from it in both
+        # directions: a success just BEFORE this occurrence suppresses the alert
+        # though it cannot settle the occurrence, and in a window longer than
+        # completionRange an attributable success can age out of the lookback and
+        # let the alert fire though the occurrence will settle. Set
+        # completionRange to roughly one window's duration to keep both small.
+        # An in-flight retry raises neither arm: a claim whose backoff elapsed and
+        # was re-selected sits in the census InFlight bucket, so this alert is
+        # silent from re-selection until readyTimeout rolls the attempt back into
+        # in_backoff. That is a deliberate narrowing from the previous
+        # retry_count arm, which fired throughout (#321).
+        # The freeze arm declines what the operator declined: a freeze stops
+        # rotation on purpose, so a window spent under one was not lost, and
+        # WindowEdge settles it without counting. freeze_until_timestamp is 0 when
+        # no freeze is set and 0 > time() is false, so unfrozen pools are
+        # unaffected (issue #321).
         - alert: NodeRotationStalledInWindow
           expr: |-
             noderotation_window_active == 1
-            and on(nodepool) (noderotation_candidates > 0 or on(nodepool) noderotation_retry_count > 0)
+            and on(nodepool) (noderotation_candidates > 0 or on(nodepool) noderotation_in_backoff > 0)
             unless on(nodepool) (sum by(nodepool) (increase(noderotation_completed_total{outcome="success"}[{{ .Values.prometheusRule.stalledInWindow.completionRange }}])) > 0)
+            unless on(nodepool) (noderotation_freeze_until_timestamp > time())
           for: {{ .Values.prometheusRule.stalledInWindow.for }}
           labels:
             severity: {{ .Values.prometheusRule.stalledInWindow.severity }}
@@ -74,8 +97,9 @@ spec:
             summary: node-rotation-controller window active with no successful completions
             description: >-
               NodePool {{`{{ $labels.nodepool }}`}} has its maintenance window active
-              with candidates or retries outstanding but zero SUCCESSFUL completions
-              for {{ .Values.prometheusRule.stalledInWindow.for }} — rotation appears
+              and unfrozen, with NodeClaims eligible or waiting out a retryBackoff,
+              but zero SUCCESSFUL completions for
+              {{ .Values.prometheusRule.stalledInWindow.for }} — rotation appears
               wedged (spec §4.2). See docs/runbook.md.
         # The in-flight drain has exceeded tGP + buffer: a blocking PDB or a
         # stuck finalizer is holding it (spec §5.2). The serial gate is held on

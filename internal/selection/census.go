@@ -29,11 +29,31 @@ type Census struct {
 	InBackoff int
 	// NotTriggered: healthy and selectable, but its age has not crossed the trigger.
 	NotTriggered int
+
+	// InBackoffTriggered is the subset of InBackoff whose age HAS crossed the
+	// trigger — the claims that would be eligible the moment their backoff
+	// elapses. It is not a bucket: it overlaps InBackoff and is excluded from the
+	// partition above.
+	//
+	// The partition files a claim under its FIRST disqualifier, and state is
+	// checked before age, so InBackoff also holds claims that would fall to
+	// NotTriggered if the backoff were lifted — reachable when a RotationPolicy
+	// edit raises ageThresholdOverride or SHORTENS the lead time (the trigger is
+	// age > expireAfter - leadTime, so a wider lead time triggers earlier, not
+	// later), or when a claim's own expireAfter is extended, after its attempt
+	// failed. That is the right answer
+	// for the issue-#221 log line, which reports what is blocking the claim now,
+	// but the wrong one for "what did this window leave undone": a claim whose age
+	// is no longer due was owed nothing. decide.Outstanding therefore counts this
+	// field, not InBackoff (issue #321 review).
+	InBackoffTriggered int
 }
 
 // TakeCensus classifies every claim into exactly one Census bucket, applying the
 // eligibility checks in the same order as eligible() so the reported reason is
-// the one that actually rejected the claim.
+// the one that actually rejected the claim. It also fills the non-bucket
+// InBackoffTriggered tally, which re-reads the age trigger for the claims it
+// filed under InBackoff.
 func TakeCensus(claims []Claim, in Inputs) Census {
 	c := Census{Total: len(claims)}
 	for i := range claims {
@@ -51,6 +71,9 @@ func TakeCensus(claims []Claim, in Inputs) Census {
 				c.Terminal++
 			case annotations.StateFailed:
 				c.InBackoff++
+				if triggered(cl, in) {
+					c.InBackoffTriggered++
+				}
 			default: // pending, draining, or any future in-flight state
 				c.InFlight++
 			}

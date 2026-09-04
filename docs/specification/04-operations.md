@@ -31,6 +31,7 @@ Exposed on `/metrics`:
 | Metric | Type | Labels |
 |--------|------|--------|
 | `noderotation_candidates` | Gauge | `nodepool` |
+| `noderotation_in_backoff` | Gauge | `nodepool` |
 | `noderotation_in_progress` | Gauge | `nodepool` |
 | `noderotation_completed_total` | Counter | `nodepool`, `outcome` |
 | `noderotation_forceful_fallback_total` | Counter | `nodepool` |
@@ -52,10 +53,11 @@ Exposed on `/metrics`:
 ::: details Metric details — click to expand
 
 - **`noderotation_candidates`:** eligible NodeClaim count per pool
+- **`noderotation_in_backoff`:** NodeClaims **past the age trigger** that are held out of the candidate count *only* because a failed attempt put them inside their escalated `retryBackoff`. The age qualifier is load-bearing: a claim that failed while it was due and whose age stopped being due afterwards — a raised `ageThresholdOverride`, a *shortened* lead time (the trigger is `age > expireAfter − leadTime`, so a wider lead time triggers earlier), an extended `expireAfter` — is still blocked by its backoff but is owed nothing, and neither this gauge nor `window_missed_total` counts it. `candidates + in_backoff` is exactly the outstanding-by-age-and-state count `window_missed_total` judges a closed occurrence by, so an in-window alert can apply that same test live (§5.2)
 - **`noderotation_in_progress`:** active rotation count per pool
 - **`noderotation_completed_total`:** cumulative completions; `outcome` ∈ {`success`, `failure`, `expired`}. `expired` = force-expired before graceful rotation completed (emitted once, never counted as success)
 - **`noderotation_forceful_fallback_total`:** surge-less forceful-fallback rotations initiated (§3.6); incremented at start, not completion
-- **`noderotation_window_missed_total`:** maintenance window occurrences that closed with candidates outstanding by age and state (eligible or inside `retryBackoff`) and no rotation attributable to the occurrence ever completing (§5.2). A window gates only rotation *starts*, so an attempt that began inside the occurrence and succeeded after the boundary is attributable to it and settles it. "Outstanding" is not "the controller could have rotated": the evaluation runs above the pool-level gates on purpose (§5.2), so a static or fatally infeasible pool reports every occurrence that closes with age/state-outstanding claims. Incremented **at most** once per occurrence, by the pass that clears the `window-opened-at` stamp — the clear lands before the emission, so a stop in between drops the signal rather than inventing one
+- **`noderotation_window_missed_total`:** maintenance window occurrences that closed with candidates outstanding by age and state (eligible, or past the age trigger and inside `retryBackoff`) and no rotation attributable to the occurrence ever completing (§5.2). A window gates only rotation *starts*, so an attempt that began inside the occurrence and succeeded after the boundary is attributable to it and settles it. "Outstanding" is not "the controller could have rotated": the evaluation runs above the pool-level gates on purpose (§5.2), so a static or fatally infeasible pool reports every occurrence that closes with age/state-outstanding claims. Incremented **at most** once per occurrence, by the pass that clears the `window-opened-at` stamp — the clear lands before the emission, so a stop in between drops the signal rather than inventing one
 - **`noderotation_duration_seconds`:** per-phase; `phase` ∈ {`surge_wait`, `drain`}. `surge_wait` = `started-at → surge_ready`; `drain` = `draining-at → old-NodeClaim finalization`. Observed at most once per successful transition (no double-count on retried writes; dropped sample preferred over phantom sample)
 - **`noderotation_window_active`:** 0/1 window membership indicator
 - **`noderotation_policy_conflict`:** 0/1 blocked by selector tie or invalid policy (§5.4)
@@ -122,7 +124,7 @@ Every state transition emits one `INFO` log line (after the durable annotation w
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
 | `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `total` |
-| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoff` |
+| `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoffTriggered` |
 
 - **Level-triggered lines** (`no rotation candidate`, `surge placeholder is not schedulable`) use transition dedup — re-fire only when reason/census/message changes
 - **Debug verbosity** (`V(1)`) adds un-deduplicated per-pass findings and a heartbeat
@@ -135,13 +137,19 @@ Every state transition emits one `INFO` log line (after the durable annotation w
 | Failure/expired | `increase(noderotation_completed_total{outcome=~"failure|expired"}[1h]) > 0` |
 | Falling behind | `noderotation_candidates > 0` for two consecutive windows |
 | Window lost | `increase(noderotation_window_missed_total[24h]) > 0` |
-| Window wedged (in-window) | `window_active == 1`, zero **successful** completions, and `noderotation_candidates > 0 or noderotation_retry_count > 0` |
+| Window wedged (in-window) | `window_active == 1`, not frozen, zero **successful** completions, and `noderotation_candidates > 0 or noderotation_in_backoff > 0` |
 | Drain stuck | `noderotation_drain_stuck == 1` |
 | Short lead | `noderotation_short_lead_nodes > 0` |
 | Systematic failure | `noderotation_retry_count >= 3` |
 | Forceful fallback | `increase(noderotation_forceful_fallback_total[1h]) > 0` (severity: info) |
 
-The `retry_count` arm of the in-window condition is load-bearing: a NodeClaim inside its escalated `retryBackoff` is not eligible, so `noderotation_candidates` falls to `0` while the pool still has work outstanding. A condition resting on `candidates` alone is silent through a window spent entirely on failed attempts — which is the case `window_missed_total` was added to report.
+The `in_backoff` arm of the in-window condition is load-bearing: a NodeClaim inside its escalated `retryBackoff` is not eligible, so `noderotation_candidates` falls to `0` while the pool still has work outstanding. A condition resting on `candidates` alone is silent through a window spent entirely on failed attempts — which is the case `window_missed_total` was added to report.
+
+The arm is `in_backoff` rather than `retry_count` so this half of the condition is *the same test* the window-close evaluation applies. `candidates + in_backoff` is exactly its outstanding count, whereas `retry_count` is the highest retry across *all* of a pool's NodeClaims regardless of which bucket each falls in — it stays elevated for a claim the counter deliberately excludes, such as one whose Node now carries an operator-set `karpenter.sh/do-not-disrupt`, or one that is deleting or already expired. The freeze exclusion extends the agreement: a freeze is the operator instructing the pool to stop rotating, so a window that closes under one was declined rather than lost and the counter does not record it (§5.2); the in-window condition declines it on the same grounds.
+
+The two signals are **not** equivalent beyond that arm, and the alert is not a predictor of the counter. The completions arm is a rolling `completionRange` lookback, while the counter attributes a success by `last-rotation-at ≥ window-opened-at`, so they diverge in both directions: a success shortly *before* an occurrence suppresses the alert although it cannot settle that occurrence, and in a window longer than `completionRange` an attributable success can age out of the lookback and let the alert fire although the occurrence will settle. Set `completionRange` to roughly one window's duration to keep both cases small.
+
+One case is deliberately not alerted: a claim whose backoff has elapsed and which has been re-selected is `InFlight`, counted in neither arm, so the condition is silent from re-selection until `readyTimeout` rolls the attempt back into `retryBackoff`. The previous `retry_count` arm fired throughout that interval. The narrowing is accepted — a rotation that is actually running is not a wedged window — and the eventual signals are the failure alert and, if the occurrence closes with the claim still outstanding, `window_missed_total`.
 
 Restricting the completions arm to `outcome="success"` is load-bearing for the same incident, and in the same direction. `noderotation_completed_total` counts `failure` and `expired` as well, and a `readyTimeout` rollback records a failure — so a condition that treats *any* completion as progress lets each failed attempt suppress it, and goes silent exactly through the window spent entirely on failed attempts. The condition to state is "the window is open, work is outstanding, and nothing is succeeding".
 

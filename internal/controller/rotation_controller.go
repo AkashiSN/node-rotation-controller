@@ -752,8 +752,15 @@ func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now ti
 	rec := r.recorder()
 	rec.ObserveWindow(pool.Name, res.sched.InWindow(now))
 
+	// One classification pass supplies both eligibility gauges. census.Eligible is
+	// exactly what CountEligible returns — TakeCensus applies the same checks in
+	// the same order, and selection.TestTakeCensusEligibleMatchesCountEligible
+	// guards it — so the candidates gauge is unchanged and the second traversal
+	// this used to make is gone.
+	census := selection.TakeCensus(views, r.selInputs(res, now, excluded))
 	o := PoolObservation{
-		Candidates:      selection.CountEligible(views, r.selInputs(res, now, excluded)),
+		Candidates:      census.Eligible,
+		InBackoff:       census.InBackoffTriggered,
 		ShortLeadNodes:  selection.CountShortLead(views, res.leadTime),
 		RetryCount:      highestRetry(claims),
 		DrainStuck:      r.drainStuck(pool, claims, res, now),

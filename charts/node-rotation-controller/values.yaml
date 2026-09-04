@@ -119,9 +119,12 @@ prometheusRule:
     windowRange: 8d
     for: 0m
     severity: warning
-  # The maintenance window is active with candidates but zero completions — the
-  # in-window rotation appears wedged. `completionRange` should cover roughly a
-  # full window's duration (spec §4.2).
+  # The maintenance window is active with candidates outstanding — eligible or
+  # waiting out a retryBackoff — but zero successful completions: the in-window
+  # rotation appears wedged. A frozen pool is excluded, matching the lost-window
+  # counter, which treats a window spent under a freeze as declined rather than
+  # lost. `completionRange` should cover roughly a full window's duration
+  # (spec §4.2).
   stalledInWindow:
     completionRange: 4h
     for: 30m
