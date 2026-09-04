@@ -31,6 +31,7 @@ Exposed on `/metrics`:
 | Metric | Type | Labels |
 |--------|------|--------|
 | `noderotation_candidates` | Gauge | `nodepool` |
+| `noderotation_in_backoff` | Gauge | `nodepool` |
 | `noderotation_in_progress` | Gauge | `nodepool` |
 | `noderotation_completed_total` | Counter | `nodepool`, `outcome` |
 | `noderotation_forceful_fallback_total` | Counter | `nodepool` |
@@ -52,6 +53,7 @@ Exposed on `/metrics`:
 ::: details Metric details — click to expand
 
 - **`noderotation_candidates`:** eligible NodeClaim count per pool
+- **`noderotation_in_backoff`:** NodeClaims held out of the candidate count *only* because a failed attempt put them inside their escalated `retryBackoff`. `candidates + in_backoff` is the same outstanding-by-age-and-state count `window_missed_total` judges a closed occurrence by, so an in-window alert can name that condition live instead of approximating it (§5.2)
 - **`noderotation_in_progress`:** active rotation count per pool
 - **`noderotation_completed_total`:** cumulative completions; `outcome` ∈ {`success`, `failure`, `expired`}. `expired` = force-expired before graceful rotation completed (emitted once, never counted as success)
 - **`noderotation_forceful_fallback_total`:** surge-less forceful-fallback rotations initiated (§3.6); incremented at start, not completion
@@ -135,13 +137,17 @@ Every state transition emits one `INFO` log line (after the durable annotation w
 | Failure/expired | `increase(noderotation_completed_total{outcome=~"failure|expired"}[1h]) > 0` |
 | Falling behind | `noderotation_candidates > 0` for two consecutive windows |
 | Window lost | `increase(noderotation_window_missed_total[24h]) > 0` |
-| Window wedged (in-window) | `window_active == 1`, zero **successful** completions, and `noderotation_candidates > 0 or noderotation_retry_count > 0` |
+| Window wedged (in-window) | `window_active == 1`, not frozen, zero **successful** completions, and `noderotation_candidates > 0 or noderotation_in_backoff > 0` |
 | Drain stuck | `noderotation_drain_stuck == 1` |
 | Short lead | `noderotation_short_lead_nodes > 0` |
 | Systematic failure | `noderotation_retry_count >= 3` |
 | Forceful fallback | `increase(noderotation_forceful_fallback_total[1h]) > 0` (severity: info) |
 
-The `retry_count` arm of the in-window condition is load-bearing: a NodeClaim inside its escalated `retryBackoff` is not eligible, so `noderotation_candidates` falls to `0` while the pool still has work outstanding. A condition resting on `candidates` alone is silent through a window spent entirely on failed attempts — which is the case `window_missed_total` was added to report.
+The `in_backoff` arm of the in-window condition is load-bearing: a NodeClaim inside its escalated `retryBackoff` is not eligible, so `noderotation_candidates` falls to `0` while the pool still has work outstanding. A condition resting on `candidates` alone is silent through a window spent entirely on failed attempts — which is the case `window_missed_total` was added to report.
+
+The arm is `in_backoff` rather than `retry_count` so the two conditions state the same thing. `candidates + in_backoff` is exactly the outstanding count of the window-close evaluation, whereas `retry_count` is the highest retry across *all* of a pool's NodeClaims regardless of which bucket each falls in — it stays elevated for a claim the counter deliberately excludes, such as one whose Node now carries an operator-set `karpenter.sh/do-not-disrupt`, or one that is deleting or already expired.
+
+The freeze exclusion completes that agreement. A freeze is the operator instructing the pool to stop rotating, so a window that closes under one was declined rather than lost and the counter does not record it (§5.2); the in-window condition declines it on the same grounds.
 
 Restricting the completions arm to `outcome="success"` is load-bearing for the same incident, and in the same direction. `noderotation_completed_total` counts `failure` and `expired` as well, and a `readyTimeout` rollback records a failure — so a condition that treats *any* completion as progress lets each failed attempt suppress it, and goes silent exactly through the window spent entirely on failed attempts. The condition to state is "the window is open, work is outstanding, and nothing is succeeding".
 

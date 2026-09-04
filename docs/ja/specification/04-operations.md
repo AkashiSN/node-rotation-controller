@@ -31,6 +31,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 | メトリクス | タイプ | ラベル |
 |--------|------|--------|
 | `noderotation_candidates` | Gauge | `nodepool` |
+| `noderotation_in_backoff` | Gauge | `nodepool` |
 | `noderotation_in_progress` | Gauge | `nodepool` |
 | `noderotation_completed_total` | Counter | `nodepool`, `outcome` |
 | `noderotation_forceful_fallback_total` | Counter | `nodepool` |
@@ -52,6 +53,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 ::: details メトリクス詳細 — クリックで展開
 
 - **`noderotation_candidates`:** プールあたりの適格 NodeClaim 数
+- **`noderotation_in_backoff`:** 失敗した試行によってエスカレートした `retryBackoff` 中にある*という理由だけで*候補カウントから外れている NodeClaim 数。`candidates + in_backoff` は `window_missed_total` が閉じた occurrence を判定する「年齢と状態による未処理」カウントと同一であり、これにより in-window のアラートが近似ではなくその条件そのものをライブに表明できる（§5.2）
 - **`noderotation_in_progress`:** プールあたりのアクティブローテーション数
 - **`noderotation_completed_total`:** 累積完了数; `outcome` ∈ {`success`, `failure`, `expired`}。`expired` = graceful ローテーション完了前に force-expire（1回のみ発行、success としてカウントしない）
 - **`noderotation_forceful_fallback_total`:** surge なし forceful fallback ローテーション開始数（§3.6）; 開始時にインクリメント
@@ -135,13 +137,17 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | 失敗/expired | `increase(noderotation_completed_total{outcome=~"failure|expired"}[1h]) > 0` |
 | 追いつけない | `noderotation_candidates > 0` が 2 回連続ウィンドウ |
 | ウィンドウ喪失 | `increase(noderotation_window_missed_total[24h]) > 0` |
-| ウィンドウ詰まり（in-window） | `window_active == 1`、**成功**完了ゼロ、かつ `noderotation_candidates > 0 or noderotation_retry_count > 0` |
+| ウィンドウ詰まり（in-window） | `window_active == 1`、freeze 中でない、**成功**完了ゼロ、かつ `noderotation_candidates > 0 or noderotation_in_backoff > 0` |
 | ドレイン停滞 | `noderotation_drain_stuck == 1` |
 | Short lead | `noderotation_short_lead_nodes > 0` |
 | 体系的失敗 | `noderotation_retry_count >= 3` |
 | Forceful fallback | `increase(noderotation_forceful_fallback_total[1h]) > 0`（severity: info） |
 
-in-window 条件の `retry_count` 側はロードベアリングである: エスカレートした `retryBackoff` 中の NodeClaim は eligible ではないため、プールに未処理の作業が残っていても `noderotation_candidates` は `0` に落ちる。`candidates` だけに依存する条件は、ウィンドウ全体が失敗した試行だけで費やされた場合に沈黙する — これはまさに `window_missed_total` が報告するために追加されたケースである。
+in-window 条件の `in_backoff` 側はロードベアリングである: エスカレートした `retryBackoff` 中の NodeClaim は eligible ではないため、プールに未処理の作業が残っていても `noderotation_candidates` は `0` に落ちる。`candidates` だけに依存する条件は、ウィンドウ全体が失敗した試行だけで費やされた場合に沈黙する — これはまさに `window_missed_total` が報告するために追加されたケースである。
+
+このアームが `retry_count` ではなく `in_backoff` であるのは、2 つの条件に同じことを表明させるためである。`candidates + in_backoff` はウィンドウ閉鎖時の評価が用いる未処理カウントそのものだが、`retry_count` はバケットに関係なくプールの*すべての* NodeClaim にわたる最大リトライ回数であり、カウンタが意図的に除外する claim — Node に運用者が `karpenter.sh/do-not-disrupt` を付与したもの、削除中のもの、既に期限切れのもの — でも高いまま残る。
+
+freeze の除外はその一致を完成させる。freeze は運用者がプールにローテーション停止を指示するものなので、freeze 下で閉じたウィンドウは喪失ではなく辞退であり、カウンタはそれを記録しない（§5.2）。in-window 条件も同じ根拠でそれを辞退する。
 
 完了側を `outcome="success"` に限定することも、同じインシデントに対して同じ向きにロードベアリングである。`noderotation_completed_total` は `failure` と `expired` も数え、`readyTimeout` のロールバックは failure を記録する。したがって*あらゆる*完了を進捗とみなす条件では、失敗した試行 1 件ごとにアラートが抑止され、ウィンドウ全体が失敗した試行だけで費やされたときにちょうど沈黙する。表明すべき条件は「ウィンドウが開いていて、作業が残っていて、何も成功していない」である。
 
