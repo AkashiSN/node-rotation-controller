@@ -77,6 +77,13 @@ const (
 type PoolObservation struct {
 	// Candidates is the eligible NodeClaim count (noderotation_candidates).
 	Candidates int
+	// InBackoff is the count of claims held out of Candidates only because a
+	// failed attempt put them inside their escalated retryBackoff
+	// (noderotation_in_backoff). Candidates + InBackoff is decide.Outstanding,
+	// the same predicate the lost-window counter judges an occurrence by, so an
+	// in-window alert can name the condition window_missed_total reports at the
+	// close (issue #321).
+	InBackoff int
 	// InProgress is the active rotation count (noderotation_in_progress); 0 or 1
 	// in v1 (serial per NodePool).
 	InProgress int

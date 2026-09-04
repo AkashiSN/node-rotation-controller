@@ -409,3 +409,67 @@ func TestObserveSurgeWaitDuration(t *testing.T) {
 		t.Errorf("surge_wait duration: got %v, want 2m", got)
 	}
 }
+
+// TestObserveInBackoffCountsCensusBucketNotFailedClaims pins noderotation_in_backoff
+// to the census InBackoff bucket — the half of decide.Outstanding that
+// noderotation_candidates cannot see (issue #321).
+//
+// The two counts are deliberately unequal (2 candidates, 3 in backoff) so a swap
+// between the fields cannot pass, and the fixture carries the two failed claims
+// the gauge must NOT count — each of which noderotation_retry_count did count,
+// the exact divergence this gauge exists to close:
+//
+//   - nc-optout has failed and is inside its backoff, but its Node carries an
+//     operator-set karpenter.sh/do-not-disrupt, so the census files it under
+//     OptedOut. window_missed_total does not count it, and neither may this.
+//   - nc-past has failed too, but its backoff has elapsed, so it is Eligible
+//     again and belongs to Candidates. Counting it in both would double-count it
+//     in the Candidates + InBackoff sum the in-window alert reads.
+func TestObserveInBackoffCountsCensusBucketNotFailedClaims(t *testing.T) {
+	pool := withExpireAfter(withTGP(testNodePool(nil)))
+	optOutNode := "node-optout"
+	inBackoff := func(name, retries string) *karpv1.NodeClaim {
+		return testClaim(name, 20*24*time.Hour, ncAnn(
+			annotations.State, annotations.StateFailed,
+			annotations.FailedAt, rfc(testNow.Add(-1*time.Minute)),
+			annotations.RetryCount, retries))
+	}
+
+	cand := testClaim("nc-cand", 20*24*time.Hour, ncNode(candNode))
+	// Failed, but the backoff has elapsed: bucket Eligible, not InBackoff.
+	past := testClaim("nc-past", 20*24*time.Hour, ncAnn(
+		annotations.State, annotations.StateFailed,
+		annotations.FailedAt, rfc(testNow.Add(-24*time.Hour)),
+		annotations.RetryCount, "1"))
+	// Failed and inside its backoff, but opted out at the Node: bucket OptedOut.
+	optOut := testClaim("nc-optout", 20*24*time.Hour, ncNode(optOutNode), ncAnn(
+		annotations.State, annotations.StateFailed,
+		annotations.FailedAt, rfc(testNow.Add(-1*time.Minute)),
+		annotations.RetryCount, "9"))
+
+	rec := &fakeRecorder{}
+	r := newReconciler(t, testNow, rec,
+		pool, cand, past, optOut,
+		inBackoff("nc-b1", "1"), inBackoff("nc-b2", "2"), inBackoff("nc-b3", "3"),
+		testK8sNode(candNode, true, nil, false),
+		testK8sNode(optOutNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true"}, false),
+	)
+	step(t, r, pool)
+
+	o, ok := rec.obs[testPoolName]
+	if !ok {
+		t.Fatal("ObservePool not called for the pool")
+	}
+	if o.InBackoff != 3 {
+		t.Errorf("in-backoff: got %d, want 3 (nc-b1, nc-b2, nc-b3 only)", o.InBackoff)
+	}
+	if o.Candidates != 2 {
+		t.Errorf("candidates: got %d, want 2 (nc-cand, nc-past)", o.Candidates)
+	}
+	// The sum is what the in-window alert evaluates, and it must equal the
+	// decide.Outstanding the lost-window counter judges the same claims by —
+	// 5 here, with nc-optout excluded from both sides.
+	if got := o.Candidates + o.InBackoff; got != 5 {
+		t.Errorf("candidates + in-backoff = %d, want 5 (decide.Outstanding for this fixture)", got)
+	}
+}

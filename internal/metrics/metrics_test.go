@@ -69,6 +69,7 @@ func TestObservePoolSetsAllGauges(t *testing.T) {
 
 	rec.ObservePool("api", controller.PoolObservation{
 		Candidates:      3,
+		InBackoff:       5,
 		InProgress:      1,
 		ShortLeadNodes:  2,
 		RetryCount:      4,
@@ -89,6 +90,7 @@ func TestObservePoolSetsAllGauges(t *testing.T) {
 		want float64
 	}{
 		{"noderotation_candidates", 3},
+		{"noderotation_in_backoff", 5},
 		{"noderotation_in_progress", 1},
 		{"noderotation_short_lead_nodes", 2},
 		{"noderotation_retry_count", 4},
@@ -112,8 +114,8 @@ func TestObservePoolSetsAllGauges(t *testing.T) {
 func TestObservePoolResetsGauges(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	rec := metrics.New(reg)
-	rec.ObservePool("api", controller.PoolObservation{DrainStuck: true, RetryCount: 3})
-	rec.ObservePool("api", controller.PoolObservation{DrainStuck: false, RetryCount: 0})
+	rec.ObservePool("api", controller.PoolObservation{DrainStuck: true, RetryCount: 3, InBackoff: 2})
+	rec.ObservePool("api", controller.PoolObservation{DrainStuck: false, RetryCount: 0, InBackoff: 0})
 
 	pool := map[string]string{"nodepool": "api"}
 	if got := metricValue(t, reg, "noderotation_drain_stuck", pool); got != 0 {
@@ -124,6 +126,9 @@ func TestObservePoolResetsGauges(t *testing.T) {
 	}
 	if got := metricValue(t, reg, "noderotation_freeze_until_timestamp", pool); got != 0 {
 		t.Errorf("freeze_until not reset to 0 for an absent freeze: got %v", got)
+	}
+	if got := metricValue(t, reg, "noderotation_in_backoff", pool); got != 0 {
+		t.Errorf("in_backoff not reset: got %v", got)
 	}
 }
 
@@ -261,7 +266,7 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	rec := metrics.New(reg)
 
-	rec.ObservePool("api", controller.PoolObservation{Candidates: 3, DrainStuck: true, RetryCount: 2})
+	rec.ObservePool("api", controller.PoolObservation{Candidates: 3, InBackoff: 1, DrainStuck: true, RetryCount: 2})
 	rec.Success("api")
 	rec.ObserveDuration("api", controller.PhaseSurgeWait, time.Minute)
 	rec.ObserveWindow("api", true)
@@ -275,7 +280,7 @@ func TestForgetPoolClearsSeries(t *testing.T) {
 
 	api := map[string]string{"nodepool": "api"}
 	for _, name := range []string{
-		"noderotation_candidates", "noderotation_in_progress", "noderotation_drain_stuck",
+		"noderotation_candidates", "noderotation_in_backoff", "noderotation_in_progress", "noderotation_drain_stuck",
 		"noderotation_retry_count", "noderotation_short_lead_nodes", "noderotation_freeze_until_timestamp",
 		"noderotation_age_threshold_seconds", "noderotation_rotation_chances", "noderotation_window_period_seconds",
 		"noderotation_window_active", "noderotation_policy_conflict",

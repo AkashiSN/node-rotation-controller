@@ -26,6 +26,7 @@ type Recorder struct {
 	windowMissed     *prometheus.CounterVec
 	duration         *prometheus.HistogramVec
 	candidates       *prometheus.GaugeVec
+	inBackoff        *prometheus.GaugeVec
 	inProgress       *prometheus.GaugeVec
 	freezeUntil      *prometheus.GaugeVec
 	ageThreshold     *prometheus.GaugeVec
@@ -71,6 +72,10 @@ func New(reg prometheus.Registerer) *Recorder {
 		candidates: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "noderotation_candidates",
 			Help: "Eligible NodeClaim count.",
+		}, poolLabel),
+		inBackoff: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "noderotation_in_backoff",
+			Help: "NodeClaims excluded from the candidate count only because a failed attempt put them inside their escalated retryBackoff (spec §4.2).",
 		}, poolLabel),
 		inProgress: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "noderotation_in_progress",
@@ -126,7 +131,7 @@ func New(reg prometheus.Registerer) *Recorder {
 		}, poolLabel),
 	}
 	reg.MustRegister(
-		r.completed, r.forcefulFallback, r.windowMissed, r.duration, r.candidates, r.inProgress, r.freezeUntil,
+		r.completed, r.forcefulFallback, r.windowMissed, r.duration, r.candidates, r.inBackoff, r.inProgress, r.freezeUntil,
 		r.ageThreshold, r.rotationChances, r.windowPeriod, r.shortLead,
 		r.drainStuck, r.retryCount, r.policyConflict, r.windowActive,
 		r.throughputCapacity, r.tRotEstimate, r.tRotBound,
@@ -175,6 +180,7 @@ func (r *Recorder) ObserveDuration(nodePool, phase string, d time.Duration) {
 
 func (r *Recorder) ObservePool(nodePool string, o controller.PoolObservation) {
 	r.candidates.WithLabelValues(nodePool).Set(float64(o.Candidates))
+	r.inBackoff.WithLabelValues(nodePool).Set(float64(o.InBackoff))
 	r.inProgress.WithLabelValues(nodePool).Set(float64(o.InProgress))
 	r.shortLead.WithLabelValues(nodePool).Set(float64(o.ShortLeadNodes))
 	r.retryCount.WithLabelValues(nodePool).Set(float64(o.RetryCount))
@@ -199,7 +205,7 @@ func (r *Recorder) ObservePool(nodePool string, o controller.PoolObservation) {
 // since-deleted drain_stuck=1 would alert indefinitely.
 func (r *Recorder) ForgetPool(nodePool string) {
 	for _, g := range []*prometheus.GaugeVec{
-		r.candidates, r.inProgress, r.freezeUntil, r.ageThreshold, r.rotationChances,
+		r.candidates, r.inBackoff, r.inProgress, r.freezeUntil, r.ageThreshold, r.rotationChances,
 		r.windowPeriod, r.shortLead, r.drainStuck, r.retryCount, r.policyConflict, r.windowActive,
 		r.throughputCapacity, r.tRotEstimate, r.tRotBound,
 	} {
