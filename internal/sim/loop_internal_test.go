@@ -4,7 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 	"github.com/AkashiSN/node-rotation-controller/internal/policy"
+	"github.com/AkashiSN/node-rotation-controller/internal/selection"
 	"github.com/AkashiSN/node-rotation-controller/internal/window"
 )
 
@@ -31,16 +33,30 @@ func newRunnerForBoundsTest(t *testing.T) *run {
 }
 
 // The simulator drives the same selection predicate as the controller, so it must
-// supply the same occurrence bounds. Without them a failed node's retry is not
-// clamped and the simulated cadence diverges from the real one (issue #320).
+// supply the same occurrence bounds when a claim view is failed — the only state
+// that reads them (issue #320). sim itself never produces a failed node (nothing
+// in sim fails today, see sim.go), so the fixture supplies one directly to reach
+// the guarded path.
 func TestSimSuppliesOccurrenceBoundsToSelection(t *testing.T) {
 	r := newRunnerForBoundsTest(t) // 05:00-06:30 UTC window, retryBackoff 30m
 	now := time.Date(2026, 9, 4, 5, 30, 0, 0, time.UTC)
-	in := r.selectionInputs(now)
+	views := []selection.Claim{{Annotations: map[string]string{annotations.State: annotations.StateFailed}}}
+	in := r.selectionInputs(now, views)
 	if in.WindowStart.IsZero() || in.WindowEnd.IsZero() {
 		t.Fatalf("the simulator must carry the occurrence bounds; got [%v, %v)", in.WindowStart, in.WindowEnd)
 	}
 	if want := time.Date(2026, 9, 4, 6, 30, 0, 0, time.UTC); !in.WindowEnd.Equal(want) {
 		t.Errorf("WindowEnd: got %s, want %s", in.WindowEnd, want)
+	}
+}
+
+// Without a failed claim in view the bounds must stay zero: nothing would
+// consume them, so resolving them would be pure cost for no observable effect.
+func TestSimSkipsOccurrenceBoundsWithoutAFailedClaim(t *testing.T) {
+	r := newRunnerForBoundsTest(t)
+	now := time.Date(2026, 9, 4, 5, 30, 0, 0, time.UTC)
+	in := r.selectionInputs(now, nil)
+	if !in.WindowStart.IsZero() || !in.WindowEnd.IsZero() {
+		t.Errorf("bounds must stay zero with no failed claim; got [%v, %v)", in.WindowStart, in.WindowEnd)
 	}
 }

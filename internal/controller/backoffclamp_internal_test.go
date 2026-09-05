@@ -51,7 +51,7 @@ func TestSelInputsClampsARetryThatWouldOutliveTheWindow(t *testing.T) {
 	r := newReconciler(t, now, nil, pool, failed)
 	sched := mustScheduleFor(t, clampPolicy())
 	res := r.resolve(pool, clampPolicy(), sched)
-	in := r.selInputs(res, now, nil)
+	in := r.selInputs(res, now, nil, hasFailedClaim(viewsFor(t, r, pool)))
 
 	if in.WindowStart.IsZero() || in.WindowEnd.IsZero() {
 		t.Fatalf("selInputs must carry the occurrence bounds; got [%v, %v)", in.WindowStart, in.WindowEnd)
@@ -105,7 +105,7 @@ func TestSelInputsDoesNotClampOutOfWindow(t *testing.T) {
 	r := newReconciler(t, now, nil, pool, failed)
 	sched := mustScheduleFor(t, clampPolicy())
 	res := r.resolve(pool, clampPolicy(), sched)
-	in := r.selInputs(res, now, nil)
+	in := r.selInputs(res, now, nil, hasFailedClaim(viewsFor(t, r, pool)))
 
 	if !in.WindowStart.IsZero() || !in.WindowEnd.IsZero() {
 		t.Errorf("out of window the bounds must be zero; got [%v, %v)", in.WindowStart, in.WindowEnd)
@@ -121,13 +121,23 @@ func TestSelInputsDoesNotClampOutOfWindow(t *testing.T) {
 // reason -- not because the clamp fired. The guard is pinned in
 // selection.TestEffectiveBackoff; this test pins that the controller passes the
 // bounds that make the guard reachable.
+//
+// The pool needs a failed claim in view: selInputs resolves the occurrence bounds
+// only when one exists (issue #320 review), since they are consumed solely by the
+// failed-claim predicate. Without it the bounds would be zero for that reason
+// alone, and the assertion below would pass without exercising the "today's
+// occurrence, not the failure's" behaviour it names.
 func TestSelInputsBoundsBelongToTheCurrentOccurrence(t *testing.T) {
 	now := time.Date(2026, 9, 5, 5, 10, 0, 0, time.UTC)
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
-	r := newReconciler(t, now, nil, pool)
+	failed := testClaim("nc-failed", 20*24*time.Hour, ncAnn(
+		annotations.State, annotations.StateFailed,
+		annotations.FailedAt, rfc(time.Date(2026, 9, 4, 5, 40, 0, 0, time.UTC)),
+		annotations.RetryCount, "4"))
+	r := newReconciler(t, now, nil, pool, failed)
 	sched := mustScheduleFor(t, clampPolicy())
 	res := r.resolve(pool, clampPolicy(), sched)
-	in := r.selInputs(res, now, nil)
+	in := r.selInputs(res, now, nil, hasFailedClaim(viewsFor(t, r, pool)))
 
 	wantStart := time.Date(2026, 9, 5, 5, 0, 0, 0, time.UTC)
 	if !in.WindowStart.Equal(wantStart) {
@@ -147,16 +157,25 @@ func mustScheduleFor(t *testing.T, p *policy.Policy) *window.Schedule {
 	return s
 }
 
-// countEligibleClaims lists the pool's claims and counts those the selection
-// predicate accepts, going through the same selInputs the reconcile loop uses.
-func countEligibleClaims(t *testing.T, r *RotationReconciler, pool *karpv1.NodePool, res resolved, now time.Time) int {
+// viewsFor lists the pool's claims and adapts them to the pure Claim view — the
+// same pipeline selInputs' production callers use to compute the anyFailed signal
+// (issue #320 review).
+func viewsFor(t *testing.T, r *RotationReconciler, pool *karpv1.NodePool) []selection.Claim {
 	t.Helper()
 	claims, err := r.poolClaims(context.Background(), pool)
 	if err != nil {
 		t.Fatalf("poolClaims: %v", err)
 	}
 	views, _ := adapt.Claims(claims)
-	return selection.CountEligible(views, r.selInputs(res, now, nil))
+	return views
+}
+
+// countEligibleClaims lists the pool's claims and counts those the selection
+// predicate accepts, going through the same selInputs the reconcile loop uses.
+func countEligibleClaims(t *testing.T, r *RotationReconciler, pool *karpv1.NodePool, res resolved, now time.Time) int {
+	t.Helper()
+	views := viewsFor(t, r, pool)
+	return selection.CountEligible(views, r.selInputs(res, now, nil, hasFailedClaim(views)))
 }
 
 // getClaim fetches a NodeClaim by name, failing the test if it is not found.
@@ -293,15 +312,15 @@ func runWindow(t *testing.T, pol *policy.Policy, claimCount int, from, to time.T
 		if open, _ := decide.StartGate(r.gateInputs(pool, res, now)); !open {
 			continue
 		}
-		in := r.selInputs(res, now, nil)
-		if !clamped {
-			in.WindowStart, in.WindowEnd = time.Time{}, time.Time{}
-		}
 		claims, err := r.poolClaims(context.Background(), pool)
 		if err != nil {
 			t.Fatalf("poolClaims: %v", err)
 		}
 		views, _ := adapt.Claims(claims)
+		in := r.selInputs(res, now, nil, hasFailedClaim(views))
+		if !clamped {
+			in.WindowStart, in.WindowEnd = time.Time{}, time.Time{}
+		}
 		pick := selection.PickEarliestDeadlineEligible(views, in)
 		if pick == nil {
 			continue

@@ -422,7 +422,17 @@ func poolTGP(pool *karpv1.NodePool) (time.Duration, bool) {
 // bounds are resolved here rather than inside selection, which must stay free of
 // internal/window for the wasm simulator (issue #320); zero bounds mean "no
 // occurrence", which EffectiveBackoff reads as "no clamp".
-func (r *RotationReconciler) selInputs(res resolved, now time.Time, excluded map[string]bool) selection.Inputs {
+//
+// The bounds are resolved only when anyFailed is true. WindowStart/WindowEnd are
+// read by exactly one predicate, selection.failedPastBackoff, reachable only for a
+// claim already in the noderotation.io/state=failed state (stateAllows) — every
+// other caller of the Inputs this builds never looks at them. OccurrenceBounds
+// runs window's zone-and-transition-aligned audit on every call, which is wasted
+// work when nothing failed is in view (issue #320; the same guard in
+// internal/sim/loop.go measured 10x-406x wall-clock savings on the wasm
+// simulator). A future consumer of these bounds that is not gated on the failed
+// state must remove this guard, or it will silently be handed zero bounds.
+func (r *RotationReconciler) selInputs(res resolved, now time.Time, excluded map[string]bool, anyFailed bool) selection.Inputs {
 	in := selection.Inputs{
 		Now:          now,
 		LeadTime:     res.leadTime,
@@ -430,10 +440,24 @@ func (r *RotationReconciler) selInputs(res resolved, now time.Time, excluded map
 		RetryBackoff: res.retryBackoff,
 		Excluded:     excluded,
 	}
-	if start, end, ok := res.sched.OccurrenceBounds(now); ok {
-		in.WindowStart, in.WindowEnd = start, end
+	if anyFailed {
+		if start, end, ok := res.sched.OccurrenceBounds(now); ok {
+			in.WindowStart, in.WindowEnd = start, end
+		}
 	}
 	return in
+}
+
+// hasFailedClaim reports whether any claim view carries the failed state — the
+// only condition under which selInputs' occurrence bounds are consumed (see
+// selInputs for what this assumes).
+func hasFailedClaim(views []selection.Claim) bool {
+	for i := range views {
+		if views[i].Annotations[annotations.State] == annotations.StateFailed {
+			return true
+		}
+	}
+	return false
 }
 
 // effectiveBackoff resolves the window-clamped re-selection backoff the selection
@@ -442,7 +466,10 @@ func (r *RotationReconciler) selInputs(res resolved, now time.Time, excluded map
 // anchored retry acts on, and the instant the predicate reopens the claim cannot
 // disagree (issue #320).
 func (r *RotationReconciler) effectiveBackoff(res resolved, now, failedAt time.Time, retry int) time.Duration {
-	start, end, _ := res.sched.OccurrenceBounds(now)
+	var start, end time.Time
+	if s, e, ok := res.sched.OccurrenceBounds(now); ok {
+		start, end = s, e
+	}
 	return selection.EffectiveBackoff(retry, res.retryBackoff, failedAt, start, end)
 }
 
@@ -517,7 +544,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// a human-readable aid, not a substitute for them.
 	log.V(1).Info("reconcile",
 		"phase", reconcilePhase(pool),
-		"candidates", selection.CountEligible(views, r.selInputs(res, now, excluded)),
+		"candidates", selection.CountEligible(views, r.selInputs(res, now, excluded, hasFailedClaim(views))),
 		"claims", len(claims),
 		"inWindow", sched.InWindow(now),
 		"findings", len(derived.Findings))
@@ -585,7 +612,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	}
 
 	// ── 3. Pick the candidate, gate on its headroom, then anchor.
-	sel := r.selInputs(res, now, excluded)
+	sel := r.selInputs(res, now, excluded, hasFailedClaim(views))
 	pick := selection.PickEarliestDeadlineEligible(views, sel)
 	if pick == nil {
 		// The candidates gauge reports that the count is zero; only the census says
@@ -689,7 +716,7 @@ func (r *RotationReconciler) evaluateWindowEdge(
 		Now:         now,
 		InWindow:    inWindow,
 		Annotations: pool.Annotations,
-		Census:      selection.TakeCensus(views, r.selInputs(res, now, excluded)),
+		Census:      selection.TakeCensus(views, r.selInputs(res, now, excluded, hasFailedClaim(views))),
 	}
 	action := decide.WindowEdge(in)
 	opened := pool.Annotations[annotations.WindowOpenedAt]
@@ -775,7 +802,7 @@ func (r *RotationReconciler) observe(pool *karpv1.NodePool, res resolved, now ti
 	// the same order, and selection.TestTakeCensusEligibleMatchesCountEligible
 	// guards it — so the candidates gauge is unchanged and the second traversal
 	// this used to make is gone.
-	census := selection.TakeCensus(views, r.selInputs(res, now, excluded))
+	census := selection.TakeCensus(views, r.selInputs(res, now, excluded, hasFailedClaim(views)))
 	o := PoolObservation{
 		Candidates:      census.Eligible,
 		InBackoff:       census.InBackoffTriggered,
@@ -1814,13 +1841,14 @@ func (r *RotationReconciler) excludedHostnames(ctx context.Context, pool *karpv1
 	if err != nil {
 		return nil, err
 	}
-	sel := r.selInputs(res, r.now(), nil)
+	views, _ := adapt.Claims(claims)
+	sel := r.selInputs(res, r.now(), nil, hasFailedClaim(views))
 	for i := range claims {
 		c := &claims[i]
 		if c.Name == cand.Name || c.Status.NodeName == "" {
 			continue
 		}
-		v := adapt.Claim(c)
+		v := views[i]
 		if !selection.Triggered(&v, sel) {
 			continue
 		}
