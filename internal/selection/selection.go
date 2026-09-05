@@ -308,10 +308,15 @@ func EffectiveBackoff(retryCount int, base time.Duration, failedAt, start, end t
 	if start.IsZero() || end.IsZero() {
 		return escalated
 	}
-	// Half-open on both sides, matching the occurrence. The lower bound stops the
-	// clamp leaking into a LATER occurrence, where base measured from an old
-	// failed-at would fit trivially and make the claim eligible the moment the
-	// window opened; the upper bound stops a future or corrupt failed-at.
+	// Half-open on both sides, matching the occurrence. The lower bound is
+	// load-bearing: without it the clamp leaks into a LATER occurrence, where
+	// base measured from an old failed-at fits trivially and would make the
+	// claim eligible the moment the window opened. The upper bound is redundant
+	// against the per-step Before(end) checks below — once failedAt is at or
+	// past end, adding any positive step can only move it further past end, so
+	// every step is rejected there anyway — but it is kept so the "only inside
+	// the occurrence" contract is stated here rather than left for a reader to
+	// re-derive from the walk's arithmetic.
 	if failedAt.Before(start) || !failedAt.Before(end) {
 		return escalated
 	}

@@ -424,7 +424,11 @@ func TestEffectiveBackoff(t *testing.T) {
 		// the claim eligible the moment this window opened and destroy the
 		// escalation; the lower half of the guard is what stops it.
 		"failure predates this occurrence": {4, at(4, 0), start, end, 240 * time.Minute},
-		// A future or corrupt failed-at. The upper half of the guard stops it.
+		// A future or corrupt failed-at is never clamped. This pins the RESULT, not
+		// the guard's upper half specifically: the per-step Before(end) checks in
+		// the walk-down loop would reject every step here anyway (once failedAt is
+		// at or past end, adding a positive step can't move it back before end), so
+		// the upper half is redundant, not load-bearing — see EffectiveBackoff.
 		"failure after this occurrence": {4, at(7, 0), start, end, 240 * time.Minute},
 		// retry 0 and 1 share the base step (EscalatedBackoff's defensive floor).
 		"first failure": {1, at(5, 40), start, end, 30 * time.Minute},
