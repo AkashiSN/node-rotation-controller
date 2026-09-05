@@ -81,13 +81,21 @@ type Inputs struct {
 	// (purely age-based, ignoring the per-claim expireAfter) — spec §3.2.
 	Override *time.Duration
 	// RetryBackoff is the base backoff; a failed claim is re-selectable once
-	// now − failed-at ≥ EscalatedBackoff(retry-count, RetryBackoff).
+	// now − failed-at ≥ EffectiveBackoff(retry-count, RetryBackoff, ...), the
+	// escalated ladder clamped to the occurrence the failure happened in.
 	RetryBackoff time.Duration
 	// Excluded is the set of NodeClaim names opted out of proactive rotation —
 	// a claim whose Node carries an operator-set karpenter.sh/do-not-disrupt
 	// (spec §3.2). A claim in this set is never an eligible candidate; its
 	// expireAfter backstop is unaffected. A nil map excludes nothing.
 	Excluded map[string]bool
+	// WindowStart and WindowEnd are the bounds [start, end) of the maintenance
+	// window occurrence containing Now, or the zero time when there is none.
+	// EffectiveBackoff uses them to keep a retry inside the occurrence the failure
+	// happened in (issue #320). They arrive as plain instants because this package
+	// is compiled into the wasm simulator and must not import internal/window.
+	WindowStart time.Time
+	WindowEnd   time.Time
 }
 
 // PickEarliestDeadlineEligible returns the eligible candidate with the earliest
@@ -241,7 +249,7 @@ func failedPastBackoff(c *Claim, in Inputs) bool {
 		return true
 	}
 	retry := parseInt(c.Annotations[annotations.RetryCount])
-	return in.Now.Sub(failedAt) >= EscalatedBackoff(retry, in.RetryBackoff)
+	return in.Now.Sub(failedAt) >= EffectiveBackoff(retry, in.RetryBackoff, failedAt, in.WindowStart, in.WindowEnd)
 }
 
 // Triggered reports whether the claim's age has crossed the rotation trigger
@@ -272,8 +280,52 @@ func triggered(c *Claim, in Inputs) bool {
 // base · 2^(retryCount − 1), capped at 8× (spec §5.3). A retryCount below 1
 // (defensive — a failed claim always carries ≥ 1) yields the base.
 func EscalatedBackoff(retryCount int, base time.Duration) time.Duration {
-	shift := min(max(retryCount-1, 0), maxBackoffShift)
-	return base << shift
+	return base << ladderShift(retryCount)
+}
+
+// ladderShift is the escalation ladder's position for retryCount, defined once so
+// EffectiveBackoff walks the same ladder EscalatedBackoff climbs.
+func ladderShift(retryCount int) int {
+	return min(max(retryCount-1, 0), maxBackoffShift)
+}
+
+// EffectiveBackoff returns the re-selection backoff actually applied to a failed
+// claim: the escalation ladder walked down to the largest step whose retry still
+// lands inside the maintenance-window occurrence the failure happened in, never
+// below base (spec §3.2, issue #320).
+//
+// Without the clamp the ladder is not a finer-grained backoff past the window's
+// remaining time — every step past it means the same thing, "skip the rest of this
+// occurrence" — so a pool that fails twice early can spend the rest of its window
+// with no eligible candidate.
+//
+// It returns the escalated value unchanged in three cases, each of which leaves
+// today's behaviour exactly as it is: there is no occurrence to clamp against
+// (zero bounds); the failure did not happen inside this occurrence; and not even
+// base fits, so the claim waits for the next one.
+func EffectiveBackoff(retryCount int, base time.Duration, failedAt, start, end time.Time) time.Duration {
+	escalated := EscalatedBackoff(retryCount, base)
+	if start.IsZero() || end.IsZero() {
+		return escalated
+	}
+	// Half-open on both sides, matching the occurrence. The lower bound stops the
+	// clamp leaking into a LATER occurrence, where base measured from an old
+	// failed-at would fit trivially and make the claim eligible the moment the
+	// window opened; the upper bound stops a future or corrupt failed-at.
+	if failedAt.Before(start) || !failedAt.Before(end) {
+		return escalated
+	}
+	// Strictly before the close: the interval is half-open, so a retry landing
+	// exactly on it cannot start.
+	if failedAt.Add(escalated).Before(end) {
+		return escalated
+	}
+	for shift := ladderShift(retryCount) - 1; shift >= 0; shift-- {
+		if step := base << shift; failedAt.Add(step).Before(end) {
+			return step
+		}
+	}
+	return escalated
 }
 
 func parseTime(s string) (time.Time, bool) {
