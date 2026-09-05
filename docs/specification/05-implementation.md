@@ -355,6 +355,7 @@ All keys use the `noderotation.io/` prefix except `karpenter.sh/do-not-disrupt`.
     - **A schedule edit that puts the current time out of window while a stamp is held is an immediate close.** The occurrence is judged there and then, against the census as it stands at the edit — the controller has no record of the schedule the stamp was written under
 - **`state`:** `expired` is terminal — blocks re-selection while the claim finalizes under the forceful drain
 - **`started-at`:** write-once per attempt. Cleared by the failed write (single update with `state=failed`). Re-stamped on retry
+- **`failed-at`:** the next-attempt instant reported in the `rotation attempt failed` log line and the `RotationFailed` Event is a **snapshot under the schedule as it stands**, not a lower bound: the clamp is evaluated on each read (§3.2), so extending a `maintenanceWindows` entry mid-occurrence can reopen the claim earlier than the instant already reported. It is derived from the `failed-at` the failing write persisted, truncated to the second the RFC3339 annotation stores, so it names the same instant the re-selection predicate parses back
 - **`surge-claim`:** persisted as soon as placeholder's bind target (`spec.nodeName`) is observable. Cleared with the failed write
 - **`surge-for`:** on frozen nodes, attributes freeze to this rotation. On the Pod, pairs it for discovery
 - **`do-not-disrupt-owned`:** set only when the controller actually applies `do-not-disrupt`. An operator's pre-existing annotation (no marker) is never touched

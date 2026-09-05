@@ -54,6 +54,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 
 - **`noderotation_candidates`:** プールあたりの適格 NodeClaim 数
 - **`noderotation_in_backoff`:** **年齢トリガーを越えている**うえで、失敗した試行によってエスカレートした `retryBackoff` 中にある*という理由だけで*候補カウントから外れている NodeClaim 数。年齢の限定はロードベアリングである: 期限が来ていたときに失敗し、その後に年齢が期限外になった claim（`ageThresholdOverride` の引き上げ、リードタイムの*短縮* — トリガーは `age > expireAfter − leadTime` なので、リードタイムを広げると期限は早く来る — 、`expireAfter` の延長）は、いま backoff に阻まれてはいるが何も負われておらず、このゲージも `window_missed_total` もそれを数えない。`candidates + in_backoff` は `window_missed_total` が閉じた occurrence を判定する「年齢と状態による未処理」カウントそのものであり、in-window のアラートは同じ判定をライブに適用できる（§5.2）
+- ウィンドウを意識したバックオフクランプ（§3.2）は、発生の境界で claim を `noderotation_candidates` と `noderotation_in_backoff` の間で移動させるが、固定された claim のスナップショットについて見れば、その合計——`window_missed_total` が判定に使う未処理作業カウント——は変化しない。しかしクランプはそれ以上のところでは observability に対して中立**ではない**。より多くの試行を生み出すことこそがクランプの目的だからである: `noderotation_completed_total{outcome="failure"}` はより頻繁に増加し、`noderotation_retry_count` はより速く上昇し、`NodeRotationRetryCountHigh` はより早く発火しうるようになり、失敗ログと Event は増え、追加された試行がクローズ時点で成功しているか、あるいはまだ進行中であるかによって、`noderotation_window_missed_total` がその発生で発火するかどうかも変わりうる。
 - **`noderotation_in_progress`:** プールあたりのアクティブローテーション数
 - **`noderotation_completed_total`:** 累積完了数; `outcome` ∈ {`success`, `failure`, `expired`}。`expired` = graceful ローテーション完了前に force-expire（1回のみ発行、success としてカウントしない）
 - **`noderotation_forceful_fallback_total`:** surge なし forceful fallback ローテーション開始数（§3.6）; 開始時にインクリメント

@@ -237,6 +237,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 - NodePool 上の `WindowMissed` Event — そのカウント（`windowOpenedAt`、`eligible`、`inBackoffTriggered`）が、ウィンドウのどれだけの作業が未ローテーションだったかを示す。`no rotation candidate` 行の `inBackoff` が別の値になるのは意図的である: そちらは生の census バケットで、年齢がトリガーを越えなくなり窓が何も負っていない claim も含む。census 行の `inBackoff` がこの Event の `inBackoffTriggered` より大きいのはその差であって、不整合ではない。
 - 直前の `rotation attempt failed` ログ行とその `reason` — ウィンドウ喪失は通常、コールドスタートではなく 1 件以上の失敗した試行の末尾である。
 - `noderotation_retry_count` — エスカレートするバックオフの上限に向かって増加している場合、試行が時間切れではなく繰り返し失敗している。
+- 1つのメンテナンスウィンドウ内での試行のペースを決めるのは `retryBackoff` ではなく `readyTimeout + failurePause` である: ウィンドウを意識したクランプ（spec §3.2）以降、失敗した claim のリトライはそれが失敗した発生の内側に保持されるため、`retryBackoff` がウィンドウを早期に終わらせることはもうない。また `retryBackoff` はプール全体の試行レートを制限するものでもない——これは claim ごとの値であり、複数の claim が互いに独立して交互に試行するためである。期間 `D` のウィンドウでは、タイムアウト駆動の試行数のオーダー上限は `1 + D / (readyTimeout + failurePause)` になる。これ以上のチャーンを望まない場合は `surge.failurePause` を引き上げること。`retryBackoff` だけを引き上げても効果はない。
 - プールが static かどうか（`StaticNodePool` Warning Event、[spec §3.3](specification/03-design.md)）— static な NodePool は surge ローテーションを一切試みないため、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびにウィンドウを逃す。issue #302 を参照。
 
 **何をするか:** `rotation attempt failed` 行が示す根本原因に対処する（[§1](#1-az-ごとの-surge-ヘッドルームゾーン-pv) と [§5](#5-drain-が詰まったときの対処) を参照）。試行自体は健全だが、バッチがスケジュールに対して大きすぎて本当に収まらない場合は、メンテナンスウィンドウを拡張して 1 回の発生あたりの完了数を増やすか、`minRotationChances`（`K`）を引き上げて、1 回のウィンドウ喪失があっても `expireAfter` バックストップ前に保証された機会を残すようにする。
