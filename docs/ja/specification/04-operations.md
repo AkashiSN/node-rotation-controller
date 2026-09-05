@@ -55,6 +55,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 - **`noderotation_candidates`:** プールあたりの適格 NodeClaim 数
 - **`noderotation_in_backoff`:** **年齢トリガーを越えている**うえで、失敗した試行によってエスカレートした `retryBackoff` 中にある*という理由だけで*候補カウントから外れている NodeClaim 数。年齢の限定はロードベアリングである: 期限が来ていたときに失敗し、その後に年齢が期限外になった claim（`ageThresholdOverride` の引き上げ、リードタイムの*短縮* — トリガーは `age > expireAfter − leadTime` なので、リードタイムを広げると期限は早く来る — 、`expireAfter` の延長）は、いま backoff に阻まれてはいるが何も負われておらず、このゲージも `window_missed_total` もそれを数えない。`candidates + in_backoff` は `window_missed_total` が閉じた occurrence を判定する「年齢と状態による未処理」カウントそのものであり、in-window のアラートは同じ判定をライブに適用できる（§5.2）
 - ウィンドウを意識したバックオフクランプ（§3.2）は、発生の境界で claim を `noderotation_candidates` と `noderotation_in_backoff` の間で移動させるが、固定された claim のスナップショットについて見れば、その合計——`window_missed_total` が判定に使う未処理作業カウント——は変化しない。しかしクランプはそれ以上のところでは observability に対して中立**ではない**。より多くの試行を生み出すことこそがクランプの目的だからである: `noderotation_completed_total{outcome="failure"}` はより頻繁に増加し、`noderotation_retry_count` はより速く上昇し、`NodeRotationRetryCountHigh` はより早く発火しうるようになり、失敗ログと Event は増え、追加された試行がクローズ時点で成功しているか、あるいはまだ進行中であるかによって、`noderotation_window_missed_total` がその発生で発火するかどうかも変わりうる。
+- 増えた試行はメトリクスだけの影響ではない：1回ごとに追加の surge NodeClaim が作成され、失敗すれば reap され、placeholder Pod が入れ替わり、対象の本番ノードの cordon/uncordon も繰り返される。クランプ前なら4回で済んでいた試行がクランプ後に6回になるプール——§3.2 のクランプを動機づけたインシデントの形——では、同じ発生でこのクラスタ側のチャーンがおよそ50%増える。
 - **`noderotation_in_progress`:** プールあたりのアクティブローテーション数
 - **`noderotation_completed_total`:** 累積完了数; `outcome` ∈ {`success`, `failure`, `expired`}。`expired` = graceful ローテーション完了前に force-expire（1回のみ発行、success としてカウントしない）
 - **`noderotation_forceful_fallback_total`:** surge なし forceful fallback ローテーション開始数（§3.6）; 開始時にインクリメント
@@ -201,7 +202,7 @@ placeholder の `PriorityClass` は **Helm chart により静的にインスト�
 ## 4.4 コスト
 
 ::: tip 要点
-各ローテーションは ~10–20 分の重複課金を発生させる。失敗駆動のコストは 2 つのメカニズムで制限: エスカレーティング `retryBackoff` とプールレベルの `failurePause`。
+各ローテーションは ~10–20 分の重複課金を発生させる。1つのメンテナンスウィンドウの発生（occurrence）内では、試行の繰り返しのペースを制限するのは `readyTimeout + failurePause` であり、エスカレーティングする `retryBackoff` ではない。ウィンドウを意識したバックオフクランプ（§3.2）が失敗した claim のリトライをそれが失敗した発生の内側に保持するため、`retryBackoff` は単独でウィンドウを早期に終わらせることはもうなく、プール全体の試行レートを制限するものでもない——これは claim ごとの値であり、複数の claim が互いに独立して交互に試行しうる。
 :::
 
 ### 通常のローテーションコスト
@@ -220,10 +221,11 @@ placeholder の `PriorityClass` は **Helm chart により静的にインスト�
 
 | メカニズム | 制限対象 |
 |-----------|--------|
-| エスカレーティング `retryBackoff` | 同一 claim のリトライ |
+| `readyTimeout` + `failurePause` | 同一 claim への繰り返し試行、1つのメンテナンスウィンドウの発生（occurrence）内（§3.2） |
 | プールレベル `failurePause` | 体系的失敗下の候補サイクリング |
 
 - **`failurePause` なし:** 体系的原因が ~1 分以内に次の候補に移行し、候補ごとに `readyTimeout` 分の課金を消費
-- **`failurePause` あり:** `readyTimeout + failurePause` あたり最大 1 回の試行（デフォルトで ~25m）
+- **`failurePause` あり:** `readyTimeout + failurePause` あたり最大 1 回の試行（デフォルトで ~25m）——ウィンドウを意識したクランプが `retryBackoff` にウィンドウを早期に終わらせないようにするため、これは1つの発生内で同一 claim がリトライする回数の上限にもなる
 - `failurePause` は `cooldownAfter` と分離 — スループット向上のための settle 短縮がコスト制限を弱めない
+- `retryBackoff` は claim ごとにエスカレートし続け、発生間の待ち時間を引き続き制限するが、1つの発生の内側ではプール全体の試行レートを制限しない: 複数の claim が同時にそれぞれの backoff で独立にリトライしうる
 - `noderotation_retry_count` がパターンをアラート（§4.2）

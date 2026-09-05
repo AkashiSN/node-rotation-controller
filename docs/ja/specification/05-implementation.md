@@ -84,7 +84,7 @@ flowchart TD
 
 `pick_earliest_deadline_eligible` は以下の claim を選定:
 - `deletionTimestamp` なし
-- `state` が空（新規）または `failed` でエスカレーティングバックオフ経過（`retryBackoff · 2^(retry-count − 1)`、8× で上限）
+- `state` が空（新規）または `failed` でエスカレーティングバックオフ経過（`retryBackoff · 2^(retry-count − 1)`、8× で上限）。ただし失敗が発生したメンテナンスウィンドウの発生（occurrence）にクランプされる（§3.2）
 - `pending`/`draining` は再選定されない; `expired` は終端
 
 ### anchor のセマンティクス
@@ -271,7 +271,7 @@ advance(np, name):
       # リトライは新しい試行: このパスが上位にある step 1a の static ゲート
       # （anchor により先に advance() へ入る）も通過する必要がある。
       if start_gates(np) and np.spec.replicas is unset
-         and elapsed(cand.failed-at) >= escalated_backoff(cand)
+         and elapsed(cand.failed-at) >= effective_backoff(cand)   # エスカレート済み、発生（occurrence）にクランプ（§3.2）
          and surge_headroom(np, cand):
           # failed からのみ。同じガードが下の再入も抑える: advance() はキャッシュ
           # 経由で読み直すため、この書き込みにまだ遅れている読み取りは、すべての

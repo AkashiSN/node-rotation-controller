@@ -84,7 +84,7 @@ All of the following must pass before a new rotation can begin:
 
 `pick_earliest_deadline_eligible` selects claims with:
 - No `deletionTimestamp`
-- `state` empty (fresh) or `failed` past escalated backoff (`retryBackoff · 2^(retry-count − 1)`, capped 8×)
+- `state` empty (fresh) or `failed` past the escalated backoff (`retryBackoff · 2^(retry-count − 1)`, capped 8×), clamped to the maintenance-window occurrence the failure happened in (§3.2)
 - `pending`/`draining` never re-selected; `expired` is terminal
 
 ### Anchor semantics
@@ -272,7 +272,7 @@ advance(np, name):
       # A retry is a NEW attempt: it must also clear the step-1a static gate,
       # which this path sits above (the anchor entered advance() first).
       if start_gates(np) and np.spec.replicas is unset
-         and elapsed(cand.failed-at) >= escalated_backoff(cand)
+         and elapsed(cand.failed-at) >= effective_backoff(cand)   # escalated, clamped to the occurrence (§3.2)
          and surge_headroom(np, cand):
           # only from failed. The same guard bounds the re-entry below: advance()
           # re-reads through the cache, and a read still lagging this write would
