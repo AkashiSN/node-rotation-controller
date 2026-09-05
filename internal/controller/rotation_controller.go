@@ -436,6 +436,16 @@ func (r *RotationReconciler) selInputs(res resolved, now time.Time, excluded map
 	return in
 }
 
+// effectiveBackoff resolves the window-clamped re-selection backoff the selection
+// predicate will apply. The failure announcement and advanceFailed's re-entry gate
+// both go through it, so the instant an operator is told about, the instant the
+// anchored retry acts on, and the instant the predicate reopens the claim cannot
+// disagree (issue #320).
+func (r *RotationReconciler) effectiveBackoff(res resolved, now, failedAt time.Time, retry int) time.Duration {
+	start, end, _ := res.sched.OccurrenceBounds(now)
+	return selection.EffectiveBackoff(retry, res.retryBackoff, failedAt, start, end)
+}
+
 // gateInputs maps the NodePool's resolved policy onto the pure decide view. The
 // window verdict is resolved here — decide takes a bool, not a *window.Schedule, so
 // the simulator can drive it from its virtual clock.
@@ -1194,9 +1204,15 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 	// write actually produced rather than the caller's cached copy, which may lag
 	// them (issue #307).
 	var retry int
+	var failedAt time.Time
 	wrote, err := r.patchClaimIf(ctx, cand.Name, func(m map[string]string) bool {
 		m[annotations.State] = annotations.StateFailed
-		m[annotations.FailedAt] = rfc3339(r.now())
+		// Truncate to the second the RFC3339 annotation stores, so the instant this
+		// function reports is byte-for-byte the one failedPastBackoff parses back. A
+		// second r.now() would differ by the dropped sub-second plus whatever the
+		// clock moved in between (issue #320).
+		failedAt = r.now().Truncate(time.Second)
+		m[annotations.FailedAt] = rfc3339(failedAt)
 		retry = parseInt(m[annotations.RetryCount]) + 1
 		m[annotations.RetryCount] = strconv.Itoa(retry)
 		delete(m, annotations.StartedAt)
@@ -1216,8 +1232,9 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 	r.recorder().Failure(pool.Name, cand.Name)
 
 	// Say why the attempt was rolled back, how many have been made, and when the
-	// next one becomes possible — the claim-scoped escalated backoff (issue #221).
-	backoffUntil := r.now().Add(selection.EscalatedBackoff(retry, res.retryBackoff))
+	// next one becomes possible — the window-clamped backoff (issue #320), off the
+	// failed-at this write just persisted.
+	backoffUntil := failedAt.Add(r.effectiveBackoff(res, r.now(), failedAt, retry))
 	r.warn().ClearPlaceholderPending(pool.Name, cand.Name)
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation attempt failed",
 		"nodeclaim", cand.Name,
@@ -1227,7 +1244,7 @@ func (r *RotationReconciler) failPending(ctx context.Context, pool *karpv1.NodeP
 		"backoffUntil", rfc3339(backoffUntil))
 	if r.Events != nil {
 		r.Events.Eventf(cand, pool, corev1.EventTypeWarning, reasonRotationFailed, actionRotateNode,
-			"the surge node did not become Ready within readyTimeout %v; rolled back, attempt %d, next attempt no earlier than %s",
+			"the surge node did not become Ready within readyTimeout %v; rolled back, attempt %d, next attempt %s under the current schedule (a maintenanceWindows change recalculates it)",
 			res.readyTimeout, retry, rfc3339(backoffUntil))
 	}
 
@@ -1303,7 +1320,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	// anchor and preserves the failure pause.
 	open, _ := decide.StartGate(r.gateInputs(pool, res, now))
 	if open && !staticPool(pool) &&
-		now.Sub(failedAt) >= selection.EscalatedBackoff(retry, res.retryBackoff) &&
+		now.Sub(failedAt) >= r.effectiveBackoff(res, now, failedAt, retry) &&
 		headroomOK {
 		// Only from failed — the state this handler was dispatched on. That guard is
 		// also what bounds the re-entry below: advance() re-reads the claim through
