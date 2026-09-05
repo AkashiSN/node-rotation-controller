@@ -389,6 +389,14 @@ func TestClampKeepsTheWindowWorkingAfterTheFourthFailure(t *testing.T) {
 	if len(after) <= len(before) {
 		t.Errorf("clamped run made %d starts, want more than the unclamped %d", len(after), len(before))
 	}
+	// An OUTCOME pin, not a mechanism pin: it catches a regression in bounds
+	// resolution that pushes the clamp past the occurrence's close (which would
+	// silently fall back toward the unclamped 4), but it does not exercise the
+	// ladder walk-down itself. The mechanism is pinned in internal/selection:
+	// TestEffectiveBackoff and TestEffectiveBackoffWalksEveryLadderStepToItsBoundary.
+	if len(after) != 6 {
+		t.Errorf("clamped run made %d starts, want exactly 6", len(after))
+	}
 	// The idle tail is the point: unclamped, the window stops starting work with a
 	// long stretch still open.
 	if !after[len(after)-1].After(before[len(before)-1]) {
@@ -416,10 +424,18 @@ func TestClampCostIsBoundedByReadyTimeoutPlusFailurePause(t *testing.T) {
 	// 121 against an actual 14 it carries roughly 9x slack, so a moderately broken
 	// clamp producing 40-80 starts would still sail through it. That looseness is
 	// deliberate — the design states this cost as order-of-magnitude, not exact —
-	// and it documents the cost the spec and runbook disclose. The tight regression
-	// pin for the clamp itself is the exact four-versus-six comparison in
-	// TestClampKeepsTheWindowWorkingAfterTheFourthFailure; do not read this
-	// assertion as a substitute for that one.
+	// and it documents the cost the spec and runbook disclose. This test measures
+	// the OUTCOME (a window that keeps working under the accepted cost), not the
+	// clamping MECHANISM. The mechanism itself is pinned in internal/selection —
+	// TestEffectiveBackoff and TestEffectiveBackoffWalksEveryLadderStepToItsBoundary
+	// — not by this assertion, nor by
+	// TestClampKeepsTheWindowWorkingAfterTheFourthFailure's start count, which is
+	// also an outcome pin: mutating EffectiveBackoff to unconditionally return base
+	// inside the occurrence — destroying both the ladder walk-down and the "not even
+	// base fits ⇒ escalated stands" rule — still produces the identical six starts
+	// that test asserts (that mutation is caught only by the internal/selection
+	// unit table). Do not read either count-based assertion as a substitute for the
+	// mechanism pins.
 	ceiling := 1 + int(to.Sub(from)/(readyTimeout+time.Minute))
 	if len(starts) > ceiling {
 		t.Errorf("made %d starts, above the readyTimeout+failurePause ceiling of %d", len(starts), ceiling)
