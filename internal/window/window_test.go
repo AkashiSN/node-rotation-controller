@@ -784,26 +784,42 @@ func TestOccurrenceBoundsInEachCopyOfAFallBackFold(t *testing.T) {
 // 30-second gap. now is phased so both coarse samples land in window, so a walk
 // without the audit merges the two occurrences and reports one long span.
 func TestOccurrenceBoundsRefusesASubMinuteGap(t *testing.T) {
-	s := newSchedule(t, []policy.MaintenanceWindow{
+	monroviaUTC := newSchedule(t, []policy.MaintenanceWindow{
 		{Timezone: "Africa/Monrovia", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "12:00"},
 		{Timezone: "UTC", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "12:45", End: "23:00"},
 	})
+	// Africa/Lagos runs at offset 0 (aligned) until 1908-07-01T00:00:00Z and
+	// +00:13:35 (misaligned — 35s past the minute) after. now is phased so the
+	// backward span (now-horizon..now) stays entirely before the transition while
+	// the forward span (now..now+horizon) crosses into the misaligned segment,
+	// isolating the FORWARD half as the only one that can reject.
+	lagos := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "Africa/Lagos", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "12:00"},
+	})
 	for _, tc := range []struct {
 		name string
+		s    *Schedule
 		now  time.Time
 	}{
-		// Before the gap: the FORWARD half of the audit is what rejects.
-		{"before the gap", time.Date(1971, 6, 1, 12, 30, 20, 0, time.UTC)},
+		// Both halves are inside Monrovia's -00:44:30 segment here, so this does NOT
+		// isolate which half of the audit rejects — see "forward half, isolated"
+		// below for a variant that does.
+		{"before the gap", monroviaUTC, time.Date(1971, 6, 1, 12, 30, 20, 0, time.UTC)},
 		// After Monrovia leaves -00:44:30 (1972-01-07T00:44:30Z) the forward span is
 		// clean at offset 0 while the backward span still is not: only the BACKWARD
 		// half rejects here.
-		{"after the segment ends", time.Date(1972, 1, 10, 13, 0, 20, 0, time.UTC)},
+		{"after the segment ends", monroviaUTC, time.Date(1972, 1, 10, 13, 0, 20, 0, time.UTC)},
+		// The backward span sits in Lagos's aligned (offset-0) segment while the
+		// forward span crosses into the +00:13:35 misaligned one: only the FORWARD
+		// half rejects here, pinning the half TestOccurrenceBoundsRefusesASubMinuteGap
+		// otherwise never isolates.
+		{"forward half, isolated", lagos, time.Date(1908, 6, 28, 6, 0, 20, 0, time.UTC)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if !s.InWindow(tc.now) {
+			if !tc.s.InWindow(tc.now) {
 				t.Fatalf("fixture invalid: %s must be in window", tc.now)
 			}
-			if _, _, ok := s.OccurrenceBounds(tc.now); ok {
+			if _, _, ok := tc.s.OccurrenceBounds(tc.now); ok {
 				t.Error("want ok=false: the minute-alignment precondition does not hold over the searched span")
 			}
 		})
