@@ -263,6 +263,12 @@ func TestFailureReportsTheClampedInstantFromTheDurableFailedAt(t *testing.T) {
 //
 // clamped=false zeroes the occurrence bounds, reproducing the behaviour before
 // issue #320 so the two can be compared in one test.
+//
+// readyTimeout here is a harness-only timeout injector — it only decides when
+// runWindow's own simulated in-flight attempt gives up and calls
+// failClaimInPlace. It is NOT the resolved policy value: res.readyTimeout comes
+// from the 15m default that neither clampPolicy nor testPolicy overrides, and
+// decide.StartGate never reads ReadyTimeout at all, so the two never interact.
 func runWindow(t *testing.T, pol *policy.Policy, claimCount int, from, to time.Time, readyTimeout time.Duration, clamped bool) []time.Time {
 	t.Helper()
 	pool := withExpireAfter(withTGP(testNodePool(nil)))
@@ -310,6 +316,18 @@ func runWindow(t *testing.T, pol *policy.Policy, claimCount int, from, to time.T
 // times out: the claim goes failed with this instant as its failed-at and its
 // retry-count incremented, and the pool records the failure for gate B. It makes
 // no decision — every decision in runWindow is production code.
+//
+// Its writes are a SUBSET of failPending's: it never clears StartedAt/SurgeClaim
+// on the claim, nor the rotation anchor fields on the pool. That is harmless only
+// because runWindow never models the pending/placeholder phase, so those fields
+// are never set to begin with. A caller that reuses this helper in a scenario
+// where they matter must clear them itself.
+//
+// It also mutates the caller's *pool pointer directly rather than going through
+// the client. That is correct only because every consumer in runWindow
+// (gateInputs, selInputs) is called with this same pointer and never re-Gets the
+// pool, so the in-memory mutation and the object every decision reads are one and
+// the same.
 func failClaimInPlace(t *testing.T, r *RotationReconciler, pool *karpv1.NodePool, name string, now time.Time) {
 	t.Helper()
 	c := getClaim(t, r, name)
@@ -375,6 +393,14 @@ func TestClampCostIsBoundedByReadyTimeoutPlusFailurePause(t *testing.T) {
 
 	starts := runWindow(t, pol, 2, from, to, readyTimeout, true)
 
+	// This ceiling is an order-of-magnitude sanity bound, not a regression pin: at
+	// 121 against an actual 14 it carries roughly 9x slack, so a moderately broken
+	// clamp producing 40-80 starts would still sail through it. That looseness is
+	// deliberate — the design states this cost as order-of-magnitude, not exact —
+	// and it documents the cost the spec and runbook disclose. The tight regression
+	// pin for the clamp itself is the exact four-versus-six comparison in
+	// TestClampKeepsTheWindowWorkingAfterTheFourthFailure; do not read this
+	// assertion as a substitute for that one.
 	ceiling := 1 + int(to.Sub(from)/(readyTimeout+time.Minute))
 	if len(starts) > ceiling {
 		t.Errorf("made %d starts, above the readyTimeout+failurePause ceiling of %d", len(starts), ceiling)
