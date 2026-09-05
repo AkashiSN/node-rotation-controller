@@ -217,6 +217,22 @@ func (r *run) breachCheck(now time.Time) {
 	}
 }
 
+// selectionInputs mirrors the controller's selInputs: the same predicate needs the same
+// inputs, including the bounds of the occurrence containing now, or the simulated retry
+// cadence diverges from the real one (issue #320).
+func (r *run) selectionInputs(now time.Time) selection.Inputs {
+	in := selection.Inputs{
+		Now:          now,
+		LeadTime:     r.res.LeadTime,
+		Override:     r.res.Override,
+		RetryBackoff: r.res.RetryBackoff,
+	}
+	if start, end, ok := r.sched.OccurrenceBounds(now); ok {
+		in.WindowStart, in.WindowEnd = start, end
+	}
+	return in
+}
+
 // maybeStart runs the start gates and the pick, and starts a rotation when both pass.
 func (r *run) maybeStart(now time.Time, inWindow bool) {
 	if _, fatal := firstFatal(r.res.Derived.Findings); fatal {
@@ -241,12 +257,7 @@ func (r *run) maybeStart(now time.Time, inWindow bool) {
 	r.flushBlocked(now)
 
 	views := r.views()
-	sel := selection.Inputs{
-		Now:          now,
-		LeadTime:     r.res.LeadTime,
-		Override:     r.res.Override,
-		RetryBackoff: r.res.RetryBackoff,
-	}
+	sel := r.selectionInputs(now)
 	pick := selection.PickEarliestDeadlineEligible(views, sel)
 	if pick == nil {
 		r.recordCensus(now, selection.TakeCensus(views, sel))
