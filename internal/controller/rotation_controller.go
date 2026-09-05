@@ -418,14 +418,22 @@ func poolTGP(pool *karpv1.NodePool) (time.Duration, bool) {
 	return schedule.DrainFallback, true
 }
 
+// selInputs maps the resolved policy onto the pure selection view. The occurrence
+// bounds are resolved here rather than inside selection, which must stay free of
+// internal/window for the wasm simulator (issue #320); zero bounds mean "no
+// occurrence", which EffectiveBackoff reads as "no clamp".
 func (r *RotationReconciler) selInputs(res resolved, now time.Time, excluded map[string]bool) selection.Inputs {
-	return selection.Inputs{
+	in := selection.Inputs{
 		Now:          now,
 		LeadTime:     res.leadTime,
 		Override:     res.override,
 		RetryBackoff: res.retryBackoff,
 		Excluded:     excluded,
 	}
+	if start, end, ok := res.sched.OccurrenceBounds(now); ok {
+		in.WindowStart, in.WindowEnd = start, end
+	}
+	return in
 }
 
 // gateInputs maps the NodePool's resolved policy onto the pure decide view. The
