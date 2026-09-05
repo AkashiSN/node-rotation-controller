@@ -553,3 +553,60 @@ func TestShortestIdleGapEmpty(t *testing.T) {
 		t.Errorf("ShortestIdleGap on empty schedule = (%v, %v), want (0, false)", got, ok)
 	}
 }
+
+// The one-minute coarse walk in OccurrenceBounds is only complete when every
+// membership boundary lands on a whole UTC minute, which holds exactly when every
+// zone offset in effect and every zone transition is minute-aligned. Historical
+// IANA offsets break it: Africa/Monrovia ran at -00:44:30 until 1972-01-07, so a
+// Monrovia entry's boundaries fall 30 seconds off the minute lattice and a union
+// containing one can have a sub-minute gap the walk would step over.
+func TestMinuteAlignedZonesRejectsSubMinuteOffsets(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "Africa/Monrovia", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "12:00"},
+	})
+	dirty := time.Date(1971, 6, 1, 12, 0, 0, 0, time.UTC)
+	if s.minuteAlignedZones(dirty, dirty.Add(24*time.Hour)) {
+		t.Error("Monrovia at -00:44:30 must be rejected")
+	}
+	clean := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	if !s.minuteAlignedZones(clean, clean.Add(7*24*time.Hour)) {
+		t.Error("contemporary Monrovia (offset 0) must be accepted")
+	}
+}
+
+// A DST transition is minute-aligned, so a week containing one must still pass.
+// If this fails the audit is over-strict and would disable the clamp for every
+// schedule twice a year.
+func TestMinuteAlignedZonesAcceptsDSTWeek(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "America/New_York", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "01:00", End: "04:00"},
+	})
+	// 2026-03-08 is the US spring-forward; 2026-11-01 the fall-back.
+	for _, when := range []time.Time{
+		time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC),
+	} {
+		if !s.minuteAlignedZones(when, when.Add(7*24*time.Hour)) {
+			t.Errorf("a week containing a DST transition must be accepted; from %s", when)
+		}
+	}
+}
+
+// The audit must cover the span the search actually walks, which runs BACKWARD
+// for the occurrence start as well as forward for its end. Monrovia leaves
+// -00:44:30 at 1972-01-07T00:44:30Z, so at this instant the forward week is clean
+// while the backward week is not: a forward-only audit passes and the start search
+// can then merge across a sub-minute gap.
+func TestMinuteAlignedZonesCoversTheBackwardSpan(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "Africa/Monrovia", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "12:00"},
+	})
+	now := time.Date(1972, 1, 10, 12, 0, 0, 0, time.UTC)
+	week := 7 * 24 * time.Hour
+	if !s.minuteAlignedZones(now, now.Add(week)) {
+		t.Fatal("fixture invalid: the forward span must look clean, or this proves nothing")
+	}
+	if s.minuteAlignedZones(now.Add(-week), now) {
+		t.Error("the backward span reaches -00:44:30 and must be rejected")
+	}
+}
