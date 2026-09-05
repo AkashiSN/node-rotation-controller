@@ -144,6 +144,104 @@ func (s *Schedule) minuteAlignedZones(from, to time.Time) bool {
 	return true
 }
 
+// scanStep is the coarse sampling interval of the occurrence search. It is one
+// minute because minuteAlignedZones guarantees no out-of-window interval is
+// shorter than that, so a lattice of this spacing meets every one of them.
+const scanStep = time.Minute
+
+// searchHorizon bounds how far the occurrence search looks in each direction.
+// scanMargin extends the zone audit one step past it, so a transition the walk
+// can still step onto is audited too.
+const (
+	searchHorizon = week
+	scanMargin    = scanStep
+)
+
+// OccurrenceBounds reports the real-time bounds [start, end) of the
+// maintenance-window occurrence containing now — the maximal run of instants
+// around now for which InWindow is true.
+//
+// ok is false when now is outside every window, when the minute-alignment
+// precondition does not hold across the searched span, and when no boundary is
+// found within searchHorizon. The last is a SEARCH BOUND, not a claim that the
+// union is continuously open: with entries in several timezones an offset
+// transition can temporarily fill the gap that normally separates occurrences,
+// producing a connected run longer than the horizon that does close later.
+// Callers treat every false the same way — no clamp (issue #320).
+//
+// Boundaries are derived from InWindow at real instants, never by constructing a
+// wall-clock boundary. time.Date normalizes a nonexistent local time to whichever
+// side of a spring-forward gap the offset arithmetic lands on — America/New_York
+// 02:30 becomes 01:30 EST, Europe/Berlin 02:30 becomes 03:30 CEST — so a
+// constructed close can be in the PAST. mergedOccurrences/startOffset are equally
+// unusable here: that projection pins DST to an anchor week, which is why issue
+// #303 refused to recover an occurrence start from it.
+func (s *Schedule) OccurrenceBounds(now time.Time) (time.Time, time.Time, bool) {
+	if !s.InWindow(now) {
+		return time.Time{}, time.Time{}, false
+	}
+	if !s.minuteAlignedZones(now.Add(-searchHorizon-scanMargin), now.Add(searchHorizon+scanMargin)) {
+		return time.Time{}, time.Time{}, false
+	}
+	end, ok := s.firstOutAfter(now)
+	if !ok {
+		return time.Time{}, time.Time{}, false
+	}
+	start, ok := s.firstInAtOrBefore(now)
+	if !ok {
+		return time.Time{}, time.Time{}, false
+	}
+	return start, end, true
+}
+
+// firstOutAfter returns the first instant after now at which InWindow is false.
+// The coarse walk BRACKETS the transition; the binary search then locates it
+// exactly. Both phases are needed: now carries an arbitrary sub-minute phase, so
+// the bracketing sample is up to a step late, and refinement can only find a
+// transition the walk has bracketed.
+func (s *Schedule) firstOutAfter(now time.Time) (time.Time, bool) {
+	in := now // invariant: InWindow(in)
+	for range int(searchHorizon / scanStep) {
+		out := in.Add(scanStep)
+		if !s.InWindow(out) {
+			return s.refine(in, out, false), true
+		}
+		in = out
+	}
+	return time.Time{}, false
+}
+
+// firstInAtOrBefore returns the first instant of the occurrence containing now:
+// the earliest t <= now for which InWindow holds throughout [t, now].
+func (s *Schedule) firstInAtOrBefore(now time.Time) (time.Time, bool) {
+	in := now // invariant: InWindow(in)
+	for range int(searchHorizon / scanStep) {
+		out := in.Add(-scanStep)
+		if !s.InWindow(out) {
+			return s.refine(out, in, true), true
+		}
+		in = out
+	}
+	return time.Time{}, false
+}
+
+// refine binary-searches a bracket [lo, hi] whose ends differ in membership and
+// returns the first instant of the later side. wantIn says which side hi is on:
+// true for an out->in crossing (the occurrence's start), false for in->out (its
+// end). Narrowing to a nanosecond makes the result exact rather than
+// sampling-phase dependent.
+func (s *Schedule) refine(lo, hi time.Time, wantIn bool) time.Time {
+	for hi.Sub(lo) > 1 {
+		mid := lo.Add(hi.Sub(lo) / 2)
+		if s.InWindow(mid) == wantIn {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	return hi
+}
+
 // occurrence is one occurrence of the effective maintenance window on the
 // canonical weekly timeline: it begins at start (in [0, week)) and lasts length,
 // possibly wrapping past the week boundary back toward 0.
