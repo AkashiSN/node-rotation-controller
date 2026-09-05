@@ -1343,7 +1343,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	// fresh start but which this path sits above: the anchor sends the reconcile
 	// into advance() at step 1 before that gate is reached. A static pool whose
 	// anchor was written by an earlier controller version would otherwise retry
-	// the one attempt that can never succeed, once per escalated backoff, forever.
+	// the one attempt that can never succeed, once per effective backoff, forever.
 	// Closing it here drops through to the repair branch below, which releases the
 	// anchor and preserves the failure pause.
 	open, _ := decide.StartGate(r.gateInputs(pool, res, now))
