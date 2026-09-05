@@ -84,7 +84,7 @@ All of the following must pass before a new rotation can begin:
 
 `pick_earliest_deadline_eligible` selects claims with:
 - No `deletionTimestamp`
-- `state` empty (fresh) or `failed` past escalated backoff (`retryBackoff · 2^(retry-count − 1)`, capped 8×)
+- `state` empty (fresh) or `failed` past the escalated backoff (`retryBackoff · 2^(retry-count − 1)`, capped 8×), clamped to the maintenance-window occurrence the failure happened in (§3.2)
 - `pending`/`draining` never re-selected; `expired` is terminal
 
 ### Anchor semantics
@@ -272,7 +272,7 @@ advance(np, name):
       # A retry is a NEW attempt: it must also clear the step-1a static gate,
       # which this path sits above (the anchor entered advance() first).
       if start_gates(np) and np.spec.replicas is unset
-         and elapsed(cand.failed-at) >= escalated_backoff(cand)
+         and elapsed(cand.failed-at) >= effective_backoff(cand)   # escalated, clamped to the occurrence (§3.2)
          and surge_headroom(np, cand):
           # only from failed. The same guard bounds the re-entry below: advance()
           # re-reads through the cache, and a read still lagging this write would
@@ -355,6 +355,7 @@ All keys use the `noderotation.io/` prefix except `karpenter.sh/do-not-disrupt`.
     - **A schedule edit that puts the current time out of window while a stamp is held is an immediate close.** The occurrence is judged there and then, against the census as it stands at the edit — the controller has no record of the schedule the stamp was written under
 - **`state`:** `expired` is terminal — blocks re-selection while the claim finalizes under the forceful drain
 - **`started-at`:** write-once per attempt. Cleared by the failed write (single update with `state=failed`). Re-stamped on retry
+- **`failed-at`:** the next-attempt instant reported in the `rotation attempt failed` log line and the `RotationFailed` Event is a **snapshot under the schedule as it stands**, not a lower bound: the clamp is evaluated on each read (§3.2), so extending a `maintenanceWindows` entry mid-occurrence can reopen the claim earlier than the instant already reported. It is derived from the `failed-at` the failing write persisted, truncated to the second the RFC3339 annotation stores, so it names the same instant the re-selection predicate parses back
 - **`surge-claim`:** persisted as soon as placeholder's bind target (`spec.nodeName`) is observable. Cleared with the failed write
 - **`surge-for`:** on frozen nodes, attributes freeze to this rotation. On the Pod, pairs it for discovery
 - **`do-not-disrupt-owned`:** set only when the controller actually applies `do-not-disrupt`. An operator's pre-existing annotation (no marker) is never touched

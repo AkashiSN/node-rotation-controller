@@ -386,6 +386,127 @@ func TestEscalatedBackoff(t *testing.T) {
 	}
 }
 
+// EffectiveBackoff walks the escalation ladder down to the largest step whose
+// retry still lands inside the occurrence the failure happened in, never below
+// base (issue #320).
+func TestEffectiveBackoff(t *testing.T) {
+	base := 30 * time.Minute
+	// A 90-minute occurrence, the shape of the field report on issue #303.
+	start := time.Date(2026, 9, 4, 5, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 4, 6, 30, 0, 0, time.UTC)
+	at := func(h, m int) time.Time { return time.Date(2026, 9, 4, h, m, 0, 0, time.UTC) }
+
+	for name, tc := range map[string]struct {
+		retry    int
+		failedAt time.Time
+		start    time.Time
+		end      time.Time
+		want     time.Duration
+	}{
+		// retry 2 escalates to 60m, which from 05:40 lands at 06:40 -- past the
+		// close. base lands at 06:10 and fits, so the ladder falls to base.
+		"escalated overshoots, base fits": {2, at(5, 40), start, end, 30 * time.Minute},
+		// retry 4 caps the ladder at 8x = 240m. From 05:00 the 60m step lands at
+		// 06:00 and fits, so the walk stops there rather than falling to base --
+		// the escalation is attenuated, not discarded.
+		"walk stops at an intermediate step": {4, at(5, 0), start, end, 60 * time.Minute},
+		// From 05:00 the escalated 60m lands at 06:00, inside: no clamp.
+		"escalated already fits": {2, at(5, 0), start, end, 60 * time.Minute},
+		// From 06:10 even base lands at 06:40, past the close: nothing fits, so the
+		// claim waits for the next occurrence exactly as it does today.
+		"not even base fits": {2, at(6, 10), start, end, 60 * time.Minute},
+		// Landing exactly on the close is NOT inside: the interval is half-open, so
+		// a retry there cannot start. From 06:00 base lands at 06:30.
+		"landing exactly on the close does not count": {2, at(6, 0), start, end, 60 * time.Minute},
+		// No occurrence to clamp against.
+		"zero bounds": {4, at(5, 40), time.Time{}, time.Time{}, 240 * time.Minute},
+		// The failure happened in an EARLIER occurrence. Clamping here would make
+		// the claim eligible the moment this window opened and destroy the
+		// escalation; the lower half of the guard is what stops it.
+		"failure predates this occurrence": {4, at(4, 0), start, end, 240 * time.Minute},
+		// A future or corrupt failed-at is never clamped. This pins the RESULT, not
+		// the guard's upper half specifically: the per-step Before(end) checks in
+		// the walk-down loop would reject every step here anyway (once failedAt is
+		// at or past end, adding a positive step can't move it back before end), so
+		// the upper half is redundant, not load-bearing — see EffectiveBackoff.
+		"failure after this occurrence": {4, at(7, 0), start, end, 240 * time.Minute},
+		// retry 0 and 1 share the base step (EscalatedBackoff's defensive floor).
+		"first failure": {1, at(5, 40), start, end, 30 * time.Minute},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := selection.EffectiveBackoff(tc.retry, base, tc.failedAt, tc.start, tc.end)
+			if got != tc.want {
+				t.Errorf("EffectiveBackoff(retry=%d, failedAt=%s) = %v, want %v",
+					tc.retry, tc.failedAt.Format("15:04"), got, tc.want)
+			}
+		})
+	}
+}
+
+// Every ladder step at the boundary where it just fits and just does not. A
+// 90-minute occurrence is too short for the 120m and 240m steps to fit from
+// inside it at all, so this uses a 12-hour occurrence (05:00-17:00) where all
+// four are reachable. base = 30m, so the ladder is 30m/60m/120m/240m.
+func TestEffectiveBackoffWalksEveryLadderStepToItsBoundary(t *testing.T) {
+	base := 30 * time.Minute
+	start := time.Date(2026, 9, 4, 5, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 4, 17, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		retry int
+		step  time.Duration // the ladder step for this retry count
+	}{
+		{1, 30 * time.Minute},
+		{2, 60 * time.Minute},
+		{3, 120 * time.Minute},
+		{4, 240 * time.Minute}, // capped at 8x; retry 5+ is the same step
+		{9, 240 * time.Minute},
+	} {
+		// Just fits: one minute before the last instant from which the step lands
+		// strictly inside.
+		justFits := end.Add(-tc.step - time.Minute)
+		if got := selection.EffectiveBackoff(tc.retry, base, justFits, start, end); got != tc.step {
+			t.Errorf("retry=%d failedAt=%s (step just fits): got %v, want %v",
+				tc.retry, justFits.Format("15:04"), got, tc.step)
+		}
+		// Just does not: landing exactly on the close is out (half-open interval).
+		// Above the base the walk must drop to a strictly shorter step. AT the base
+		// there is nothing shorter to drop to, and the design says so — nothing fits,
+		// so the escalated value stands, which for retry=1 IS base. Asserting
+		// "different from step" for every row would make this test red against a
+		// correct implementation.
+		justNot := end.Add(-tc.step)
+		got := selection.EffectiveBackoff(tc.retry, base, justNot, start, end)
+		if tc.step == base {
+			if got != base {
+				t.Errorf("retry=%d failedAt=%s: got %v, want base %v unchanged — nothing shorter exists to fall back to",
+					tc.retry, justNot.Format("15:04"), got, base)
+			}
+			continue
+		}
+		if got >= tc.step {
+			t.Errorf("retry=%d failedAt=%s: got %v, want a strictly shorter step than %v",
+				tc.retry, justNot.Format("15:04"), got, tc.step)
+		}
+	}
+}
+
+// The clamp never returns less than the operator's configured retryBackoff, on
+// any ladder position, for any failure instant inside the occurrence.
+func TestEffectiveBackoffNeverGoesBelowBase(t *testing.T) {
+	base := 30 * time.Minute
+	start := time.Date(2026, 9, 4, 5, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 4, 6, 30, 0, 0, time.UTC)
+	for retry := 0; retry <= 6; retry++ {
+		for m := range 90 {
+			failedAt := start.Add(time.Duration(m) * time.Minute)
+			if got := selection.EffectiveBackoff(retry, base, failedAt, start, end); got < base {
+				t.Fatalf("retry=%d failedAt=+%dm: got %v, below base %v", retry, m, got, base)
+			}
+		}
+	}
+}
+
 func TestCountEligibleCountsEveryEligibleClaim(t *testing.T) {
 	// baseInputs: auto mode, leadTime 8d, expireAfter 14d ⇒ trigger age > 6d.
 	claims := []karpv1.NodeClaim{

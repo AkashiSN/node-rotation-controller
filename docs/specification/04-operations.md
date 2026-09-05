@@ -54,6 +54,8 @@ Exposed on `/metrics`:
 
 - **`noderotation_candidates`:** eligible NodeClaim count per pool
 - **`noderotation_in_backoff`:** NodeClaims **past the age trigger** that are held out of the candidate count *only* because a failed attempt put them inside their escalated `retryBackoff`. The age qualifier is load-bearing: a claim that failed while it was due and whose age stopped being due afterwards — a raised `ageThresholdOverride`, a *shortened* lead time (the trigger is `age > expireAfter − leadTime`, so a wider lead time triggers earlier), an extended `expireAfter` — is still blocked by its backoff but is owed nothing, and neither this gauge nor `window_missed_total` counts it. `candidates + in_backoff` is exactly the outstanding-by-age-and-state count `window_missed_total` judges a closed occurrence by, so an in-window alert can apply that same test live (§5.2)
+- The window-aware backoff clamp (§3.2) moves a claim between `noderotation_candidates` and `noderotation_in_backoff` at an occurrence boundary; for a fixed claim snapshot their sum — the outstanding-work count `window_missed_total` judges by — does not change. The clamp is **not** observability-neutral beyond that, because it exists to produce more attempts: `noderotation_completed_total{outcome="failure"}` increments more often, `noderotation_retry_count` rises faster, `NodeRotationRetryCountHigh` can fire sooner, failure logs and Events multiply, and an additional attempt may succeed or still be in flight at the close, either of which changes whether `noderotation_window_missed_total` fires for that occurrence.
+- The extra attempts are not a metrics-only effect: each one creates and, on failure, reaps another surge NodeClaim, churns another placeholder Pod, and cordons/uncordons the candidate production node again. A pool that would have made 4 attempts before the clamp and makes 6 after it — the shape of the incident that motivated §3.2's clamp — sees roughly 50% more of that cluster-side churn for the same occurrence.
 - **`noderotation_in_progress`:** active rotation count per pool
 - **`noderotation_completed_total`:** cumulative completions; `outcome` ∈ {`success`, `failure`, `expired`}. `expired` = force-expired before graceful rotation completed (emitted once, never counted as success)
 - **`noderotation_forceful_fallback_total`:** surge-less forceful-fallback rotations initiated (§3.6); incremented at start, not completion
@@ -200,7 +202,7 @@ The placeholder's `PriorityClass` is installed **statically by the Helm chart** 
 ## 4.4 Cost
 
 ::: tip Key point
-Each rotation creates ~10–20 minutes of overlap billing. Two mechanisms bound failure-driven cost: escalating `retryBackoff` and pool-level `failurePause`.
+Each rotation creates ~10–20 minutes of overlap billing. Inside one maintenance-window occurrence, `readyTimeout` + `failurePause` bounds the pacing of repeated attempts. The window-aware backoff clamp (§3.2) keeps the escalating `retryBackoff` from ending the occurrence early only while a step down to `retryBackoff` itself still fits inside it; once not even `retryBackoff` fits, the escalated wait stands and the claim carries over to the next occurrence instead. `retryBackoff` is the clamp's floor, so raising it can reduce a claim's attempts by reaching that point sooner — but it acts per claim and can discard the rest of the window for that claim, so `failurePause` remains the direct, pool-wide pacing control; several claims can be in backoff and retrying independently at once.
 :::
 
 ### Normal rotation cost
@@ -219,10 +221,11 @@ A failed attempt can bill a surge node up to `readyTimeout` (after which it is r
 
 | Mechanism | Bounds |
 |-----------|--------|
-| Escalating `retryBackoff` | Retries of the same claim |
+| `readyTimeout` + `failurePause` | Repeated attempts on the same claim, inside one maintenance-window occurrence (§3.2) |
 | Pool-level `failurePause` | Candidate cycling under systematic failure |
 
 - **Without `failurePause`:** a systematic cause would move to the next candidate within ~1 minute, burning a `readyTimeout`-worth of billing per candidate
-- **With `failurePause`:** at most one attempt per `readyTimeout + failurePause` (~25m at defaults)
+- **With `failurePause`:** at most one attempt per `readyTimeout + failurePause` (~25m at defaults) — this remains the ceiling on same-claim retries inside one occurrence: the window-aware clamp paces retries this way while a step down to `retryBackoff` still fits, and once it doesn't, the escalated wait stands and that claim gets no further attempt in the occurrence at all
 - `failurePause` is separate from `cooldownAfter` — lowering settle for throughput never weakens cost bounds
+- `retryBackoff` still escalates per claim and still governs the wait between occurrences. It is also the clamp's floor, so raising it can make a claim reach "nothing fits" sooner and discard the rest of the window for that claim — a blunt, per-claim lever, not a reliable bound on the pool-wide attempt rate: several claims can be in backoff and retrying independently at once
 - `noderotation_retry_count` alerts on the pattern (§4.2)
