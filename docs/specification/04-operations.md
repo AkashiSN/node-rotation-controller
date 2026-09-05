@@ -202,7 +202,7 @@ The placeholder's `PriorityClass` is installed **statically by the Helm chart** 
 ## 4.4 Cost
 
 ::: tip Key point
-Each rotation creates ~10–20 minutes of overlap billing. Inside one maintenance-window occurrence, `readyTimeout` + `failurePause` bounds the pacing of repeated attempts, not the escalating `retryBackoff`: the window-aware backoff clamp (§3.2) holds a failed claim's retry inside the occurrence it failed in, so `retryBackoff` no longer ends the window early on its own, and it does not bound the pool-wide attempt rate — it escalates per claim, and several claims can alternate independently.
+Each rotation creates ~10–20 minutes of overlap billing. Inside one maintenance-window occurrence, `readyTimeout` + `failurePause` bounds the pacing of repeated attempts. The window-aware backoff clamp (§3.2) keeps the escalating `retryBackoff` from ending the occurrence early only while a step down to `retryBackoff` itself still fits inside it; once not even `retryBackoff` fits, the escalated wait stands and the claim carries over to the next occurrence instead. `retryBackoff` is the clamp's floor, so raising it can reduce a claim's attempts by reaching that point sooner — but it acts per claim and can discard the rest of the window for that claim, so `failurePause` remains the direct, pool-wide pacing control; several claims can be in backoff and retrying independently at once.
 :::
 
 ### Normal rotation cost
@@ -225,7 +225,7 @@ A failed attempt can bill a surge node up to `readyTimeout` (after which it is r
 | Pool-level `failurePause` | Candidate cycling under systematic failure |
 
 - **Without `failurePause`:** a systematic cause would move to the next candidate within ~1 minute, burning a `readyTimeout`-worth of billing per candidate
-- **With `failurePause`:** at most one attempt per `readyTimeout + failurePause` (~25m at defaults) — this is also the ceiling on same-claim retries inside one occurrence, since the window-aware clamp keeps `retryBackoff` from ending the window early
+- **With `failurePause`:** at most one attempt per `readyTimeout + failurePause` (~25m at defaults) — this remains the ceiling on same-claim retries inside one occurrence: the window-aware clamp paces retries this way while a step down to `retryBackoff` still fits, and once it doesn't, the escalated wait stands and that claim gets no further attempt in the occurrence at all
 - `failurePause` is separate from `cooldownAfter` — lowering settle for throughput never weakens cost bounds
-- `retryBackoff` still escalates per claim and still governs the wait between occurrences, but inside one occurrence it does not bound the pool-wide attempt rate: several claims can be in backoff and retrying independently at once
+- `retryBackoff` still escalates per claim and still governs the wait between occurrences. It is also the clamp's floor, so raising it can make a claim reach "nothing fits" sooner and discard the rest of the window for that claim — a blunt, per-claim lever, not a reliable bound on the pool-wide attempt rate: several claims can be in backoff and retrying independently at once
 - `noderotation_retry_count` alerts on the pattern (§4.2)

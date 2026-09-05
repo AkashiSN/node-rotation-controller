@@ -1310,8 +1310,9 @@ func (r *RotationReconciler) advanceDraining(ctx context.Context, pool *karpv1.N
 
 // advanceFailed handles a failed claim still anchored: terminal if it is being
 // deleted (the backstop reached a rolled-back claim); else re-enter pending when
-// every start gate passes past the escalated backoff, or repair a torn failure
-// write by releasing the gate while preserving the pause anchor (spec §5.2).
+// every start gate passes past the effective (window-aware) backoff, or repair a
+// torn failure write by releasing the gate while preserving the pause anchor
+// (spec §5.2).
 func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim) (ctrl.Result, error) {
 	if cand.DeletionTimestamp != nil {
 		out, err := r.markExpired(ctx, cand.Name, nil, annotations.StateFailed)

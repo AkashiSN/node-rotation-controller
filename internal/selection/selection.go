@@ -227,9 +227,9 @@ func eligible(c *Claim, in Inputs) bool {
 }
 
 // stateAllows reports whether the claim's noderotation.io/state permits a fresh
-// selection: empty (fresh) always, failed only past its escalated backoff;
-// pending/draining (in-flight, driven by §5.2 step 1) and expired (terminal)
-// never.
+// selection: empty (fresh) always, failed only past its effective (window-aware)
+// backoff; pending/draining (in-flight, driven by §5.2 step 1) and expired
+// (terminal) never.
 func stateAllows(c *Claim, in Inputs) bool {
 	switch c.Annotations[annotations.State] {
 	case "":
