@@ -553,3 +553,289 @@ func TestShortestIdleGapEmpty(t *testing.T) {
 		t.Errorf("ShortestIdleGap on empty schedule = (%v, %v), want (0, false)", got, ok)
 	}
 }
+
+// The one-minute coarse walk in OccurrenceBounds is only complete when every
+// membership boundary lands on a whole UTC minute, which holds exactly when every
+// zone offset in effect and every zone transition is minute-aligned. Historical
+// IANA offsets break it: Africa/Monrovia ran at -00:44:30 until 1972-01-07, so a
+// Monrovia entry's boundaries fall 30 seconds off the minute lattice and a union
+// containing one can have a sub-minute gap the walk would step over.
+func TestMinuteAlignedZonesRejectsSubMinuteOffsets(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "Africa/Monrovia", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "12:00"},
+	})
+	dirty := time.Date(1971, 6, 1, 12, 0, 0, 0, time.UTC)
+	if s.minuteAlignedZones(dirty, dirty.Add(24*time.Hour)) {
+		t.Error("Monrovia at -00:44:30 must be rejected")
+	}
+	clean := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	if !s.minuteAlignedZones(clean, clean.Add(7*24*time.Hour)) {
+		t.Error("contemporary Monrovia (offset 0) must be accepted")
+	}
+}
+
+// A DST transition is minute-aligned, so a week containing one must still pass.
+// If this fails the audit is over-strict and would disable the clamp for every
+// schedule twice a year.
+func TestMinuteAlignedZonesAcceptsDSTWeek(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "America/New_York", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "01:00", End: "04:00"},
+	})
+	// 2026-03-08 is the US spring-forward; 2026-11-01 the fall-back.
+	for _, when := range []time.Time{
+		time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC),
+	} {
+		if !s.minuteAlignedZones(when, when.Add(7*24*time.Hour)) {
+			t.Errorf("a week containing a DST transition must be accepted; from %s", when)
+		}
+	}
+}
+
+// The audit must cover the span the search actually walks, which runs BACKWARD
+// for the occurrence start as well as forward for its end. Monrovia leaves
+// -00:44:30 at 1972-01-07T00:44:30Z, so at this instant the forward week is clean
+// while the backward week is not: a forward-only audit passes and the start search
+// can then merge across a sub-minute gap.
+func TestMinuteAlignedZonesCoversTheBackwardSpan(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "Africa/Monrovia", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "12:00"},
+	})
+	now := time.Date(1972, 1, 10, 12, 0, 0, 0, time.UTC)
+	week := 7 * 24 * time.Hour
+	if !s.minuteAlignedZones(now, now.Add(week)) {
+		t.Fatal("fixture invalid: the forward span must look clean, or this proves nothing")
+	}
+	if s.minuteAlignedZones(now.Add(-week), now) {
+		t.Error("the backward span reaches -00:44:30 and must be rejected")
+	}
+}
+
+// The ordinary case, and the one that pins exactness: now carries a sub-minute
+// phase, so a bracket-only implementation returns bounds offset by that phase and
+// passes nothing else in this file. 05:10:37.123456789 must still yield exactly
+// [05:00:00, 06:30:00).
+func TestOccurrenceBoundsAreExactRegardlessOfSamplingPhase(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "UTC", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "05:00", End: "06:30"},
+	})
+	now := time.Date(2026, 9, 4, 5, 10, 37, 123456789, time.UTC)
+	start, end, ok := s.OccurrenceBounds(now)
+	if !ok {
+		t.Fatal("want ok")
+	}
+	wantStart := time.Date(2026, 9, 4, 5, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 9, 4, 6, 30, 0, 0, time.UTC)
+	if !start.Equal(wantStart) || !end.Equal(wantEnd) {
+		t.Errorf("got [%s, %s), want [%s, %s)",
+			start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano),
+			wantStart.Format(time.RFC3339Nano), wantEnd.Format(time.RFC3339Nano))
+	}
+}
+
+// Out of window there is no occurrence to report.
+func TestOccurrenceBoundsOutOfWindow(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "UTC", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "05:00", End: "06:30"},
+	})
+	if _, _, ok := s.OccurrenceBounds(time.Date(2026, 9, 4, 7, 0, 0, 0, time.UTC)); ok {
+		t.Error("want ok=false outside every window")
+	}
+}
+
+// The union is the effective window (spec §3.1), so two adjacent entries are ONE
+// occurrence. 05:00-06:00 followed by 06:00-07:00 must report [05:00, 07:00).
+func TestOccurrenceBoundsJoinsAdjacentEntries(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "UTC", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "05:00", End: "06:00"},
+		{Timezone: "UTC", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "06:00", End: "07:00"},
+	})
+	start, end, ok := s.OccurrenceBounds(time.Date(2026, 9, 4, 5, 30, 0, 0, time.UTC))
+	if !ok {
+		t.Fatal("want ok")
+	}
+	if want := time.Date(2026, 9, 4, 5, 0, 0, 0, time.UTC); !start.Equal(want) {
+		t.Errorf("start: got %s, want %s", start, want)
+	}
+	if want := time.Date(2026, 9, 4, 7, 0, 0, 0, time.UTC); !end.Equal(want) {
+		t.Errorf("end: got %s, want %s", end, want)
+	}
+}
+
+// A union that genuinely spans midnight needs a SECOND TIMEZONE. ParseHHMM caps
+// End at 23:59 and Validate rejects start >= end, so an entry can never include
+// the 23:59-00:00 minute; two same-zone entries therefore always leave that minute
+// as a gap and never join. Here a Europe/Berlin Saturday entry (UTC+1 in December)
+// covers UTC Friday 23:59 onward, so the union runs from Friday 23:00 to Saturday
+// 01:00 UTC. Verified before this plan was written: without the Berlin entry the
+// occurrence stops at 23:59.
+func TestOccurrenceBoundsSpansMidnightAcrossTimezones(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "UTC", Days: []string{"Fri"}, Start: "23:00", End: "23:59"},
+		{Timezone: "Europe/Berlin", Days: []string{"Sat"}, Start: "00:59", End: "02:00"},
+	})
+	// 2026-12-04 is a Friday and Berlin is UTC+1 that month.
+	start, end, ok := s.OccurrenceBounds(time.Date(2026, 12, 4, 23, 30, 0, 0, time.UTC))
+	if !ok {
+		t.Fatal("want ok")
+	}
+	if want := time.Date(2026, 12, 4, 23, 0, 0, 0, time.UTC); !start.Equal(want) {
+		t.Errorf("start: got %s, want %s", start.UTC(), want)
+	}
+	if want := time.Date(2026, 12, 5, 1, 0, 0, 0, time.UTC); !end.Equal(want) {
+		t.Errorf("end: got %s, want %s — the union must cross midnight, not stop at 23:59", end.UTC(), want)
+	}
+}
+
+// Entries in different zones overlap in real time; the union of both is one
+// occurrence. Tokyo 14:00-15:00 JST is 05:00-06:00 UTC, so with a UTC 05:30-07:00
+// entry the union is [05:00, 07:00) UTC.
+func TestOccurrenceBoundsUnionAcrossTimezones(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "Asia/Tokyo", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "14:00", End: "15:00"},
+		{Timezone: "UTC", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "05:30", End: "07:00"},
+	})
+	start, end, ok := s.OccurrenceBounds(time.Date(2026, 9, 4, 5, 45, 0, 0, time.UTC))
+	if !ok {
+		t.Fatal("want ok")
+	}
+	if want := time.Date(2026, 9, 4, 5, 0, 0, 0, time.UTC); !start.Equal(want) {
+		t.Errorf("start: got %s, want %s", start, want)
+	}
+	if want := time.Date(2026, 9, 4, 7, 0, 0, 0, time.UTC); !end.Equal(want) {
+		t.Errorf("end: got %s, want %s", end, want)
+	}
+}
+
+// DST, the case the discarded wall-clock construction would have failed — with a
+// sub-minute sampling phase on top, so the DST boundary and the refinement are
+// exercised together rather than one at a time. An entry
+// whose local close falls INSIDE the spring-forward gap has no such local instant;
+// the boundary is where membership actually changes, which is the transition.
+// New_York normalizes a constructed 02:30 backward to 01:30 EST, Berlin forward to
+// 03:30 CEST, so both directions are covered.
+func TestOccurrenceBoundsCloseInsideSpringForwardGap(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tz   string
+		now  time.Time // an in-window instant before the gap
+		want time.Time // the real membership boundary
+	}{
+		{
+			// 2026-03-08: 02:00 EST -> 03:00 EDT. Entry 01:00-02:30 local.
+			// Membership ends when the local clock leaves [01:00, 02:30): at the
+			// transition instant, whose local reading jumps to 03:00.
+			name: "america/new_york normalizes backward",
+			tz:   "America/New_York",
+			now:  time.Date(2026, 3, 8, 6, 45, 37, 123456789, time.UTC), // 01:45:37.123456789 EST
+			want: time.Date(2026, 3, 8, 7, 0, 0, 0, time.UTC),           // 02:00 EST = 03:00 EDT
+		},
+		{
+			// 2026-03-29: 02:00 CET -> 03:00 CEST. Entry 01:00-02:30 local.
+			name: "europe/berlin normalizes forward",
+			tz:   "Europe/Berlin",
+			now:  time.Date(2026, 3, 29, 0, 45, 37, 123456789, time.UTC), // 01:45:37.123456789 CET
+			want: time.Date(2026, 3, 29, 1, 0, 0, 0, time.UTC),           // 02:00 CET = 03:00 CEST
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSchedule(t, []policy.MaintenanceWindow{
+				{Timezone: tc.tz, Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "01:00", End: "02:30"},
+			})
+			if !s.InWindow(tc.now) {
+				t.Fatalf("fixture invalid: %s must be in window", tc.now)
+			}
+			_, end, ok := s.OccurrenceBounds(tc.now)
+			if !ok {
+				t.Fatal("want ok")
+			}
+			if !end.Equal(tc.want) {
+				t.Errorf("end: got %s, want %s", end.UTC(), tc.want)
+			}
+			if !end.After(tc.now) {
+				t.Errorf("end %s must be after now %s — a constructed wall-clock close can land in the past", end, tc.now)
+			}
+		})
+	}
+}
+
+// The fall-back fold repeats a local hour, so an entry ending inside it is in
+// window twice. The bounds must differ between the two copies, as membership does.
+func TestOccurrenceBoundsInEachCopyOfAFallBackFold(t *testing.T) {
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "America/New_York", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "01:00", End: "01:45"},
+	})
+	// 2026-11-01: 02:00 EDT -> 01:00 EST. 01:30 happens twice.
+	first := time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC)  // 01:30 EDT
+	second := time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC) // 01:30 EST
+	s1, e1, ok1 := s.OccurrenceBounds(first)
+	s2, e2, ok2 := s.OccurrenceBounds(second)
+	if !ok1 || !ok2 {
+		t.Fatalf("want ok for both copies; got %v %v", ok1, ok2)
+	}
+	if s1.Equal(s2) || e1.Equal(e2) {
+		t.Errorf("the two copies of the repeated hour must be different occurrences: [%s,%s) vs [%s,%s)",
+			s1.UTC(), e1.UTC(), s2.UTC(), e2.UTC())
+	}
+}
+
+// The coarse-walk precondition, both halves. Africa/Monrovia at -00:44:30 closes a
+// 00:00-12:00 entry at 12:44:30Z; with a UTC 12:45-23:00 entry the union has a
+// 30-second gap. now is phased so both coarse samples land in window, so a walk
+// without the audit merges the two occurrences and reports one long span.
+func TestOccurrenceBoundsRefusesASubMinuteGap(t *testing.T) {
+	monroviaUTC := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "Africa/Monrovia", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "12:00"},
+		{Timezone: "UTC", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "12:45", End: "23:00"},
+	})
+	// Africa/Lagos runs at offset 0 (aligned) until 1908-07-01T00:00:00Z and
+	// +00:13:35 (misaligned — 35s past the minute) after. now is phased so the
+	// backward span (now-horizon..now) stays entirely before the transition while
+	// the forward span (now..now+horizon) crosses into the misaligned segment,
+	// isolating the FORWARD half as the only one that can reject.
+	lagos := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "Africa/Lagos", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "12:00"},
+	})
+	for _, tc := range []struct {
+		name string
+		s    *Schedule
+		now  time.Time
+	}{
+		// Both halves are inside Monrovia's -00:44:30 segment here, so this does NOT
+		// isolate which half of the audit rejects — see "forward half, isolated"
+		// below for a variant that does.
+		{"before the gap", monroviaUTC, time.Date(1971, 6, 1, 12, 30, 20, 0, time.UTC)},
+		// After Monrovia leaves -00:44:30 (1972-01-07T00:44:30Z) the forward span is
+		// clean at offset 0 while the backward span still is not: only the BACKWARD
+		// half rejects here.
+		{"after the segment ends", monroviaUTC, time.Date(1972, 1, 10, 13, 0, 20, 0, time.UTC)},
+		// The backward span sits in Lagos's aligned (offset-0) segment while the
+		// forward span crosses into the +00:13:35 misaligned one: only the FORWARD
+		// half rejects here, pinning the half TestOccurrenceBoundsRefusesASubMinuteGap
+		// otherwise never isolates.
+		{"forward half, isolated", lagos, time.Date(1908, 6, 28, 6, 0, 20, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.s.InWindow(tc.now) {
+				t.Fatalf("fixture invalid: %s must be in window", tc.now)
+			}
+			if _, _, ok := tc.s.OccurrenceBounds(tc.now); ok {
+				t.Error("want ok=false: the minute-alignment precondition does not hold over the searched span")
+			}
+		})
+	}
+}
+
+// A union with no boundary inside the horizon reports no clamp. This is a search
+// bound, not a claim that the union is continuously open.
+func TestOccurrenceBoundsGivesUpAtTheHorizon(t *testing.T) {
+	// Two 23:59-long entries in zones nine hours apart cover each other's midnight
+	// minute, leaving no gap.
+	s := newSchedule(t, []policy.MaintenanceWindow{
+		{Timezone: "UTC", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "23:59"},
+		{Timezone: "Asia/Tokyo", Days: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Start: "00:00", End: "23:59"},
+	})
+	if _, _, ok := s.OccurrenceBounds(time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)); ok {
+		t.Error("want ok=false when no boundary is found within the horizon")
+	}
+}

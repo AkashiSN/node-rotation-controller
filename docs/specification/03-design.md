@@ -77,6 +77,10 @@ A `NodeClaim` becomes a candidate when **all** of the following hold:
 - **Heterogeneous `expireAfter`:** a younger claim with a shorter `expireAfter` can have an earlier deadline and is rotated first
 - **Operator opt-out:** `karpenter.sh/do-not-disrupt: "true"` on the Node (without `do-not-disrupt-owned` marker) excludes the claim from proactive rotation while keeping its `expireAfter` backstop
 
+The escalated backoff is **clamped to the maintenance-window occurrence the failure happened in**. Past that occurrence's remaining time the ladder stops discriminating — every step means "skip the rest of this occurrence" — so a pool that fails twice early spends the rest of its window with no eligible candidate. When the escalated retry would land at or after the close, the ladder is walked down to the largest step that still lands strictly inside it, and never below the configured `retryBackoff`. When not even `retryBackoff` fits, the escalated value stands and the claim waits for the next occurrence.
+
+The clamp applies only when the failure itself happened inside the occurrence containing the evaluation instant, under the schedule as it stands on that evaluation. It is not a historical identity: an operator edit that merges two occurrences lets a failure from the earlier one be clamped by the merged run, and a split does the converse. `retry-count` is unaffected — the escalation still climbs on every failure, and only the wait inside one occurrence is shortened.
+
 ### Deriving `ageThreshold`
 
 Rather than hand-tuning (error-prone — too loose lets Forceful Expiration fire), the controller **derives `ageThreshold` per NodePool** from the schedule and target rotation chances.

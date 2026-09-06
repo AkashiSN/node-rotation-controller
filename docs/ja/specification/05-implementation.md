@@ -84,7 +84,7 @@ flowchart TD
 
 `pick_earliest_deadline_eligible` は以下の claim を選定:
 - `deletionTimestamp` なし
-- `state` が空（新規）または `failed` でエスカレーティングバックオフ経過（`retryBackoff · 2^(retry-count − 1)`、8× で上限）
+- `state` が空（新規）または `failed` でエスカレーティングバックオフ経過（`retryBackoff · 2^(retry-count − 1)`、8× で上限）。ただし失敗が発生したメンテナンスウィンドウの発生（occurrence）にクランプされる（§3.2）
 - `pending`/`draining` は再選定されない; `expired` は終端
 
 ### anchor のセマンティクス
@@ -271,7 +271,7 @@ advance(np, name):
       # リトライは新しい試行: このパスが上位にある step 1a の static ゲート
       # （anchor により先に advance() へ入る）も通過する必要がある。
       if start_gates(np) and np.spec.replicas is unset
-         and elapsed(cand.failed-at) >= escalated_backoff(cand)
+         and elapsed(cand.failed-at) >= effective_backoff(cand)   # エスカレート済み、発生（occurrence）にクランプ（§3.2）
          and surge_headroom(np, cand):
           # failed からのみ。同じガードが下の再入も抑える: advance() はキャッシュ
           # 経由で読み直すため、この書き込みにまだ遅れている読み取りは、すべての
@@ -354,6 +354,7 @@ advance(np, name):
     - **スタンプ保持中にスケジュールを編集して現在時刻が window 外になれば、即座のクローズとして扱われる。** その時点で、その時点の census に対して発生が判定される — スタンプが書かれたときのスケジュールをコントローラーは記録していない
 - **`state`:** `expired` は終端 — forceful drain 下でファイナライズ中の claim の再選定をブロック
 - **`started-at`:** 試行ごとに write-once。failed 書き込み時にクリア（`state=failed` と単一更新）。リトライ時に再スタンプ
+- **`failed-at`:** `rotation attempt failed` のログ行と `RotationFailed` Event が報告する次の試行の時刻は、**その時点のスケジュールに基づくスナップショット**であり、下限ではない: クランプは読み取りのたびに再評価される（§3.2）ため、発生の途中で `maintenanceWindows` のエントリを延長すると、すでに報告済みの時刻よりも早く claim が再開可能になることがある。この時刻は、失敗した書き込みが永続化した `failed-at` から導出され、RFC3339 アノテーションが保持する秒単位に切り捨てられているため、再選定の述語がパースし直す時刻と同一の瞬間を指す
 - **`surge-claim`:** placeholder の bind ターゲット（`spec.nodeName`）が観測可能になり次第永続化。failed 書き込み時にクリア
 - **`surge-for`:** freeze ノード上で、freeze をこのローテーションに帰属。Pod 上で発見用にペアリング
 - **`do-not-disrupt-owned`:** コントローラーが実際に `do-not-disrupt` を適用した場合のみセット。オペレーターの既存アノテーション（マーカーなし）は変更しない

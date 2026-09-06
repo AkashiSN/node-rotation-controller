@@ -217,6 +217,46 @@ func (r *run) breachCheck(now time.Time) {
 	}
 }
 
+// selectionInputs mirrors the controller's selInputs: the same predicate needs the same
+// inputs, including the bounds of the occurrence containing now, or the simulated retry
+// cadence diverges from the real one (issue #320).
+//
+// WindowStart/WindowEnd are resolved only when views holds a failed claim.
+// OccurrenceBounds runs window's zone-and-transition-aligned audit on every call,
+// and this function is called once per simulated minute on the browser's main
+// thread — measured to dominate wall-clock time on realistic schedules (10.4x on
+// a daily window, 62x on a near-always-open one, 406x on a two-timezone
+// always-open union). The bounds are consumed by exactly one predicate,
+// selection.failedPastBackoff, reachable only for a claim already in the failed
+// state (stateAllows), so skipping the resolution otherwise changes nothing
+// observable. A future consumer of these bounds that is not gated on the failed
+// state must remove this guard, or it will silently be handed zero bounds.
+func (r *run) selectionInputs(now time.Time, views []selection.Claim) selection.Inputs {
+	in := selection.Inputs{
+		Now:          now,
+		LeadTime:     r.res.LeadTime,
+		Override:     r.res.Override,
+		RetryBackoff: r.res.RetryBackoff,
+	}
+	if hasFailedClaim(views) {
+		if start, end, ok := r.sched.OccurrenceBounds(now); ok {
+			in.WindowStart, in.WindowEnd = start, end
+		}
+	}
+	return in
+}
+
+// hasFailedClaim reports whether any claim view carries the failed state — the
+// only condition under which selectionInputs' occurrence bounds are consumed.
+func hasFailedClaim(views []selection.Claim) bool {
+	for i := range views {
+		if views[i].Annotations[annotations.State] == annotations.StateFailed {
+			return true
+		}
+	}
+	return false
+}
+
 // maybeStart runs the start gates and the pick, and starts a rotation when both pass.
 func (r *run) maybeStart(now time.Time, inWindow bool) {
 	if _, fatal := firstFatal(r.res.Derived.Findings); fatal {
@@ -241,12 +281,7 @@ func (r *run) maybeStart(now time.Time, inWindow bool) {
 	r.flushBlocked(now)
 
 	views := r.views()
-	sel := selection.Inputs{
-		Now:          now,
-		LeadTime:     r.res.LeadTime,
-		Override:     r.res.Override,
-		RetryBackoff: r.res.RetryBackoff,
-	}
+	sel := r.selectionInputs(now, views)
 	pick := selection.PickEarliestDeadlineEligible(views, sel)
 	if pick == nil {
 		r.recordCensus(now, selection.TakeCensus(views, sel))

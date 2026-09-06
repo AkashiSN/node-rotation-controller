@@ -95,6 +95,153 @@ func (s *Schedule) InWindow(now time.Time) bool {
 	return false
 }
 
+// minuteAlignedZones reports whether every zone offset in effect across the
+// half-open span [from, to), and every zone transition strictly inside it, falls
+// on a whole minute. A transition at or past `to` is deliberately not examined:
+// it is outside what the search can reach, and rejecting on it would disable the
+// clamp for an offset change that cannot affect this walk.
+//
+// It is the precondition OccurrenceBounds' one-minute coarse walk rests on.
+// Under it, a membership change can happen only at an entry's local
+// StartMin/EndMin or weekday boundary — which, within a constant whole-minute
+// offset, is a whole UTC minute — or at a transition, which the audit requires to
+// be whole-minute too. Every boundary therefore lands on the UTC minute lattice,
+// two distinct boundaries differ by at least a minute, and no maximal
+// out-of-window interval is shorter than 60 seconds, so a 60-second sample
+// lattice cannot step over one.
+//
+// Historical IANA offsets break it. Africa/Monrovia ran at -00:44:30 until
+// 1972-01-07, so a Monrovia 00:00-12:00 entry closes at 12:44:30Z; paired with a
+// UTC 12:45-23:00 entry the union has a real 30-second gap. Rejecting there costs
+// only the clamp (issue #320), never correctness elsewhere.
+//
+// The transition check is defence in depth rather than an independently reachable
+// rule. A transition instant is the ending segment's local rule time minus that
+// segment's offset, so a misaligned instant implies a misaligned offset, which the
+// offset check above has already rejected. Scanning 488 zones from 1850 to 1995
+// found no segment with an aligned offset and a misaligned end. It is kept for a
+// future tzdb carrying an off-minute LOCAL rule time, which that argument does not
+// cover.
+func (s *Schedule) minuteAlignedZones(from, to time.Time) bool {
+	for _, e := range s.entries {
+		for t := from; t.Before(to); {
+			if _, off := t.In(e.Loc).Zone(); off%60 != 0 {
+				return false
+			}
+			_, end := t.In(e.Loc).ZoneBounds()
+			// Stop at the audited span. A transition at or past `to` is outside what
+			// the search can reach, so rejecting on its alignment would disable the
+			// clamp for an offset change that cannot affect this walk.
+			if end.IsZero() || !end.Before(to) {
+				break
+			}
+			if end.Unix()%60 != 0 || end.Nanosecond() != 0 {
+				return false
+			}
+			t = end
+		}
+	}
+	return true
+}
+
+// scanStep is the coarse sampling interval of the occurrence search. It is one
+// minute because minuteAlignedZones guarantees no out-of-window interval is
+// shorter than that, so a lattice of this spacing meets every one of them.
+const scanStep = time.Minute
+
+// searchHorizon bounds how far the occurrence search looks in each direction.
+// scanMargin extends the zone audit one step past it, so a transition the walk
+// can still step onto is audited too.
+const (
+	searchHorizon = week
+	scanMargin    = scanStep
+)
+
+// OccurrenceBounds reports the real-time bounds [start, end) of the
+// maintenance-window occurrence containing now — the maximal run of instants
+// around now for which InWindow is true.
+//
+// ok is false when now is outside every window, when the minute-alignment
+// precondition does not hold across the searched span, and when no boundary is
+// found within searchHorizon. The last is a SEARCH BOUND, not a claim that the
+// union is continuously open: with entries in several timezones an offset
+// transition can temporarily fill the gap that normally separates occurrences,
+// producing a connected run longer than the horizon that does close later.
+// Callers treat every false the same way — no clamp (issue #320).
+//
+// Boundaries are derived from InWindow at real instants, never by constructing a
+// wall-clock boundary. time.Date normalizes a nonexistent local time to whichever
+// side of a spring-forward gap the offset arithmetic lands on — America/New_York
+// 02:30 becomes 01:30 EST, Europe/Berlin 02:30 becomes 03:30 CEST — so a
+// constructed close can be in the PAST. mergedOccurrences/startOffset are equally
+// unusable here: that projection pins DST to an anchor week, which is why issue
+// #303 refused to recover an occurrence start from it.
+func (s *Schedule) OccurrenceBounds(now time.Time) (time.Time, time.Time, bool) {
+	if !s.InWindow(now) {
+		return time.Time{}, time.Time{}, false
+	}
+	if !s.minuteAlignedZones(now.Add(-searchHorizon-scanMargin), now.Add(searchHorizon+scanMargin)) {
+		return time.Time{}, time.Time{}, false
+	}
+	end, ok := s.firstOutAfter(now)
+	if !ok {
+		return time.Time{}, time.Time{}, false
+	}
+	start, ok := s.firstInAtOrBefore(now)
+	if !ok {
+		return time.Time{}, time.Time{}, false
+	}
+	return start, end, true
+}
+
+// firstOutAfter returns the first instant after now at which InWindow is false.
+// The coarse walk BRACKETS the transition; the binary search then locates it
+// exactly. Both phases are needed: now carries an arbitrary sub-minute phase, so
+// the bracketing sample is up to a step late, and refinement can only find a
+// transition the walk has bracketed.
+func (s *Schedule) firstOutAfter(now time.Time) (time.Time, bool) {
+	in := now // invariant: InWindow(in)
+	for range int(searchHorizon / scanStep) {
+		out := in.Add(scanStep)
+		if !s.InWindow(out) {
+			return s.refine(in, out, false), true
+		}
+		in = out
+	}
+	return time.Time{}, false
+}
+
+// firstInAtOrBefore returns the first instant of the occurrence containing now:
+// the earliest t <= now for which InWindow holds throughout [t, now].
+func (s *Schedule) firstInAtOrBefore(now time.Time) (time.Time, bool) {
+	in := now // invariant: InWindow(in)
+	for range int(searchHorizon / scanStep) {
+		out := in.Add(-scanStep)
+		if !s.InWindow(out) {
+			return s.refine(out, in, true), true
+		}
+		in = out
+	}
+	return time.Time{}, false
+}
+
+// refine binary-searches a bracket [lo, hi] whose ends differ in membership and
+// returns the first instant of the later side. wantIn says which side hi is on:
+// true for an out->in crossing (the occurrence's start), false for in->out (its
+// end). Narrowing to a nanosecond makes the result exact rather than
+// sampling-phase dependent.
+func (s *Schedule) refine(lo, hi time.Time, wantIn bool) time.Time {
+	for hi.Sub(lo) > 1 {
+		mid := lo.Add(hi.Sub(lo) / 2)
+		if s.InWindow(mid) == wantIn {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	return hi
+}
+
 // occurrence is one occurrence of the effective maintenance window on the
 // canonical weekly timeline: it begins at start (in [0, week)) and lasts length,
 // possibly wrapping past the week boundary back toward 0.
