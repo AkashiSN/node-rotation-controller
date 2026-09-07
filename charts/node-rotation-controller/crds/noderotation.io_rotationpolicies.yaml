@@ -318,7 +318,8 @@ spec:
                       Pod's own podAntiAffinity or hostPort still refuses it, so Karpenter
                       provisions for that Pod after the drain has started. Demanding a whole node's
                       worth of cpu and memory excludes every host whose free capacity in those
-                      dimensions is short of a node's — most occupied hosts — while a genuinely
+                      dimensions is short of the candidate-sized footprint (how much of the fleet
+                      that removes depends on the pool's shape), while a genuinely
                       empty host still absorbs the placeholder, and should.
 
                       It raises the bar; it does not guarantee an empty host. The reservation is

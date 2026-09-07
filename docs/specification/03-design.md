@@ -294,7 +294,7 @@ requests = max(requests, limit)   (limit as above)
 applied to **cpu and memory** whenever the candidate has reschedulable Pods, plus every other resource the drain itself requests.
 
 ::: warning It raises the bar; it is not a guarantee
-Every host whose free cpu or memory is short of a whole node's is excluded — most occupied hosts — and a genuinely empty host (DaemonSets only) still absorbs the placeholder, which is correct: an empty host has nothing for a hostname-topology anti-affinity to bite on.
+Every host whose free cpu or memory is short of the candidate-sized footprint is excluded; how much of the fleet that removes depends on the pool's shape. A genuinely empty host (DaemonSets only) still absorbs the placeholder, which is correct: an empty host has nothing for a hostname-topology anti-affinity to bite on.
 
 It does **not** prove a host is empty. The reservation is sized from the *candidate's* allocatable, so three ordinary situations let an occupied host take it: **a larger host** (the placeholder pins the NodePool and the replicated requirements, not the instance type, so on a heterogeneous NodePool an 8-CPU host running 2 CPU has a 4-CPU candidate's worth free — the common case, not a corner one); **a host with less DaemonSet overhead** than the candidate; and **Pods that request no cpu or memory** — including Pods requesting only an accelerator or ephemeral storage, since only those two dimensions are raised — which occupy nothing the reservation measures and can still be the ones whose anti-affinity or `hostPort` refuses an evicted Pod.
 

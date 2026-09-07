@@ -64,7 +64,7 @@ type poolWarnState struct {
 	noCandidate  string            // last-logged no-candidate reason key ("" = none)
 	staticPool   types.UID         // UID of the NodePool already warned as static ("" = none)
 	phPending    map[string]string // NodeClaim name → last-logged "reason|message"
-	headroom     string            // last-warned headroom block identity, "claim|resource|refused" ("" = none)
+	headroom     string            // last-warned headroom block identity, "claim|resource|refused|refusedResource" ("" = none)
 }
 
 func newWarningEmitter(rec events.EventRecorder) *warningEmitter {
@@ -262,22 +262,26 @@ func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.N
 	msg := fmt.Sprintf(
 		"NodeClaim %s cannot be rotated: the surge placeholder needs %s %s but the NodePool has %s remaining of its spec.limits ceiling of %s (%s already provisioned). No rotation will start for this NodePool while that holds — the surge reserves replacement capacity before draining, so it consumes budget the limit does not allow. ",
 		cand.Name, hr.Want.String(), hr.Resource, hr.Remaining.String(), hr.Limit.String(), provisionedString(hr))
-	// A refused footprint cannot be provisioned on this instance type at ANY
-	// budget — the DaemonSet overhead leaves nothing to reserve — so the usual
-	// advice would send an operator to raise a limit that is not what stops them
-	// (issue #326). Say what actually has to change instead.
+	msg += "Raise spec.limits, or reduce the pool's provisioned capacity, to let the rotation proceed; until then these nodes remain subject to Karpenter's forceful expiration."
+	// A refused clamp is a second, independent condition, and the caveat is
+	// deliberately conditional. Refused means only that the CANDIDATE's own
+	// instance class has no provisionable capacity left once its DaemonSet
+	// overhead is counted — the placeholder does not pin the instance type, so
+	// Karpenter may still satisfy it on a larger type the NodePool allows. Raising
+	// the budget may therefore be the whole fix, or may leave the rotation needing
+	// a larger type to exist; the operator is told which question to ask rather
+	// than a verdict this controller cannot reach (issue #326).
 	if clamp.Refused {
 		msg += fmt.Sprintf(
-			"Raising spec.limits alone will NOT let this rotation proceed: the DaemonSet overhead on this node's instance type leaves no provisionable capacity for %s, so the placeholder cannot be sized to induce a node whatever the budget. Reduce the DaemonSet footprint or use an instance type with more headroom — or opt into surge.forcefulFallback for surge-less rotation. These nodes remain subject to Karpenter's forceful expiration.",
+			" Note that raising the budget may not be sufficient on its own: %s has no provisionable capacity left on the candidate's own instance type once its DaemonSet overhead is counted, so the placeholder can only be satisfied on a larger instance type. If the NodePool already allows one, the budget is the only thing in the way; if it does not, widen the allowed types or reduce the DaemonSet footprint — or opt into surge.forcefulFallback for surge-less rotation.",
 			clamp.RefusedResource)
-	} else {
-		msg += "Raise spec.limits, or reduce the pool's provisioned capacity, to let the rotation proceed; until then these nodes remain subject to Karpenter's forceful expiration."
 	}
 
-	// The refusal is part of the identity: moving between "budget too small" and
-	// "unprovisionable whatever the budget" is a different block with different
-	// advice, and must re-announce.
-	key := fmt.Sprintf("%s|%s|%t", cand.Name, hr.Resource, clamp.Refused)
+	// The refusal is part of the identity, including WHICH resource it names: a
+	// refusal that moves from cpu to memory is a different diagnosis with a
+	// different remedy even when the budget still runs out on the same resource
+	// first, and must re-announce rather than hide under the earlier key.
+	key := fmt.Sprintf("%s|%s|%t|%s", cand.Name, hr.Resource, clamp.Refused, clamp.RefusedResource)
 
 	w.mu.Lock()
 	defer w.mu.Unlock()

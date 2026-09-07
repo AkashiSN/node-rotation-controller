@@ -35,7 +35,7 @@ applied to **cpu and memory** whenever the candidate has reschedulable Pods, plu
 
 ### What it establishes, and what it does not
 
-It raises the bar substantially: every host whose free cpu or memory is short of a whole node's is excluded, which is most occupied hosts. A **genuinely empty** host (DaemonSets only) still absorbs the placeholder, and should — an empty host has nothing for a hostname-topology anti-affinity to bite on, so it is as good as a fresh one.
+It raises the bar: every host whose free cpu or memory is short of the candidate-sized footprint is excluded. How much of the fleet that removes is a property of the pool's shape, not something the controller can promise. A **genuinely empty** host (DaemonSets only) still absorbs the placeholder, and should — an empty host has nothing for a hostname-topology anti-affinity to bite on, so it is as good as a fresh one.
 
 It does **not** prove a host is empty, and must not be described as if it did. The reservation is sized from the **candidate's** allocatable, and three ordinary situations let an occupied host take it anyway:
 
@@ -64,6 +64,8 @@ The count of reschedulable Pods, not the request sum, decides whether to reserve
 ### Interaction with the clamp
 
 The clamp caps requests at the same `limit` this mode raises them to, so the two are the opposite directions of one ceiling and share `provisionableLimit`. Where the raw drain is at or below the limit, whole-node lifts it to the limit and the clamp then has nothing to cut. Where the raw drain already **exceeds** the limit (the [#224](https://github.com/AkashiSN/node-rotation-controller/issues/224) case) whole-node leaves it alone and the clamp lowers it, reporting `Clamped` and the shortfall exactly as it does without this mode. A **non-positive** limit is likewise left to the clamp's refusal: raising to it would reserve nothing and satisfy `surge_ready` with an empty placeholder, a silent break-before-make.
+
+`Refused` is scoped to the **candidate's own instance class** — its `status.allocatable` minus the DaemonSet overhead on it — and not to the NodePool. Since the placeholder does not pin the instance type, Karpenter may still satisfy the reservation on a larger allowed type, so a refusal is a reason the candidate's own class cannot host it, never a verdict that no node can. The `InsufficientHeadroom` Event states it as a conditional caveat for that reason. (The pre-existing `SurgeClampRefused` surface from [#224](https://github.com/AkashiSN/node-rotation-controller/issues/224) still describes the refusal as ending in an unschedulable placeholder and a rollback, which has the same scope problem on a heterogeneous pool; correcting it is out of scope here and left to a follow-up.)
 
 ## Consequences
 

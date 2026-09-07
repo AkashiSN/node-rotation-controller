@@ -1595,10 +1595,12 @@ func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool
 	if err != nil {
 		return surge.HeadroomResult{}, surge.ClampResult{}, err
 	}
-	// The clamp result travels with the verdict: a footprint the clamp REFUSES
-	// cannot be provisioned on this instance type at whatever budget, so a
-	// headroom block on top of it must not be announced as if raising spec.limits
-	// would let the rotation through (issue #326).
+	// The clamp result travels with the verdict. A REFUSED footprint is a second,
+	// independent condition — the candidate's own instance class has no
+	// provisionable capacity left once its DaemonSet overhead is counted — and
+	// since the placeholder does not pin the instance type, Karpenter may still
+	// satisfy it on a larger allowed type. The announcement needs it so the
+	// operator hears both conditions instead of only the budget (issue #326).
 	return surge.Headroom(pool, clamp.Requests), clamp, nil
 }
 

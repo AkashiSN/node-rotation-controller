@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -185,12 +186,17 @@ func TestHeadroomBlockOnRetryEmitsTheEvent(t *testing.T) {
 	}
 }
 
-// A footprint the clamp would REFUSE — the DaemonSet overhead on the candidate's
-// instance type leaves nothing to reserve — can also be short of the pool's
-// budget, and then the headroom gate blocks first and the refusal is never
-// reached. Announcing "raise spec.limits to let the rotation proceed" there is
-// false: raising them only surfaces the refusal next, and the placeholder is
-// unprovisionable either way. The Event has to say so.
+// A footprint the clamp would REFUSE — the candidate's own instance class has no
+// provisionable capacity left once its DaemonSet overhead is counted — can also
+// be short of the pool's budget, and then the headroom gate blocks first and the
+// refusal is never reached. The operator has to hear both conditions.
+//
+// The caveat is deliberately CONDITIONAL, and an earlier version of this test
+// pinned the opposite. Refused is scoped to the candidate's class: the
+// placeholder does not pin the instance type, so Karpenter may still satisfy the
+// reservation on a larger type the NodePool allows, in which case raising the
+// budget really is the whole fix. Asserting "raising limits will not help" would
+// be a verdict this controller cannot reach.
 func TestHeadroomBlockNamesAnUnprovisionableReservation(t *testing.T) {
 	// allocatable == DaemonSet overhead → no capacity to reserve on this type.
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
@@ -213,11 +219,69 @@ func TestHeadroomBlockNamesAnUnprovisionableReservation(t *testing.T) {
 	if len(evs) != 1 {
 		t.Fatalf("want 1 Event, got %d: %v", len(evs), evs)
 	}
-	if containsLine(evs, "to let the rotation proceed") {
-		t.Errorf("the Event must not promise that raising limits alone resolves an unprovisionable reservation: %v", evs)
+	// The budget really is blocking, so the ordinary advice stays.
+	if !containsLine(evs, "Raise spec.limits") {
+		t.Errorf("the Event must still name the budget that is blocking: %v", evs)
 	}
-	if !containsLine(evs, "DaemonSet") {
-		t.Errorf("the Event must name the reason the reservation cannot be provisioned at all: %v", evs)
+	// And the second condition is stated as a caveat, scoped to the candidate's
+	// own instance type rather than asserted as unprovisionable everywhere.
+	if !containsLine(evs, "may not be sufficient on its own", "DaemonSet", "larger instance type") {
+		t.Errorf("the Event must add the refusal caveat with its scope: %v", evs)
+	}
+	if containsLine(evs, "whatever the budget") || containsLine(evs, "will NOT let this rotation proceed") {
+		t.Errorf("the caveat must not claim the reservation is unprovisionable on every type: %v", evs)
+	}
+}
+
+// The refusal names a resource of its own, and it can move independently of the
+// resource headroom blocks on: a DaemonSet change can shift the exhausted
+// dimension from cpu to memory while the budget still runs out on cpu first.
+// That is a different diagnosis with a different remedy, so it has to
+// re-announce — which it only does if the refused resource is part of the
+// identity, not just the fact of refusal.
+func TestHeadroomBlockRefiresWhenTheRefusedResourceChanges(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
+		ncAllocatable("cpu", "300m", "memory", "1Gi"))
+	pool := withTGP(testNodePool(nil))
+	// 100m: the 300m whole-node cpu request never fits, so headroom always blocks
+	// on cpu whichever dimension the clamp refuses.
+	pool.Spec.Limits = karpv1.Limits{corev1.ResourceCPU: resource.MustParse("100m")}
+	ds := asDaemonSet(workloadPod("kube-proxy", candNode, "300m", "0"))
+	rec := events.NewFakeRecorder(16)
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false),
+		workloadPod("app", candNode, "2", "1Gi"), ds)
+	r.Events = rec
+
+	if _, err := r.reconcileNodePool(context.Background(), pool, wholeNodePolicy(), mustSchedule(t)); err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	first := drain(rec)
+	if len(first) != 1 {
+		t.Fatalf("pass 1 must announce the block, got %v", first)
+	}
+	if !containsLine(first, "cpu") {
+		t.Fatalf("pass 1 must refuse on cpu: %v", first)
+	}
+
+	// The DaemonSet's footprint moves from cpu to memory: cpu becomes
+	// provisionable and memory is the exhausted dimension instead.
+	var live corev1.Pod
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "kube-proxy"}, &live); err != nil {
+		t.Fatalf("get daemonset pod: %v", err)
+	}
+	live.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("0"),
+		corev1.ResourceMemory: resource.MustParse("1Gi"),
+	}
+	if err := r.Update(context.Background(), &live); err != nil {
+		t.Fatalf("move the DaemonSet footprint: %v", err)
+	}
+
+	if _, err := r.reconcileNodePool(context.Background(), getPool(t, r), wholeNodePolicy(), mustSchedule(t)); err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	if evs := drain(rec); len(evs) != 1 {
+		t.Errorf("a different refused resource is a different block and must re-fire, got %d: %v", len(evs), evs)
 	}
 }
 
