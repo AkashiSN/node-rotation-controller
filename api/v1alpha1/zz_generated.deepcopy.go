@@ -214,6 +214,7 @@ func (in *Surge) DeepCopyInto(out *Surge) {
 	}
 	in.MatchNodeRequirements.DeepCopyInto(&out.MatchNodeRequirements)
 	out.ForcefulFallback = in.ForcefulFallback
+	out.WholeNodeReservation = in.WholeNodeReservation
 	if in.DrainEstimate != nil {
 		in, out := &in.DrainEstimate, &out.DrainEstimate
 		*out = new(v1.Duration)

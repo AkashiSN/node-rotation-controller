@@ -305,6 +305,20 @@ rotationPolicies:
         # noderotation_forceful_fallback_total when you enable this.
         forcefulFallback:
           enabled: false
+        # Opt-in, default off (spec §3.3, ADR-0005). Size the surge placeholder
+        # to a whole node's worth of what the drain needs, instead of to the
+        # reschedulable request sum, so a host already running other Pods cannot
+        # absorb it — the hosts on which an aggregate reservation can be big
+        # enough while an individual evicted Pod's own anti-affinity or hostPort
+        # still refuses the host. A genuinely empty host still absorbs it.
+        #
+        # Costs an instance of the candidate's own class per rotation, and the
+        # surge_headroom gate then tests a whole-node footprint: a pool whose
+        # spec.limits are nearly exhausted will stop starting rotations and say
+        # so with an InsufficientHeadroom Event. Check that headroom before
+        # enabling this.
+        wholeNodeReservation:
+          enabled: false
 
       # v2 (disabled in v1). The v1 parser accepts only `enabled` here; the
       # images list lands when pre-pull ships (spec §6.2 roadmap).

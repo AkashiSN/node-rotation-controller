@@ -148,6 +148,27 @@ type Surge struct {
 	// +optional
 	ForcefulFallback FeatureToggle `json:"forcefulFallback,omitempty"`
 
+	// wholeNodeReservation is the opt-in whole-node surge reservation (spec §3.3,
+	// ADR-0005). When enabled, the placeholder is sized to a whole node's worth of
+	// what the drain needs — NodeClaim.status.allocatable minus DaemonSet overhead
+	// — instead of to the reschedulable request sum.
+	//
+	// The default aggregate sizing reserves capacity that is fungible with the
+	// individual evicted Pods' placement only on a host that can accept all of
+	// them; a host already running other Pods can offer a big enough hole while a
+	// Pod's own podAntiAffinity or hostPort still refuses it, so Karpenter
+	// provisions for that Pod after the drain has started. Demanding a whole node's
+	// worth excludes exactly those hosts — a genuinely empty host still absorbs the
+	// placeholder, and should.
+	//
+	// The costs are an instance of the candidate's own class per rotation and a
+	// surge_headroom gate (§5.2 step 3) that tests a whole-node footprint, so a
+	// NodePool whose spec.limits are nearly exhausted stops starting rotations that
+	// the drain-sized placeholder would have fitted. Default off keeps the
+	// aggregate sizing.
+	// +optional
+	WholeNodeReservation FeatureToggle `json:"wholeNodeReservation,omitempty"`
+
 	// drainEstimate is the expected duration of a healthy, PDB-respecting drain. It
 	// feeds ONLY the layer-2 throughput forecast (spec §3.2): C = m·ceil(D /
 	// (provisioningEstimate + drainEstimate + cooldownAfter)). It is not a bound and

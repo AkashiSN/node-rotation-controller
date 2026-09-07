@@ -629,7 +629,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// no surge, so the headroom gate (which sizes the placeholder) does not apply.
 	surgeless := decide.SurgelessFallback(pick, gi)
 	if !surgeless {
-		hr, err := r.headroom(ctx, pool, cand)
+		hr, err := r.headroom(ctx, pool, res, cand)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -1368,7 +1368,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	now := r.now()
 	failedAt, _ := parseTime(cand.Annotations[annotations.FailedAt])
 	retry := parseInt(cand.Annotations[annotations.RetryCount])
-	hr, err := r.headroom(ctx, pool, cand)
+	hr, err := r.headroom(ctx, pool, res, cand)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1581,8 +1581,8 @@ func rotationMode(anns map[string]string) string {
 // candidate. It returns the whole result, not just the verdict, because a block
 // has to be reportable: the resource that did not fit and its numbers are what
 // an operator acts on (issue #326).
-func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (surge.HeadroomResult, error) {
-	reqs, err := r.candidateRequests(ctx, cand)
+func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim) (surge.HeadroomResult, error) {
+	reqs, err := r.candidateRequests(ctx, res, cand)
 	if err != nil {
 		return surge.HeadroomResult{}, err
 	}
@@ -1597,7 +1597,7 @@ func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool
 // to keep rotatable under a tight-but-sufficient budget (issue #224). A refused
 // clamp returns the full drain, which is correct: that rotation rolls back
 // regardless of the budget. An unscheduled candidate has none.
-func (r *RotationReconciler) candidateRequests(ctx context.Context, cand *karpv1.NodeClaim) (corev1.ResourceList, error) {
+func (r *RotationReconciler) candidateRequests(ctx context.Context, res resolved, cand *karpv1.NodeClaim) (corev1.ResourceList, error) {
 	if cand.Status.NodeName == "" {
 		return corev1.ResourceList{}, nil
 	}
@@ -1605,8 +1605,32 @@ func (r *RotationReconciler) candidateRequests(ctx context.Context, cand *karpv1
 	if err != nil {
 		return nil, err
 	}
-	requests := surge.ReschedulableRequests(pods, cand.Status.NodeName)
-	return surge.Clamp(requests, cand.Status.Allocatable, surge.DaemonSetRequests(pods, cand.Status.NodeName)).Requests, nil
+	_, clamp := placeholderSizing(pods, res, cand)
+	return clamp.Requests, nil
+}
+
+// placeholderSizing computes the requests the placeholder will carry, and is the
+// ONE definition of that sizing: createPlaceholder builds the Pod from it and
+// candidateRequests pre-checks the same value against the NodePool budget. Split
+// definitions would let the surge_headroom gate admit a footprint the placeholder
+// then exceeds — the #224 lesson, which the whole-node mode would otherwise
+// reopen by raising the placeholder above what the gate tested (issue #326).
+//
+// It returns the raw drain alongside the final sizing so the placeholder line can
+// state what the workload actually needs next to what was reserved for it.
+//
+// Order matters: whole-node raises the drain to the provisionable limit, and the
+// clamp then caps it at that same limit — so on the whole-node path the clamp is
+// a no-op except where it refuses (a non-positive limit, which whole-node leaves
+// to it deliberately), and on the default path it behaves exactly as before.
+func placeholderSizing(pods []corev1.Pod, res resolved, cand *karpv1.NodeClaim) (drain corev1.ResourceList, clamp surge.ClampResult) {
+	drain = surge.ReschedulableRequests(pods, cand.Status.NodeName)
+	daemonSet := surge.DaemonSetRequests(pods, cand.Status.NodeName)
+	requests := drain
+	if res.pol.Surge.WholeNodeReservation.Enabled {
+		requests = surge.WholeNode(drain, cand.Status.Allocatable, daemonSet)
+	}
+	return drain, surge.Clamp(requests, cand.Status.Allocatable, daemonSet)
 }
 
 // surgeReady reports whether the placeholder is Running on a Ready host distinct
@@ -1819,12 +1843,13 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	if err != nil {
 		return err
 	}
-	requests := surge.ReschedulableRequests(pods, cand.Status.NodeName)
-	// Clamp the placeholder to what Karpenter can actually provision for a fresh
-	// node of this instance type — NodeClaim.status.allocatable minus DaemonSet
-	// overhead — so a node the scheduler filled past Karpenter's per-AZ cached
-	// estimate is still rotatable (issue #224). No-op when allocatable is absent.
-	clamp := surge.Clamp(requests, cand.Status.Allocatable, surge.DaemonSetRequests(pods, cand.Status.NodeName))
+	// The same sizing the surge_headroom gate pre-checked: whole-node raises the
+	// drain to the provisionable limit when the mode is on (#326), and the clamp
+	// caps it at what Karpenter can actually provision for a fresh node of this
+	// instance type — allocatable minus DaemonSet overhead — so a node the
+	// scheduler filled past Karpenter's per-AZ cached estimate is still rotatable
+	// (issue #224). No-op when allocatable is absent.
+	requests, clamp := placeholderSizing(pods, res, cand)
 	// clamp.Requests is the full drain on both the common path and a refused clamp
 	// (DaemonSet overhead exhausts allocatable, so no clamp value induces a node —
 	// sizing the placeholder to zero would satisfy surge_ready with nothing
@@ -1866,6 +1891,14 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 		"mirrorPods", c.Mirror,
 		"completedPods", c.Completed,
 		"nodePinnedPods", c.NodePinned,
+	}
+	// Under whole-node reservation the requests are the node's, not the workload's,
+	// so the line states the drain too. Without it the reservation reads as a
+	// workload that genuinely needs a whole node, and the mode — the reason this
+	// rotation costs an instance — is invisible in the only place it is decided
+	// (issue #326).
+	if res.pol.Surge.WholeNodeReservation.Enabled {
+		kv = append(kv, "reservation", "whole-node", "drain", formatRequests(requests))
 	}
 	// Three mutually exclusive surge states, each announced on this one line and,
 	// except the common path, with a matching Event (issue #224):

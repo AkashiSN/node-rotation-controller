@@ -53,6 +53,13 @@ type Surge struct {
 	RetryBackoff          *metav1.Duration      `json:"retryBackoff"`
 	MatchNodeRequirements MatchNodeRequirements `json:"matchNodeRequirements"`
 	ForcefulFallback      FeatureToggle         `json:"forcefulFallback"` // §3.3, ADR-0001; opt-in surge-less window-bounded forceful fallback (default off)
+	// WholeNodeReservation raises the placeholder to a whole node's worth of what
+	// the drain needs, so only a host with that much free space can take it (§3.3,
+	// ADR-0005; default off). It excludes the partially-filled hosts on which the
+	// aggregate reservation stops being fungible with the individual Pods'
+	// placement, at the cost of an instance per rotation and a surge_headroom gate
+	// that tests a whole-node footprint.
+	WholeNodeReservation FeatureToggle `json:"wholeNodeReservation"`
 	// DrainEstimate is the EXPECTED drain duration used by the layer-2 throughput
 	// forecast (spec §3.2). It is not a bound: the deadline stays terminationGracePeriod.
 	// nil means unset and is NOT defaulted here — the default is min(tGP, 10m) and tGP

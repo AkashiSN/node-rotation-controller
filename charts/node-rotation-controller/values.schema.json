@@ -204,6 +204,17 @@
                       "description": "Rotate a candidate that cannot finish a graceful surge before its own deadline surge-less, in-window, via the voluntary (PDB-respecting) path."
                     }
                   }
+                },
+                "wholeNodeReservation": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Opt-in whole-node surge reservation (spec §3.3, ADR-0005). Default off.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Size the placeholder to a whole node's worth of what the drain needs, so a host already running other Pods cannot absorb it. Costs an instance of the candidate's class per rotation, and the surge_headroom gate then tests a whole-node footprint."
+                    }
+                  }
                 }
               }
             },
