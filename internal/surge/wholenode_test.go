@@ -183,8 +183,8 @@ func TestWholeNodeKeepsTheDrainWhenTheLimitIsNonPositive(t *testing.T) {
 // The case the drain-shaped test above could not reach: workload that requests
 // nothing, on a node whose DaemonSet overhead exhausts allocatable. There is no
 // drain value to keep, so leaving the mandatory dimension out produced an EMPTY
-// placeholder — one that could satisfy surge_ready while reserving nothing
-// reserved, the silent break-before-make this whole path exists to avoid. A
+// placeholder — one that could satisfy surge_ready while reserving nothing,
+// the silent break-before-make this whole path exists to avoid. A
 // whole node cannot be reserved here, and "cannot" is Clamp's refusal, so the
 // demand has to reach Clamp for it to refuse on.
 func TestWholeNodeLeavesARefusableDemandWhenAMandatoryLimitIsNonPositive(t *testing.T) {

@@ -1988,8 +1988,14 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 			// Normal: a within-band clamp is a deliberate, bounded weakening of the
 			// capacity guarantee, not a failure. It replaces the SurgeUnschedulable
 			// Warning that an in-band node would otherwise stall on.
+			//
+			// The limit is the same candidate-derived estimate the refusal is computed
+			// from, so it is named as an estimate here too: Karpenter's own estimate
+			// of the DaemonSet overhead for a fresh node can exceed the set observed
+			// on the candidate, and then even a clamped placeholder fails resource fit
+			// (issue #328).
 			r.Events.Eventf(cand, pool, corev1.EventTypeNormal, reasonSurgeClamped, actionProvisionSurge,
-				"surge placeholder clamped to Karpenter's provisionable capacity (limit %s); %s below the full drain, absorbed by placeholder preemption and Karpenter follow-up",
+				"surge placeholder clamped to the candidate-derived provisionable estimate (limit %s: its instance type's cached allocatable minus the DaemonSet overhead observed on it); %s below the full drain, absorbed by placeholder preemption and Karpenter follow-up",
 				formatRequests(clamp.Limit), formatRequests(clamp.Shortfall))
 			if exceeds {
 				// Warning: the shortfall is larger than the per-AZ band explains, so a

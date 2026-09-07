@@ -222,6 +222,17 @@ func TestPlaceholderClampedWhenNodeExceedsProvisionableCapacity(t *testing.T) {
 	if !strings.Contains(clamped, "Normal") {
 		t.Errorf("SurgeClamped must be a Normal Event, got %q", clamped)
 	}
+	// The limit it reports is the SAME candidate-derived estimate the refusal is
+	// computed from — cached allocatable minus the DaemonSet overhead observed
+	// here — so it must not be announced as capacity Karpenter definitely has.
+	// Karpenter's own estimate of the overhead for a fresh node can be larger, in
+	// which case even this clamped placeholder fails resource fit (issue #328).
+	if !containsLine([]string{clamped}, "candidate-derived provisionable estimate") {
+		t.Errorf("SurgeClamped must name the limit as an estimate: %q", clamped)
+	}
+	if containsLine([]string{clamped}, "Karpenter's provisionable capacity") {
+		t.Errorf("SurgeClamped must not report the limit as capacity Karpenter has: %q", clamped)
+	}
 	// The shortfall is inside the band, so no divergence warning.
 	for _, e := range evs {
 		if strings.Contains(e, reasonSurgeClampBandExceeded) {
