@@ -274,6 +274,7 @@ requests = min(reschedulable sum, limit)                        (per resource)
 - Uses `status.allocatable` — no instance-type or cache knowledge needed
 - If `status.allocatable` absent → clamp is a no-op
 - `surge_headroom` (§5.2) tests the **clamped** footprint
+- **Both terms are estimates**: the cached per-type `allocatable`, and the DaemonSet overhead *observed on the candidate*, which Karpenter's own estimate for a fresh node need not match. The clamp aims the placeholder at that ceiling; it does not guarantee the fit
 
 **Edge cases:**
 

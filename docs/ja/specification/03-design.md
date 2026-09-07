@@ -274,6 +274,7 @@ requests = min(再スケジュール可能合計, limit)                    （�
 - `status.allocatable` を使用 — インスタンスタイプやキャッシュの知識不要
 - `status.allocatable` が存在しない場合 → クランプは no-op
 - `surge_headroom`（§5.2）は **クランプ済み** フットプリントをテスト
+- **両項とも推定値である**: タイプごとにキャッシュされた `allocatable` と、*候補ノード上で観測された* DaemonSet オーバーヘッド（Karpenter が新規ノードに見積もる集合と一致するとは限らない）。クランプは placeholder をこの天井に合わせにいくのであって、収まることを保証はしない
 
 **エッジケース:**
 

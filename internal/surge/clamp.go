@@ -9,10 +9,13 @@ import (
 )
 
 // DaemonSetRequests sums the effective requests of the DaemonSet Pods scheduled
-// on nodeName — the overhead Karpenter adds to every node it provisions. The
-// clamp subtracts this from NodeClaim.status.allocatable to find the largest
-// placeholder Karpenter can actually fit onto a fresh node of the candidate's
-// instance type (spec §3.3).
+// on nodeName — the controller's observation of the overhead Karpenter adds to
+// a node it provisions. The clamp subtracts this from
+// NodeClaim.status.allocatable to estimate the largest placeholder that fits
+// onto a fresh node of the candidate's instance type (spec §3.3). It is an
+// estimate on both terms: the allocatable is Karpenter's cached per-type value,
+// and the overhead is the set observed HERE, which Karpenter's own estimate for
+// a fresh node need not match (issue #328).
 //
 // It sizes each Pod with the same effective-request algorithm as
 // ReschedulableRequests (resourcehelper.PodRequests). Only *running* DaemonSet
@@ -118,9 +121,10 @@ type ClampResult struct {
 	RefusedResource corev1.ResourceName
 }
 
-// Clamp caps requests at what Karpenter can actually provision for a fresh node
-// of the candidate's instance type: NodeClaim.status.allocatable minus the
-// DaemonSet overhead Karpenter adds to every node it creates (spec §3.3).
+// Clamp caps requests at a candidate-derived estimate of what Karpenter can
+// provision for a fresh node of the candidate's instance type:
+// NodeClaim.status.allocatable minus the DaemonSet overhead observed on the
+// candidate (spec §3.3).
 //
 //	limit    = allocatable − daemonSet   (per resource, floored at zero)
 //	requests = min(requests, limit)      (per resource)
@@ -130,9 +134,15 @@ type ClampResult struct {
 // scheduler filled past that estimate yields a placeholder Karpenter refuses to
 // provision ("no instance type has enough resources"). The clamp trades the full
 // capacity guarantee — the shortfall is bounded by that per-AZ band — for a
-// placeholder Karpenter can always fit; the drain absorbs the shortfall through
+// placeholder intended to fit; the drain absorbs the shortfall through
 // placeholder preemption (priority −10) plus Karpenter follow-up provisioning
 // (issue #224).
+//
+// "Intended", not guaranteed: the ceiling subtracts the DaemonSet overhead
+// OBSERVED on the candidate, and Karpenter's own estimate of the set for a fresh
+// node need not match it — the same asymmetry the refusal wording below turns
+// into a way out. Where Karpenter estimates MORE applicable overhead, even a
+// clamped placeholder can fail resource fit (issue #328).
 //
 // When allocatable is empty/absent (a NodeClaim that has not registered yet, or
 // a nil map) there is no trustworthy ceiling, so the clamp is a no-op: it returns

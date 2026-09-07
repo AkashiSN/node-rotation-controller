@@ -1877,11 +1877,11 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	}
 	// The same sizing RULE the surge_headroom gate pre-checked, on this pass's own
 	// snapshot: whole-node raises the drain to the provisionable limit when the
-	// mode is on (#326), and the clamp
-	// caps it at what Karpenter can actually provision for a fresh node of this
-	// instance type — allocatable minus DaemonSet overhead — so a node the
-	// scheduler filled past Karpenter's per-AZ cached estimate is still rotatable
-	// (issue #224). No-op when allocatable is absent.
+	// mode is on (#326), and the clamp caps it at the candidate-derived estimate
+	// of what Karpenter can provision for a fresh node of this instance type —
+	// cached allocatable minus the DaemonSet overhead observed here — so a node
+	// the scheduler filled past Karpenter's per-AZ cached estimate is still
+	// rotatable (issue #224). No-op when allocatable is absent.
 	requests, clamp := placeholderSizing(pods, res, cand)
 	// clamp.Requests is the full drain on both the common path and a refused clamp
 	// (on one resource, the candidate's cached allocatable minus the DaemonSet

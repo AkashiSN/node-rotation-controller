@@ -107,9 +107,9 @@ func WholeNode(requests, allocatable, daemonSet corev1.ResourceList, reschedulab
 // this instance type, which is Clamp's refusal case — but Clamp only examines
 // resources the requests carry, so on a mandatory dimension the demand has to be
 // left there for it to refuse on. Without that, workload whose Pods request
-// nothing produces an EMPTY placeholder: one that binds anywhere and satisfies
-// surge_ready with nothing reserved, the silent break-before-make this mode must
-// never introduce. The value asked for is the node's whole allocatable — what a
+// nothing produces an EMPTY placeholder: one that could satisfy surge_ready
+// while reserving nothing, the silent break-before-make this mode must never
+// introduce. The value asked for is the node's whole allocatable — what a
 // whole node would provide — so the refusal names the resource that cannot
 // supply it.
 //
@@ -145,11 +145,13 @@ func refusable(out corev1.ResourceList, name corev1.ResourceName, allocatable co
 	out[name] = alloc.DeepCopy()
 }
 
-// provisionableLimit is the ceiling Karpenter can actually provision for one
-// resource on a fresh node of the candidate's instance type:
-// NodeClaim.status.allocatable minus the DaemonSet overhead Karpenter adds to
-// every node it creates (spec §3.3). ok is false when allocatable does not report
-// the resource, which leaves it without a known ceiling.
+// provisionableLimit is the candidate-derived estimate of what Karpenter can
+// provision for one resource on a fresh node of the candidate's instance type:
+// NodeClaim.status.allocatable minus the DaemonSet overhead observed on the
+// candidate (spec §3.3). Both terms are estimates — see Clamp — so this is where
+// the placeholder is INTENDED to fit, not a guarantee. ok is false when
+// allocatable does not report the resource, which leaves it without a known
+// ceiling.
 //
 // It is shared by Clamp, which caps requests at it, and WholeNode, which raises
 // them to it — the two directions of the same ceiling, so they can never disagree
