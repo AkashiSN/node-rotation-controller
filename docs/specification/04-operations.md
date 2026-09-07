@@ -122,12 +122,13 @@ Every state transition emits one `INFO` log line (after the durable annotation w
 | `no rotation candidate` | `reason`, census counts |
 | `surge placeholder created` | `placeholder`, `requests`, exclusion counts, clamp info |
 | `surge placeholder is not schedulable` | `placeholder`, `reason`, `detail` |
-| `surge node ready` | `surgeNode`, `surgeWait` |
+| `surge node ready` | `surgeNode`, `surgeWait`, `surgePath` |
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
-| `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `total` |
+| `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `surgePath`, `total` |
 | `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoffTriggered` |
 
+- **`surgePath`** ∈ {`provisioned`, `absorbed`} names which §3.3 path reserved the capacity, and is what makes `surgeWait` interpretable: an `absorbed` wait measures a bind onto capacity that already existed, so it does not bound the time until the evicted Pods are running. It is **omitted**, never guessed, when no path was established — the surge-less fallback, or a surge host whose NodeClaim could not be resolved. The `RotationCompleted` Event carries the same value
 - **Level-triggered lines** (`no rotation candidate`, `surge placeholder is not schedulable`) use transition dedup — re-fire only when reason/census/message changes
 - **Debug verbosity** (`V(1)`) adds un-deduplicated per-pass findings and a heartbeat
 - **Liveness signal:** read from `controller_runtime_reconcile_total` / workqueue metrics, not from log silence

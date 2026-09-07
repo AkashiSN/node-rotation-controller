@@ -256,6 +256,10 @@ flowchart LR
 
 いずれの場合も、ホストが **surge ターゲット** になり、ローテーション中 freeze される。
 
+2 つのパスは所要時間も予約するものも大きく異なるため、コントローラーは**通ったパスを明示する**（issue #305）: `surge node ready` と `rotation complete` の各行、および `RotationCompleted` Event に `surgePath` ∈ {`provisioned`, `absorbed`} を出力し、両者の間は `surge-path` アンカーフィールドで引き継ぐ（§5.3）。
+
+パスは 1 つの問い — surge ホストの `NodeClaim` はこの試行の中で生まれたか — で決まり、ロールバックの reap ガードと**同じ述語**で評価する。そのため両者が同じホストについて食い違うことはない。報告するのは観測できる事実であって因果ではない: この試行の期間中に Karpenter が別の pending Pod のために立てたノードが placeholder を吸収した場合も `provisioned` と読める。`NodeClaim` を解決できないホストは、**推測値ではなく値なし**とする。
+
 ### placeholder のサイジングクランプ（issue #224）
 
 **問題:** Karpenter はインスタンスタイプごとに 1 つの `allocatable` 推定値をキャッシュするが、実際の allocatable は AZ ごとに高い可能性がある。キャッシュ推定値を超えて満たされたノードは、プロビジョニング不可能な placeholder を生成する。
@@ -306,7 +310,7 @@ sequenceDiagram
     end
     PH-->>C: Ready ホスト上で Running ≠ 候補 = surge_ready
     C->>New: surge ターゲットを freeze
-    C->>NP: active-rotation-state=draining, draining-at, surge-wait
+    C->>NP: active-rotation-state=draining, draining-at, surge-wait, surge-path
     C->>Old: state=draining, NodeClaim を削除
     K->>Old: graceful drain（Eviction API、PDB 適用）
     Old-->>New: 退避 Pod が確保済みキャパシティに再スケジュール
@@ -330,7 +334,9 @@ placeholder が以下を満たす必要がある:
 placeholder は 1 ノード分のキャパシティを予約する。保護は **物理的予約**: `surge_ready` は placeholder が候補以外の Ready ノード上で Running であることを要求する。新規でも既存でも、そのホストの承認は再スケジュール可能キャパシティが物理的に保持されていることを意味する。
 
 ::: warning 吸収パスの制限
-吸収パスでは、予約は集約的 — 既に他の Pod が稼働するホスト上に 1 ノード分のリクエストが保持される。個別の退避 Pod がそれを利用できない場合がある（Pod anti-affinity、`hostPort` 衝突）。コントローラーはノードレベルのキャパシティを保証; Pod ごとの配置はスケジューラーと PDB の領域（§3.5）。
+吸収パスでは、予約は集約的 — 既に他の Pod が稼働するホスト上に 1 ノード分のリクエストが保持される。個別の退避 Pod がそれを利用できない場合があり（Pod anti-affinity、`hostPort` 衝突）、その場合 Karpenter はドレイン開始*後*にその Pod のためにプロビジョニングする。コントローラーはノードレベルのキャパシティを保証; Pod ごとの配置はスケジューラーと PDB の領域（§3.5）。
+
+したがってこのパスでは `surge_wait` は退避 Pod が稼働するまでの時間を上界しない — 4 秒の待機の後ろに、ドレインの背後へ移動しただけのノード起動が隠れうる。所要時間の隣にパスを明示する理由がこれである（§4.2）: そうしなければ 2 つのパスはログ上で区別できない。
 :::
 
 ## 3.4 surge 中の保護

@@ -246,8 +246,10 @@ advance(np, name):
       if surge_ready(cand):
           host := placeholder_node(name)
           freeze(host, surge-for=name)
+          path := surge_path(host, cand.started-at)   # provisioned | absorbed | unknown
           annotate(np, active-rotation-state=draining, draining-at=now,
-                   surge-wait=now − cand.started-at)
+                   surge-wait=now − cand.started-at,
+                   surge-path=path if known)
           annotate(cand, state=draining)
           delete(cand)
           return Requeue(30s)
@@ -326,6 +328,7 @@ All state lives on Kubernetes objects — no external datastore. The NodePool's 
 | `active-rotation-state` | NodePool | `draining` | Phase mirror for completion outcome |
 | `draining-at` | NodePool | RFC3339 | Drain-duration anchor (§4.2) |
 | `surge-wait` | NodePool | Go duration | Surge-phase duration for completion log |
+| `surge-path` | NodePool | `provisioned`/`absorbed` | Which §3.3 path reserved the capacity |
 | `rotation-mode` | NodePool | `forceful-fallback` | Surge-less path marker |
 | `window-opened-at` | NodePool | RFC3339 | Observed window occurrence (§4.2) |
 | `state` | Old NodeClaim | `pending`/`draining`/`failed`/`expired` | Progress state |
@@ -349,6 +352,7 @@ All keys use the `noderotation.io/` prefix except `karpenter.sh/do-not-disrupt`.
 - **`active-rotation-state`:** written immediately before `delete(cand)`. Absence = rotation never left `pending`. Read by completion handler after old NodeClaim is gone
 - **`draining-at`:** write-once at `pending → draining`. The old NodeClaim's `deletionTimestamp` is gone by completion — needs this anchor
 - **`surge-wait`:** write-once at `pending → draining`. The old NodeClaim (`started-at` carrier) is deleted at that transition
+- **`surge-path`:** write-once at `pending → draining`, in the same update as `surge-wait` and for the same reason — the predicate that derives it needs `started-at`. It qualifies `surge-wait`: on the absorb path the reservation is aggregate capacity on a host already running other Pods, so the duration does not bound the time until the evicted Pods are running (§3.3). Absent when no path was established: the surge-less fallback has no surge phase, and a surge host whose NodeClaim cannot be resolved yields no value rather than a guessed one. What the lines report is what this field holds, never a later re-resolution — a retried transition (the claim's `state` write failing after the pool write landed) resolves the path again on a later pass, and announcing that value would name a path completion does not carry
 - **`rotation-mode`:** stamped on anchor at forceful-fallback start. Absent = default surge. Cleared with anchor on every end path
 - **`window-opened-at`:** stamped on the first in-window reconcile that finds it absent, cleared on the first out-of-window reconcile that finds it present. Its **presence** is the occurrence's identity, so no occurrence start is derived from the schedule — the weekly projection pins DST to an anchor week and would put a recovered start up to an hour out. An in-flight rotation defers the clear; an unreadable value is re-stamped in-window and cleared silently out of it. Known limits of identifying an occurrence by observation, accepted in v1:
     - **Two occurrences collapse into one report** in either of two ways: (a) no reconcile ever observes the out-of-window gap between them — a gap shorter than the reconcile interval, a controller down only across the gap, or API errors that persist through it — or (b) the gap *is* observed on every pass, but every one of those passes returns `WindowDefer` because a rotation is still in flight; a drain stuck across the gap and into the next occurrence collapses the pair this way. Either path leaves the first occurrence's stamp in place through the second, and the pair is judged and reported once, under the earlier `window-opened-at`. A later success then settles against that earlier stamp — against the merged span, not the occurrence it actually belonged to. The narrower, already-implied case is a whole window shorter than the 1-minute self-requeue: never observed, so never stamped and never reported
@@ -391,7 +395,7 @@ stateDiagram-v2
 | *(none)* | selected in window | `pending` | write anchor (first); freeze old node; cordon old node; create placeholder |
 | *(none)* | forceful fallback | `draining` | write anchor + `rotation-mode` + `draining-at`; write `state=draining`; delete old NodeClaim (surge-less) |
 | `pending` | each reconcile | `pending` | **claim** `state=pending` from `none`/`pending` (conditional, before anything else); re-assert freeze + cordon; persist `surge-claim`; recreate placeholder if missing (held during freeze) |
-| `pending` | `surge_ready` | `draining` | freeze surge target; write `draining-at` + `surge-wait`; delete old NodeClaim |
+| `pending` | `surge_ready` | `draining` | freeze surge target; write `draining-at` + `surge-wait` + `surge-path`; delete old NodeClaim |
 | `pending` | `readyTimeout` | `failed` | reap surge claim; delete placeholder; unfreeze; write `state=failed` + `last-failure-at`; clear anchor. A claim that vanished mid-rollback writes nothing: no attempt is announced, no pause stamped, and the anchor is left for completion to record a force-expiry |
 | `pending` | force-expiring | `expired` | **claim** `state=expired` from `pending` (conditional, before cleanup); emit expired once; delete placeholder; unfreeze; clear anchor |
 | `draining` | no `deletionTimestamp` | `draining` | re-issue delete (crash recovery) |
@@ -406,7 +410,7 @@ stateDiagram-v2
 ### Clearing the anchor
 
 `clear(np, anchor)` is a **single update** removing the whole rotation-scoped set:
-- `active-rotation`, `active-rotation-state`, `draining-at`, `surge-wait`, `rotation-mode`
+- `active-rotation`, `active-rotation-state`, `draining-at`, `surge-wait`, `surge-path`, `rotation-mode`
 
 No companion field can outlive the rotation. The failure path additionally writes `last-failure-at` in the same update.
 

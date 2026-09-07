@@ -71,6 +71,21 @@ const (
 	// transition; read and cleared with the anchor at completion. Absent on the
 	// surge-less forceful-fallback path, which has no surge phase.
 	SurgeWait = Prefix + "surge-wait"
+	// SurgePath names which of the two §3.3 provisioning paths reserved the surge
+	// capacity — "provisioned" (Karpenter launched a node for the placeholder) or
+	// "absorbed" (the scheduler bin-packed it onto pre-existing capacity). Like
+	// SurgeWait it is carried forward from the pending → draining transition to
+	// the single completion point, because the predicate that derives it needs the
+	// old NodeClaim's started-at, which is deleted at that transition.
+	//
+	// It qualifies SurgeWait: on the absorb path the reservation is aggregate
+	// capacity on a host already running other Pods, so a short surge_wait does
+	// not bound the time until the evicted Pods are running (issue #305). Stamped
+	// write-once in the same update as DrainingAt and SurgeWait; read and cleared
+	// with the anchor at completion. Absent on the surge-less forceful-fallback
+	// path, which has no surge phase, and whenever the surge host's NodeClaim
+	// could not be resolved — the value is never guessed.
+	SurgePath = Prefix + "surge-path"
 	// LastRotationAt is the RFC3339 completion time of the last successful
 	// rotation; the cooldownAfter start-gate anchor (spec §5.2 step 2).
 	LastRotationAt = Prefix + "last-rotation-at"
