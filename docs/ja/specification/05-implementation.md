@@ -271,9 +271,11 @@ advance(np, name):
           if out == claimed: emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
-      # リトライは新しい試行: このパスが上位にある step 1a の static ゲート
-      # （anchor により先に advance() へ入る）も通過する必要がある。
+      # リトライは新しい試行: このパスが上位にある step 1a の static ゲートと
+      # step 1b の fatal feasibility ゲート（anchor により先に advance() へ入る）も
+      # 通過する必要がある。
       if start_gates(np) and np.spec.replicas is unset
+         and no fatal feasibility finding                          # step 1b の再主張: この経路はその上にいる
          and elapsed(cand.failed-at) >= effective_backoff(cand)   # エスカレート済み、発生（occurrence）にクランプ（§3.2）
          and surge_headroom(np, cand):
           # failed からのみ。同じガードが下の再入も抑える: advance() はキャッシュ

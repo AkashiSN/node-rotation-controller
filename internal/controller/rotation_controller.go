@@ -1637,10 +1637,13 @@ func (r *RotationReconciler) candidateRequests(ctx context.Context, res resolved
 // It returns the raw drain alongside the final sizing so the placeholder line can
 // state what the workload actually needs next to what was reserved for it.
 //
-// Order matters: whole-node raises the drain to the provisionable limit, and the
-// clamp then caps it at that same limit — so on the whole-node path the clamp is
-// a no-op except where it refuses (a non-positive limit, which whole-node leaves
-// to it deliberately), and on the default path it behaves exactly as before.
+// Order matters: whole-node raises the drain towards the provisionable limit and
+// the clamp caps it at that same limit, so where the raw drain is at or below the
+// limit the clamp then has nothing to cut. Where the raw drain already EXCEEDS it
+// (the #224 case) whole-node leaves it and the clamp lowers it, reporting Clamped
+// and the shortfall exactly as it does without the mode; a non-positive limit is
+// likewise left for the clamp to refuse. On the default path it behaves exactly
+// as before.
 func placeholderSizing(pods []corev1.Pod, res resolved, cand *karpv1.NodeClaim) (drain corev1.ResourceList, clamp surge.ClampResult) {
 	drain = surge.ReschedulableRequests(pods, cand.Status.NodeName)
 	daemonSet := surge.DaemonSetRequests(pods, cand.Status.NodeName)

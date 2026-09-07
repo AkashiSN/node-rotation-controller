@@ -296,7 +296,9 @@ applied to **cpu and memory** whenever the candidate has reschedulable Pods, plu
 ::: warning It raises the bar; it is not a guarantee
 Every host whose free cpu or memory is short of a whole node's is excluded — most occupied hosts — and a genuinely empty host (DaemonSets only) still absorbs the placeholder, which is correct: an empty host has nothing for a hostname-topology anti-affinity to bite on.
 
-It does **not** prove a host is empty. Pods that request no resources occupy nothing the scheduler counts, so a host running them still has a whole node free — and such a Pod can be the one whose anti-affinity or `hostPort` refuses an evicted Pod. There is no way to express "a host with no other Pods": a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision at all (issue #96), and a required `podAntiAffinity` matching every Pod would exclude the DaemonSets every node carries.
+It does **not** prove a host is empty. The reservation is sized from the *candidate's* allocatable, so three ordinary situations let an occupied host take it: **a larger host** (the placeholder pins the NodePool and the replicated requirements, not the instance type, so on a heterogeneous NodePool an 8-CPU host running 2 CPU has a 4-CPU candidate's worth free — the common case, not a corner one); **a host with less DaemonSet overhead** than the candidate; and **Pods that request nothing**, which occupy nothing the scheduler counts and can still be the ones whose anti-affinity or `hostPort` refuses an evicted Pod.
+
+There is no way to express "a host with no other Pods": a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision at all (issue #96), and a required `podAntiAffinity` matching every Pod would exclude the DaemonSets every node carries. Adding `node.kubernetes.io/instance-type` to `surge.matchNodeRequirements.required` narrows the first residual by pinning the candidate's own type, at the cost of Karpenter's freedom to substitute types when capacity is short.
 :::
 
 - **Both bin-packing dimensions, whatever the drain declares** — a cpu-only drain that reserved only cpu could still be absorbed by a host filled with memory-only Pods. `pods` is never requested (it is not a container request); ephemeral storage and accelerators are raised only when the drain asks for them
@@ -304,7 +306,7 @@ It does **not** prove a host is empty. Pods that request no resources occupy not
 - **Does not force a larger instance:** `limit + DaemonSet = allocatable`, so the request never exceeds the candidate's own class on resource fit — though the placeholder does not pin the instance type, so Karpenter may still choose another by availability, price, or the replicated requirements
 - **A non-positive limit is left to the clamp's refusal** — raising to it would reserve nothing and satisfy `surge_ready` with an empty placeholder, a silent break-before-make. A drain already above the limit is likewise left for the clamp to lower and report
 - **`surge_headroom` (§5.2) tests the raised footprint**, so a pool whose `spec.limits` are nearly exhausted stops starting rotations and says so (`InsufficientHeadroom`, §4.3)
-- **Cost:** an extra instance per rotation, and possibly a consolidation cycle once the surge host leaves `do-not-disrupt`
+- **Cost:** an extra instance on most rotations — not all, since an empty or larger host still absorbs the reservation — and possibly a consolidation cycle once the surge host leaves `do-not-disrupt`
 
 Constraints coarser than the node — zone-level `podAntiAffinity`, `topologySpreadConstraints` — are **not** addressed: they are decided by what is in the zone, not by what is on the host. See ADR-0005 for why modelling the Pods faithfully does not address them either.
 

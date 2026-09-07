@@ -57,9 +57,11 @@ type Surge struct {
 	// bin-packing dimensions, so only a host with that much free space can take it
 	// (§3.3, ADR-0005; default off). It excludes the occupied hosts on which the
 	// aggregate reservation stops being fungible with the individual Pods'
-	// placement — a substantial reduction, not a guarantee: zero-request Pods
-	// occupy nothing the scheduler counts. Costs an extra instance per rotation and
-	// a surge_headroom gate that tests a whole-node footprint.
+	// placement — a bounded reduction, not a guarantee: the reservation is sized
+	// from the candidate, so a larger host, a host with less DaemonSet overhead, or
+	// one running only zero-request Pods can still absorb it. Costs an extra
+	// instance on most rotations and a surge_headroom gate that tests a whole-node
+	// footprint.
 	WholeNodeReservation FeatureToggle `json:"wholeNodeReservation"`
 	// DrainEstimate is the EXPECTED drain duration used by the layer-2 throughput
 	// forecast (spec §3.2). It is not a bound: the deadline stays terminationGracePeriod.

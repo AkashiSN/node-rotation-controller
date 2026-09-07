@@ -162,15 +162,21 @@ type Surge struct {
 	// dimensions is short of a node's — most occupied hosts — while a genuinely
 	// empty host still absorbs the placeholder, and should.
 	//
-	// It raises the bar; it does not guarantee an empty host. Pods that request no
-	// resources occupy nothing the scheduler counts, so a host running them still
-	// has a whole node free and can absorb the placeholder — and such a Pod can be
+	// It raises the bar; it does not guarantee an empty host. The reservation is
+	// sized from the CANDIDATE's allocatable, so an occupied host can still take it
+	// when it is a larger instance type (the placeholder pins the NodePool and the
+	// replicated requirements, not the type), when it carries less DaemonSet
+	// overhead, or when the Pods on it request no resources — and such a Pod can be
 	// exactly the one whose anti-affinity or hostPort then refuses an evicted Pod.
+	// Adding node.kubernetes.io/instance-type to matchNodeRequirements.required
+	// narrows the first of those, at the cost of Karpenter's freedom to substitute
+	// instance types.
 	//
-	// The costs are an extra instance per rotation and a surge_headroom gate (§5.2
-	// step 3) that tests a whole-node footprint, so a NodePool whose spec.limits
-	// are nearly exhausted stops starting rotations that the drain-sized
-	// placeholder would have fitted. Default off keeps the aggregate sizing.
+	// The costs are an extra instance on most rotations and a surge_headroom gate
+	// (§5.2 step 3) that tests a whole-node footprint, so a NodePool whose
+	// spec.limits are nearly exhausted stops starting rotations that the
+	// drain-sized placeholder would have fitted. Default off keeps the aggregate
+	// sizing.
 	// +optional
 	WholeNodeReservation FeatureToggle `json:"wholeNodeReservation,omitempty"`
 

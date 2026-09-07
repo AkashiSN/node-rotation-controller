@@ -83,25 +83,57 @@ func WholeNode(requests, allocatable, daemonSet corev1.ResourceList, reschedulab
 		out = corev1.ResourceList{}
 	}
 	for _, name := range binPackingResources {
-		raise(out, name, allocatable, daemonSet)
+		raise(out, name, allocatable, daemonSet, true)
 	}
 	for name := range requests {
-		raise(out, name, allocatable, daemonSet)
+		raise(out, name, allocatable, daemonSet, false)
 	}
 	return out
 }
 
 // raise lifts one resource in out to the provisionable limit, unless the limit is
-// unknown or non-positive or the existing request already meets it.
-func raise(out corev1.ResourceList, name corev1.ResourceName, allocatable, daemonSet corev1.ResourceList) {
+// unknown or the existing request already meets it.
+//
+// A non-positive limit means the DaemonSet overhead leaves nothing to reserve on
+// this instance type, which is Clamp's refusal case — but Clamp only examines
+// resources the requests carry, so on a mandatory dimension the demand has to be
+// left there for it to refuse on. Without that, workload whose Pods request
+// nothing produces an EMPTY placeholder: one that binds anywhere and satisfies
+// surge_ready with nothing reserved, the silent break-before-make this mode must
+// never introduce. The value asked for is the node's whole allocatable — what a
+// whole node would provide — so the refusal names the resource that cannot
+// supply it.
+//
+// On a non-mandatory dimension (one the drain itself requested) the drain's own
+// positive demand is already there for Clamp to refuse on, so nothing is added.
+func raise(out corev1.ResourceList, name corev1.ResourceName, allocatable, daemonSet corev1.ResourceList, mandatory bool) {
 	limit, ok := provisionableLimit(allocatable, daemonSet, name)
-	if !ok || limit.Sign() <= 0 {
+	if !ok {
+		return
+	}
+	if limit.Sign() <= 0 {
+		if mandatory {
+			refusable(out, name, allocatable)
+		}
 		return
 	}
 	if want, ok := out[name]; ok && want.Cmp(limit) >= 0 {
 		return
 	}
 	out[name] = limit
+}
+
+// refusable ensures out carries a positive demand for name, so Clamp sees the
+// resource and refuses on it rather than passing an empty request through.
+func refusable(out corev1.ResourceList, name corev1.ResourceName, allocatable corev1.ResourceList) {
+	if want, ok := out[name]; ok && want.Sign() > 0 {
+		return // the drain already demands it; Clamp will refuse on that
+	}
+	alloc := allocatable[name]
+	if alloc.Sign() <= 0 {
+		return // the node reports nothing here either — no demand to make
+	}
+	out[name] = alloc.DeepCopy()
 }
 
 // provisionableLimit is the ceiling Karpenter can actually provision for one

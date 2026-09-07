@@ -313,12 +313,16 @@ rotationPolicies:
         # Pod's own anti-affinity or hostPort still refuses the host. A genuinely
         # empty host still absorbs it, and should.
         #
-        # It raises the bar; it is not a guarantee. Pods that request no
-        # resources occupy nothing the scheduler counts, so a host running them
-        # still has a whole node free.
+        # It raises the bar; it is not a guarantee. The reservation is sized from
+        # the candidate, so an occupied host can still take it when it is a
+        # larger instance type, when it carries less DaemonSet overhead, or when
+        # the Pods on it request no resources. Adding
+        # node.kubernetes.io/instance-type to surge.matchNodeRequirements.required
+        # narrows the first of those, at the cost of Karpenter's freedom to
+        # substitute instance types.
         #
-        # Costs an extra instance per rotation, and the surge_headroom gate then
-        # tests a whole-node footprint: a pool whose spec.limits are nearly
+        # Costs an extra instance on most rotations, and the surge_headroom gate
+        # then tests a whole-node footprint: a pool whose spec.limits are nearly
         # exhausted will stop starting rotations and say so with an
         # InsufficientHeadroom Event. Check that headroom before enabling this.
         wholeNodeReservation:

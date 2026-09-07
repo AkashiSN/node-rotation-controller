@@ -37,7 +37,15 @@ applied to **cpu and memory** whenever the candidate has reschedulable Pods, plu
 
 It raises the bar substantially: every host whose free cpu or memory is short of a whole node's is excluded, which is most occupied hosts. A **genuinely empty** host (DaemonSets only) still absorbs the placeholder, and should — an empty host has nothing for a hostname-topology anti-affinity to bite on, so it is as good as a fresh one.
 
-It does **not** prove a host is empty, and must not be described as if it did. Pods that request no resources occupy nothing the scheduler counts, so a host running any number of them still has a whole node's worth free and can absorb the placeholder — and such a Pod can be exactly the one whose anti-affinity or `hostPort` then refuses an evicted Pod. There is no way to express "a host with no other Pods" here: a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision for the Pod at all (the key is in `sigs.k8s.io/karpenter` RestrictedLabels, [#96](https://github.com/AkashiSN/node-rotation-controller/issues/96)), and a required `podAntiAffinity` matching every Pod would also exclude the DaemonSets every node carries.
+It does **not** prove a host is empty, and must not be described as if it did. The reservation is sized from the **candidate's** allocatable, and three ordinary situations let an occupied host take it anyway:
+
+- **A larger host.** The placeholder pins the NodePool and the replicated requirements, not the instance type, so on a heterogeneous NodePool — the default, since Karpenter chooses among many types — an 8-CPU host running 2 CPU of workload has more than a 4-CPU candidate's worth free. This is the common case, not a corner one.
+- **A host with less DaemonSet overhead than the candidate**, whose free capacity is correspondingly larger than the reservation assumed.
+- **Pods that request nothing**, which occupy nothing the scheduler counts, so a host running any number of them still has a whole node's worth free — and such a Pod can be exactly the one whose anti-affinity or `hostPort` then refuses an evicted Pod.
+
+There is no way to express "a host with no other Pods" here: a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision for the Pod at all (the key is in `sigs.k8s.io/karpenter` RestrictedLabels, [#96](https://github.com/AkashiSN/node-rotation-controller/issues/96)), and a required `podAntiAffinity` matching every Pod would also exclude the DaemonSets every node carries.
+
+An operator who needs the first residual narrowed can add `node.kubernetes.io/instance-type` to `surge.matchNodeRequirements.required`, which replicates the candidate's own type onto the placeholder as a required term — it is a well-known Karpenter label and not restricted. That trades away Karpenter's freedom to substitute types on the provision path, which is a real cost when capacity for that type is short, so it is the operator's call rather than a default.
 
 **The mode is a bounded reduction of the failure mode, not a guarantee against it.** Every statement of its behaviour — field documentation, spec, Helm values — is worded to that standard.
 
@@ -51,7 +59,7 @@ The count of reschedulable Pods, not the request sum, decides whether to reserve
 
 ### It does not force a larger instance
 
-`limit + DaemonSet = allocatable`, so the mode's request never exceeds what the candidate's own class provides: on resource fit alone it never requires a larger type. It does not *pin* the type either — the placeholder's required affinity is the NodePool and the configured replicated requirements, so Karpenter remains free to choose a different type by availability, price, or those requirements.
+`limit + DaemonSet = allocatable`, so the mode's request never exceeds what the candidate's own class provides: on resource fit alone it never requires a larger type. It does not *pin* the type either — the placeholder's required affinity is the NodePool and the configured replicated requirements, so Karpenter remains free to choose a different type by availability, price, or those requirements, and an existing host of a larger type can absorb the reservation outright (see the residuals above).
 
 ### Interaction with the clamp
 
@@ -67,7 +75,7 @@ The clamp caps requests at the same `limit` this mode raises them to, so the two
 
 **Negative**
 
-- **An extra instance per rotation**, for the rotation's duration, plus possibly a consolidation cycle immediately after completion when a nearly-empty surge host is released from `do-not-disrupt`.
+- **An extra instance on most rotations**, for the rotation's duration, plus possibly a consolidation cycle immediately after completion when a nearly-empty surge host is released from `do-not-disrupt`. Not every rotation: the reservation is still absorbed by an empty host, by a larger one, or by one running only zero-request Pods.
 - **The `surge_headroom` gate (§5.2 step 3) then tests a whole-node footprint**, so a NodePool whose `spec.limits` are nearly exhausted stops starting rotations that the drain-sized placeholder would have fitted. This is a real behaviour regression for such pools and the main reason the mode is opt-in and default off. The same change makes that block announce itself (`InsufficientHeadroom`, §4.3) rather than only logging, so enabling the mode cannot silently stop a pool from rotating.
 
 **Neutral / unresolved**

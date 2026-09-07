@@ -178,6 +178,46 @@ func TestWholeNodeKeepsTheDrainWhenTheLimitIsNonPositive(t *testing.T) {
 	}
 }
 
+// The case the drain-shaped test above could not reach: workload that requests
+// nothing, on a node whose DaemonSet overhead exhausts allocatable. There is no
+// drain value to keep, so leaving the mandatory dimension out produced an EMPTY
+// placeholder — one that binds anywhere and satisfies surge_ready with nothing
+// reserved, the silent break-before-make this whole path exists to avoid. A
+// whole node cannot be reserved here, and "cannot" is Clamp's refusal, so the
+// demand has to reach Clamp for it to refuse on.
+func TestWholeNodeLeavesARefusableDemandWhenAMandatoryLimitIsNonPositive(t *testing.T) {
+	got := surge.WholeNode(
+		nil, // zero-request Pods sum to nothing
+		rl("cpu", "300m", "memory", "1Gi"),
+		rl("cpu", "300m", "memory", "1Gi"), // DaemonSets take all of it
+		1,
+	)
+
+	if len(got) == 0 {
+		t.Fatal("an empty result would satisfy surge_ready with nothing reserved")
+	}
+	clamped := surge.Clamp(got, rl("cpu", "300m", "memory", "1Gi"), rl("cpu", "300m", "memory", "1Gi"))
+	if !clamped.Refused {
+		t.Errorf("Clamp must refuse the reservation it cannot provision: %+v", clamped)
+	}
+}
+
+// The same hole with only one dimension exhausted: a cpu-only drain on a node
+// whose memory is fully taken by DaemonSets must not quietly reserve cpu alone.
+func TestWholeNodeRefusesWhenOneMandatoryDimensionIsExhausted(t *testing.T) {
+	got := surge.WholeNode(
+		rl("cpu", "800m"),
+		rl("cpu", "3770m", "memory", "1Gi"),
+		rl("memory", "1Gi"),
+		1,
+	)
+
+	clamped := surge.Clamp(got, rl("cpu", "3770m", "memory", "1Gi"), rl("memory", "1Gi"))
+	if !clamped.Refused {
+		t.Errorf("an exhausted memory ceiling must reach Clamp's refusal: %+v", clamped)
+	}
+}
+
 // The drain can already exceed the limit — the #224 case. Whole-node must not
 // lower it here: Clamp owns that reduction and the shortfall reporting with it.
 func TestWholeNodeNeverLowersADrainAboveTheLimit(t *testing.T) {

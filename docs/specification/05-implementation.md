@@ -272,9 +272,11 @@ advance(np, name):
           if out == claimed: emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
-      # A retry is a NEW attempt: it must also clear the step-1a static gate,
-      # which this path sits above (the anchor entered advance() first).
+      # A retry is a NEW attempt: it must also clear the step-1a static gate and
+      # the step-1b fatal feasibility gate, which this path sits above (the
+      # anchor entered advance() first).
       if start_gates(np) and np.spec.replicas is unset
+         and no fatal feasibility finding                          # step 1b, re-asserted: this path sits above it
          and elapsed(cand.failed-at) >= effective_backoff(cand)   # escalated, clamped to the occurrence (§3.2)
          and surge_headroom(np, cand):
           # only from failed. The same guard bounds the re-entry below: advance()
