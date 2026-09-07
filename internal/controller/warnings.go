@@ -269,9 +269,11 @@ func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.N
 	// (issue #326).
 	msg += "Raise spec.limits, or reduce the pool's provisioned capacity, to clear this headroom gate; until then these nodes remain subject to Karpenter's forceful expiration."
 	// A refused clamp is a second, independent condition, and it is arithmetic
-	// about ONE ceiling: the candidate's cached status.allocatable minus the
-	// DaemonSet overhead OBSERVED running on it. All it settles is that no clamp
-	// value under that ceiling reserves any of the drain. It does not reach
+	// about ONE ceiling on ONE resource: the candidate's cached status.allocatable
+	// minus the DaemonSet overhead OBSERVED running on it, for the resource Clamp
+	// returned on. All it settles is that no clamp value under that ceiling
+	// reserves any positive amount of THAT resource — the drain's others may have
+	// positive ceilings and be reservable. It does not reach
 	// schedulability — kube-scheduler decides that against real nodes, whose
 	// Node.status.allocatable can exceed the cached per-type estimate (the band
 	// the clamp is built on), so even a node of the SAME type carrying the SAME
@@ -285,8 +287,8 @@ func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.N
 	// measured and which questions to ask, never which of them is the case.
 	if clamp.Refused {
 		msg += fmt.Sprintf(
-			" Note that the budget may not be the only thing in the way: on this candidate's own values — its instance type's cached allocatable minus the DaemonSet overhead observed on it — %s has no positive ceiling left, so under that ceiling no clamp value reserves any of the drain. That does not decide whether the full-drain placeholder is schedulable. Ordinary ways it still is include a node reporting more allocatable than Karpenter's cached estimate for the type, a larger instance type the NodePool allows, and a node carrying less applicable DaemonSet overhead; which of these apply is not something this controller can determine, and they are examples rather than the full set. Widening the allowed instance types or reducing the DaemonSet footprint addresses the ones you control — or opt into surge.forcefulFallback for surge-less rotation.",
-			clamp.RefusedResource)
+			" Note that the budget may not be the only thing in the way: on this candidate's own values — its instance type's cached allocatable minus the DaemonSet overhead observed on it — %s has no positive ceiling left, so under that ceiling no clamp value reserves any positive amount of %s. That does not decide whether the full-drain placeholder is schedulable. Ordinary ways it still is include a node reporting more allocatable than Karpenter's cached estimate for the type, a larger instance type the NodePool allows, and a node carrying less applicable DaemonSet overhead; which of these apply is not something this controller can determine, and they are examples rather than the full set. Widening the allowed instance types or reducing the DaemonSet footprint addresses the ones you control — or opt into surge.forcefulFallback for surge-less rotation.",
+			clamp.RefusedResource, clamp.RefusedResource)
 	}
 
 	// The refusal is part of the identity, including WHICH resource it names: a

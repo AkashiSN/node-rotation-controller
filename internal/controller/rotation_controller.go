@@ -1884,9 +1884,10 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	// (issue #224). No-op when allocatable is absent.
 	requests, clamp := placeholderSizing(pods, res, cand)
 	// clamp.Requests is the full drain on both the common path and a refused clamp
-	// (the candidate's cached allocatable minus the DaemonSet overhead observed on
-	// it leaves no positive ceiling, so every clamp value under it would reserve
-	// nothing — a placeholder that satisfies surge_ready while holding nothing is
+	// (on one resource, the candidate's cached allocatable minus the DaemonSet
+	// overhead observed on it leaves no positive ceiling, so every clamp value
+	// under it would reserve none of that resource — a placeholder that could
+	// satisfy surge_ready while holding nothing of what the workload needs is
 	// a silent break-before-make; keep it full so only a node that genuinely has
 	// room can take it, whether or not this NodePool has one). band bounds the
 	// shortfall of a clamp that did fire.
@@ -1937,12 +1938,12 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	}
 	// Three mutually exclusive surge states, each announced on this one line and,
 	// except the common path, with a matching Event (issue #224):
-	//   - refused: the candidate's cached allocatable minus the DaemonSet overhead
-	//     observed on it leaves no positive ceiling, so no clamp value under it
-	//     would reserve any of the drain; the placeholder keeps the full drain.
-	//     Whether it is schedulable is not settled here, and the rollback that
-	//     follows if nothing can take it is an outcome, not this line's verdict
-	//     (issue #328).
+	//   - refused: on one resource, the candidate's cached allocatable minus the
+	//     DaemonSet overhead observed on it leaves no positive ceiling, so no
+	//     clamp value under it would reserve any positive amount of that resource;
+	//     the placeholder keeps the full drain. Whether it is schedulable is not
+	//     settled here, and the rollback that follows if nothing can take it is an
+	//     outcome, not this line's verdict (issue #328).
 	//   - clamped: the placeholder gives up a bounded shortfall; if that shortfall
 	//     exceeds the measured band, the controller's accounting has diverged from
 	//     the scheduler's and it says so — but still proceeds.
@@ -1953,10 +1954,13 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 		kv = append(kv, "clampRefused", clamp.RefusedResource)
 		l.Info("surge placeholder created", kv...)
 		if r.Events != nil {
-			// The refusal is arithmetic about ONE ceiling — the candidate's cached
-			// allocatable minus the DaemonSet overhead observed on it — and the only
-			// thing it settles is that no clamp value under that ceiling reserves any
-			// of the drain. It does not reach schedulability, which kube-scheduler
+			// The refusal is arithmetic about ONE ceiling on ONE resource — the
+			// candidate's cached allocatable minus the DaemonSet overhead observed on
+			// it, for the resource Clamp returned on — and the only thing it settles
+			// is that no clamp value under that ceiling reserves any positive amount
+			// of THAT resource. The drain's other resources may have positive
+			// ceilings and be reservable, so the message names the resource rather
+			// than the drain. It does not reach schedulability, which kube-scheduler
 			// decides against real nodes: Node.status.allocatable can exceed the
 			// cached per-type estimate (the very band this clamp is built on), so
 			// even a node of the SAME type carrying the SAME DaemonSets can have
@@ -1966,8 +1970,8 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 			// InsufficientHeadroom caveat describes the same value the same way
 			// (issue #326); the two must not diverge.
 			r.Events.Eventf(cand, pool, corev1.EventTypeWarning, reasonSurgeClampRefused, actionProvisionSurge,
-				"On this candidate's own values — its instance type's cached allocatable minus the DaemonSet overhead observed on it — %s has no positive ceiling left, so under that ceiling no clamp value reserves any of the drain; the surge placeholder therefore keeps the full drain rather than a zero-sized reservation that would hold nothing. This measurement does not decide whether that placeholder is schedulable. Ordinary ways it still is include a node reporting more allocatable than Karpenter's cached estimate for the type, a larger instance type the NodePool allows, and a node carrying less applicable DaemonSet overhead; which of these apply is not something this controller can determine, and they are examples rather than the full set. If nothing can take it, the placeholder stays unschedulable and the rotation rolls back at readyTimeout — widen the allowed instance types, reduce the DaemonSet footprint, or opt into surge.forcefulFallback for surge-less rotation.",
-				clamp.RefusedResource)
+				"On this candidate's own values — its instance type's cached allocatable minus the DaemonSet overhead observed on it — %s has no positive ceiling left, so under that ceiling no clamp value reserves any positive amount of %s; the surge placeholder therefore keeps the full drain rather than a reservation holding none of it. This measurement does not decide whether that placeholder is schedulable. Ordinary ways it still is include a node reporting more allocatable than Karpenter's cached estimate for the type, a larger instance type the NodePool allows, and a node carrying less applicable DaemonSet overhead; which of these apply is not something this controller can determine, and they are examples rather than the full set. If nothing can take it, the placeholder stays unschedulable and the rotation rolls back at readyTimeout — widen the allowed instance types, reduce the DaemonSet footprint, or opt into surge.forcefulFallback for surge-less rotation.",
+				clamp.RefusedResource, clamp.RefusedResource)
 		}
 	case clamp.Clamped:
 		kv = append(kv,

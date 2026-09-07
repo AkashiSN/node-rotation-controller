@@ -105,10 +105,12 @@ type ClampResult struct {
 	// exactly the resources that were clamped. Nil when Clamped is false.
 	Shortfall corev1.ResourceList
 	// Refused is true when a resource with positive demand has a non-positive
-	// limit, so no clamp value under that ceiling would reserve any of the drain.
-	// The ceiling is the candidate's CACHED allocatable minus the DaemonSet
-	// overhead observed on it, so this says nothing about whether the full-drain
-	// placeholder is schedulable anywhere — see Clamp (issue #328). Requests then
+	// limit, so no clamp value under that ceiling would reserve any positive
+	// amount of RefusedResource. It is per-resource — the loop returns on the
+	// first such resource, and the drain's others may still be reservable — and
+	// the ceiling is the candidate's CACHED allocatable minus the DaemonSet
+	// overhead observed on it, so it says nothing about whether the full-drain
+	// placeholder is schedulable anywhere. See Clamp (issue #328). Requests then
 	// carries the full un-clamped drain and Clamped is false.
 	Refused bool
 	// RefusedResource names the resource that forced the refusal. Empty unless
@@ -139,29 +141,34 @@ type ClampResult struct {
 // from allocatable is likewise left untouched — its ceiling is unknown.
 //
 // A non-positive limit on a resource with positive demand is refused, not
-// clamped. Every clamp value under that ceiling is non-positive, so clamping
-// would reserve none of the drain: a zero-request Pod merely binds to an
-// existing node and satisfies surge_ready with nothing reserved. That is
+// clamped. Every clamp value under that ceiling is non-positive, so a clamped
+// placeholder would reserve no amount of that resource at all — and one that
+// reserves nothing could satisfy surge_ready while holding nothing. That is
 // break-before-make, which v1 exposes only as the opt-in, window-bounded
 // surge.forcefulFallback (ADR-0001) — the clamp must not become it silently.
 // Refusing preserves the full drain instead. (This is the reason at limit == 0
 // too, where the arithmetic alone would admit a zero-sized placeholder beside
 // the overhead: what rules it out is that it holds nothing, not that it fails to
-// fit.)
+// fit. Nothing here says where such a Pod would land, either — that is the same
+// question the next paragraph refuses to answer.)
 //
 // Refusing establishes NOTHING about schedulability, and the caller must not
-// report it as if it did. It is arithmetic about one ceiling, and both terms of
-// that ceiling come from the candidate: the CACHED per-type allocatable Karpenter
-// plans against, and the DaemonSet overhead observed running on it. Real
-// scheduling happens elsewhere — Node.status.allocatable can exceed the cached
-// estimate, which is the whole premise of this clamp and the gap Band measures,
-// so even a node of the SAME instance type carrying the SAME DaemonSets can have
-// room for the full drain. A larger allowed instance type and a node carrying
-// less applicable overhead are two further ordinary cases, since the placeholder
-// pins the NodePool and the replicated requirements but never the instance type.
-// Those are examples, not an exhaustive set: the rollback that follows when no
-// node can take the placeholder is an outcome, never the complement of a list
-// (issue #328).
+// report it as if it did. What it establishes is arithmetic about ONE ceiling on
+// ONE resource: under the candidate's CACHED per-type allocatable minus the
+// DaemonSet overhead observed running on it, no clamp value reserves any
+// positive amount of the resource this returned on. It does not extend to the
+// rest of the drain — the loop returns on the first such resource, and the
+// others may have positive ceilings and be reservable.
+//
+// Real scheduling happens elsewhere: Node.status.allocatable can exceed the
+// cached estimate, which is the whole premise of this clamp and the gap Band
+// measures, so even a node of the SAME instance type carrying the SAME
+// DaemonSets can have room for the full drain. A larger allowed instance type
+// and a node carrying less applicable overhead are two further ordinary cases,
+// since the placeholder pins the NodePool and the replicated requirements but
+// never the instance type. Those are examples, not an exhaustive set: the
+// rollback that follows when no node can take the placeholder is an outcome,
+// never the complement of a list (issue #328).
 func Clamp(requests, allocatable, daemonSet corev1.ResourceList) ClampResult {
 	if len(allocatable) == 0 {
 		return ClampResult{Requests: requests}

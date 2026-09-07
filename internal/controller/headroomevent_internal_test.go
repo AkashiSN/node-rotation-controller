@@ -240,6 +240,15 @@ func TestHeadroomBlockNamesAnUnprovisionableReservation(t *testing.T) {
 	if !containsLine(evs, "more allocatable than", "cached estimate", "examples rather than the full set") {
 		t.Errorf("the caveat must name the band escape and mark the list as examples: %v", evs)
 	}
+	// Refused is per-resource: Clamp returns on the first resource whose ceiling
+	// is non-positive, so the other resources may still be reservable. "any of the
+	// drain" would widen that into a whole-drain claim.
+	if !containsLine(evs, "no clamp value reserves any positive amount of cpu") {
+		t.Errorf("the caveat must scope what the ceiling settles to the refused resource: %v", evs)
+	}
+	if containsLine(evs, "reserves any of the drain") {
+		t.Errorf("the caveat must not widen a per-resource refusal to the whole drain: %v", evs)
+	}
 	for _, absolute := range []string{"whatever the budget", "will NOT let this rotation proceed", "can only be satisfied on a larger instance type"} {
 		if containsLine(evs, absolute) {
 			t.Errorf("the caveat must not assert %q — Refused is scoped to the candidate: %v", absolute, evs)

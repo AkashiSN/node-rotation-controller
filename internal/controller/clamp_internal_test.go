@@ -302,10 +302,13 @@ func TestPlaceholderNotClampedWhenAllocatableEmpty(t *testing.T) {
 	}
 }
 
-// The refusal is arithmetic about ONE ceiling: the candidate's own CACHED
-// NodeClaim.status.allocatable minus the DaemonSet overhead observed running on
-// it. Under that ceiling no clamp value reserves any positive share of the
-// demanded resource — that much is exact. Everything past it is not: whether the
+// The refusal is arithmetic about ONE ceiling on ONE resource: the candidate's
+// own CACHED NodeClaim.status.allocatable minus the DaemonSet overhead observed
+// running on it, for the resource Clamp refused on. Under that ceiling no clamp
+// value reserves any positive share of THAT resource — that much is exact, and
+// no more: the drain's other resources may have positive ceilings and be
+// reservable, since Clamp returns on the first refusal it finds. Everything past
+// it is not exact either: whether the
 // full-drain placeholder finds a host is decided by kube-scheduler against real
 // nodes, whose Node.status.allocatable can EXCEED the cached per-type estimate.
 // That gap is the band the clamp itself is built on, so a node of the same type
@@ -343,9 +346,13 @@ func TestClampRefusedEventDoesNotDecideSchedulability(t *testing.T) {
 	if !containsLine(evs, "this candidate's own values", "observed on it", "memory") {
 		t.Errorf("the Event must scope the refusal to the candidate's observed values: %v", evs)
 	}
-	// The one thing the ceiling really settles.
-	if !containsLine(evs, "no clamp value reserves any of the drain") {
-		t.Errorf("the Event must state what the ceiling actually settles: %v", evs)
+	// The one thing the ceiling really settles — and it is PER RESOURCE. Clamp
+	// returns Refused on the first resource whose ceiling is non-positive while
+	// the drain demands it; the other resources may have positive ceilings and be
+	// reservable. Saying "any of the drain" widens a per-resource fact into a
+	// whole-drain one.
+	if !containsLine(evs, "no clamp value reserves any positive amount of memory") {
+		t.Errorf("the Event must state what the ceiling settles, scoped to the resource: %v", evs)
 	}
 	// And the thing it does not.
 	if !containsLine(evs, "does not decide whether", "schedulable") {
@@ -371,6 +378,7 @@ func TestClampRefusedEventDoesNotDecideSchedulability(t *testing.T) {
 		"the rotation will roll back",
 		"If neither is",
 		"cannot be induced on a node like this one",
+		"reserves any of the drain",
 	} {
 		if containsLine(evs, absolute) {
 			t.Errorf("the Event must not assert %q — the measurement does not reach it: %v", absolute, evs)

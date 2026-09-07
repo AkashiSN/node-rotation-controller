@@ -134,14 +134,16 @@ func TestClampNoOpWhenAllocatableEmpty(t *testing.T) {
 }
 
 func TestClampRefusedWhenLimitNonPositiveWithPositiveDemand(t *testing.T) {
-	// DaemonSet overhead at or above allocatable leaves no positive ceiling, so
-	// every clamp value under it would reserve none of the drain: a zero-request
-	// Pod binds to any existing node and satisfies surge_ready with nothing
-	// reserved — a silent break-before-make. Refuse instead, preserving the full
-	// drain. Both inputs are the candidate's own CACHED values, so the refusal
-	// settles nothing about whether any node can host the full-drain placeholder —
-	// a real node's allocatable can exceed the cached estimate, which is the very
-	// band this clamp trades against (issue #328).
+	// DaemonSet overhead at or above allocatable leaves that resource no positive
+	// ceiling, so every clamp value under it would reserve none of it: a
+	// placeholder holding nothing could satisfy surge_ready while reserving
+	// nothing — a silent break-before-make. Refuse instead, preserving the full
+	// drain. Two limits on what that settles (issue #328): it is per resource, the
+	// loop returning on the first refusal while the drain's others may still be
+	// reservable; and both inputs are the candidate's own CACHED values, so it
+	// says nothing about whether any node can host the full-drain placeholder — a
+	// real node's allocatable can exceed the cached estimate, which is the very
+	// band this clamp trades against.
 	for _, tc := range []struct {
 		name      string
 		daemonSet corev1.ResourceList
