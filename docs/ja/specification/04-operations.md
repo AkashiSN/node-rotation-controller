@@ -98,6 +98,7 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | NodeClaim | `ShortLead` | claim が `K` 回を保証できない |
 | NodePool | `ForcefulFallback` | surge なしローテーション開始 |
 | NodePool | `StaticNodePool` | `spec.replicas` が設定されており surge では絶対にローテーションできない（§3.3） |
+| NodePool | `InsufficientHeadroom` | `spec.limits` に placeholder の余地がなく、ローテーションを開始できない（§5.2 step 3） |
 | NodePool | `WindowMissed` | 候補が未ローテーションのままウィンドウが閉じ、その発生に帰属するローテーションが 1 件もなかった（§4.2） |
 | NodePool | `PolicyConflict` | 同一 specificity の RotationPolicy タイ — そのプールはローテーションしない（§5.4） |
 | NodePool | `GovernanceLost` | ガバナンス喪失後に in-flight ローテーションをロールバック（§5.4） |
@@ -122,6 +123,7 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | `no rotation candidate` | `reason`、census カウント |
 | `surge placeholder created` | `placeholder`, `requests`、除外カウント、クランプ情報 |
 | `surge placeholder is not schedulable` | `placeholder`, `reason`, `detail` |
+| `insufficient limits headroom; cannot surge` | `candidate`, `resource`, `want`, `remaining`, `limit` |
 | `surge node ready` | `surgeNode`, `surgeWait`, `surgePath` |
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
@@ -129,7 +131,7 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoffTriggered` |
 
 - **`surgePath`** ∈ {`provisioned`, `absorbed`} はどちらの §3.3 パスがキャパシティを予約したかを示し、`surgeWait` を解釈可能にする値である: `absorbed` の待機時間は既に存在したキャパシティへの bind を測っているだけなので、退避 Pod が稼働するまでの時間を上界しない。パスが確定しなかった場合 — surge なしのフォールバック、または surge ホストの NodeClaim を解決できなかった場合 — は推測せず **省略**する。`RotationCompleted` Event も同じ値を持つ
-- **レベルトリガー行**（`no rotation candidate`、`surge placeholder is not schedulable`）は遷移 dedup を使用 — reason/census/message が変化した場合のみ再発行
+- **レベルトリガー行**（`no rotation candidate`、`surge placeholder is not schedulable`、`insufficient limits headroom; cannot surge`）は遷移 dedup を使用 — reason/census/message が変化した場合のみ再発行
 - **デバッグ冗長性**（`V(1)`）で dedup なしの各パス findings とハートビートを追加
 - **ライブネスシグナル:** ログの沈黙ではなく `controller_runtime_reconcile_total` / workqueue メトリクスから読み取る
 

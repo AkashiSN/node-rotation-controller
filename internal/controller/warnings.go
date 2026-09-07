@@ -15,6 +15,7 @@ import (
 	"github.com/AkashiSN/node-rotation-controller/internal/decide"
 	"github.com/AkashiSN/node-rotation-controller/internal/schedule"
 	"github.com/AkashiSN/node-rotation-controller/internal/selection"
+	"github.com/AkashiSN/node-rotation-controller/internal/surge"
 )
 
 // Event action verbs (the events.k8s.io "action" field — the machine-readable
@@ -33,6 +34,11 @@ const (
 	reasonForcefulFallback = "ForcefulFallback"
 	reasonStaticNodePool   = "StaticNodePool"
 	reasonWindowMissed     = "WindowMissed"
+	// reasonInsufficientHeadroom names the surge_headroom block (spec §5.2 step 3).
+	// It is a Warning rather than a finding because the condition is a property of
+	// the pool's budget against one candidate's footprint, not of the schedule
+	// derivation (issue #326).
+	reasonInsufficientHeadroom = "InsufficientHeadroom"
 )
 
 // warningEmitter surfaces non-fatal schedule findings and per-node short-lead
@@ -58,6 +64,7 @@ type poolWarnState struct {
 	noCandidate  string            // last-logged no-candidate reason key ("" = none)
 	staticPool   types.UID         // UID of the NodePool already warned as static ("" = none)
 	phPending    map[string]string // NodeClaim name → last-logged "reason|message"
+	headroom     string            // last-warned headroom block ("" = none)
 }
 
 func newWarningEmitter(rec events.EventRecorder) *warningEmitter {
@@ -226,6 +233,61 @@ func (w *warningEmitter) ClearStaticNodePool(pool string) {
 	defer w.mu.Unlock()
 	if s := w.state[pool]; s != nil {
 		s.staticPool = ""
+	}
+}
+
+// EmitHeadroomBlocked logs and raises the Warning Event for a rotation the
+// surge_headroom gate is holding back (spec §5.2 step 3, issue #326.)
+//
+// Both call sites are level-triggered — the start gate re-evaluates every
+// longRequeue and the failed-retry gate once per effective backoff — so this
+// deduplicates on the message, which carries the claim, the resource and its
+// numbers. A different candidate, a different resource, or a budget that moved
+// is a new occurrence and re-fires; the unchanged block stays silent. That is why
+// surge.Headroom examines resources in sorted order: an unstable resource name
+// would make every pass look like a new occurrence.
+//
+// The Event is raised on the NodePool with the claim as the related object: what
+// is stuck is the pool's rotation, and the pool is where an operator looks to ask
+// why nothing is rotating.
+func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim, hr surge.HeadroomResult) {
+	msg := fmt.Sprintf(
+		"NodeClaim %s cannot be rotated: the surge placeholder needs %s %s but the NodePool has %s remaining of its spec.limits ceiling of %s (%s already provisioned). No rotation will start for this NodePool while that holds — the surge reserves replacement capacity before draining, so it consumes budget the limit does not allow. Raise spec.limits, or reduce the pool's provisioned capacity, to let the rotation proceed; until then these nodes remain subject to Karpenter's forceful expiration.",
+		cand.Name, hr.Want.String(), hr.Resource, hr.Remaining.String(), hr.Limit.String(), provisionedString(hr))
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.poolStateLocked(pool.Name)
+	if s.headroom == msg {
+		return // same block, already announced — no re-fire
+	}
+	s.headroom = msg
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
+		"insufficient limits headroom; cannot surge",
+		"candidate", cand.Name, "resource", hr.Resource,
+		"want", hr.Want.String(), "remaining", hr.Remaining.String(), "limit", hr.Limit.String())
+	if w.events != nil {
+		w.events.Eventf(pool, cand, corev1.EventTypeWarning, reasonInsufficientHeadroom, actionEvaluateNodePool, "%s", msg)
+	}
+}
+
+// provisionedString renders limit − remaining, the amount already provisioned
+// against the ceiling. It is derived rather than carried so HeadroomResult keeps
+// only the three numbers the gate itself compares.
+func provisionedString(hr surge.HeadroomResult) string {
+	used := hr.Limit.DeepCopy()
+	used.Sub(hr.Remaining)
+	return used.String()
+}
+
+// ClearHeadroomBlocked resets a NodePool's headroom dedup once the budget admits
+// the surge again, so a block that returns later is announced as the new
+// occurrence it is.
+func (w *warningEmitter) ClearHeadroomBlocked(pool string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if s := w.state[pool]; s != nil {
+		s.headroom = ""
 	}
 }
 

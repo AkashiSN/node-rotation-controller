@@ -629,14 +629,18 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// no surge, so the headroom gate (which sizes the placeholder) does not apply.
 	surgeless := decide.SurgelessFallback(pick, gi)
 	if !surgeless {
-		ok, err := r.headroomFits(ctx, pool, cand)
+		hr, err := r.headroom(ctx, pool, cand)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if !ok {
-			log.Info("insufficient limits headroom; cannot surge", "candidate", cand.Name)
+		if !hr.Fits {
+			// Level-triggered: this pass repeats every longRequeue for as long as the
+			// budget stays full, so the announcement is deduplicated on its content
+			// and the line carries the numbers an operator acts on (issue #326).
+			r.warn().EmitHeadroomBlocked(ctx, pool, cand, hr)
 			return ctrl.Result{RequeueAfter: longRequeue}, nil
 		}
+		r.warn().ClearHeadroomBlocked(pool.Name)
 	}
 	// Anchor BEFORE any other side effect: a conflict-checked, only-if-absent
 	// write (optimistic lock on resourceVersion). A racing reconcile's write
@@ -1364,7 +1368,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	now := r.now()
 	failedAt, _ := parseTime(cand.Annotations[annotations.FailedAt])
 	retry := parseInt(cand.Annotations[annotations.RetryCount])
-	headroomOK, err := r.headroomFits(ctx, pool, cand)
+	hr, err := r.headroom(ctx, pool, cand)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1377,9 +1381,21 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	// Closing it here drops through to the repair branch below, which releases the
 	// anchor and preserves the failure pause.
 	open, _ := decide.StartGate(r.gateInputs(pool, res, now))
-	if open && !staticPool(pool) &&
-		now.Sub(failedAt) >= r.effectiveBackoff(res, now, failedAt, retry) &&
-		headroomOK {
+	dueForRetry := open && !staticPool(pool) &&
+		now.Sub(failedAt) >= r.effectiveBackoff(res, now, failedAt, retry)
+	// Headroom is the one condition here that can hold a due retry back
+	// indefinitely while every other gate is open, and it was the silent one: no
+	// line, no Event, once per effective backoff, forever. Announce it only when it
+	// is the SOLE remaining blocker, so the message never blames headroom for a
+	// pause some other gate is holding (issue #326).
+	if dueForRetry {
+		if !hr.Fits {
+			r.warn().EmitHeadroomBlocked(ctx, pool, cand, hr)
+		} else {
+			r.warn().ClearHeadroomBlocked(pool.Name)
+		}
+	}
+	if dueForRetry && hr.Fits {
 		// Only from failed — the state this handler was dispatched on. That guard is
 		// also what bounds the re-entry below: advance() re-reads the claim through
 		// the cache, and a read still lagging this very write dispatches straight back
@@ -1561,12 +1577,16 @@ func rotationMode(anns map[string]string) string {
 
 // ── Surge readiness / induced-claim resolution ─────────────────────────────
 
-func (r *RotationReconciler) headroomFits(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (bool, error) {
+// headroom evaluates the surge_headroom gate (spec §5.2 step 3) for this
+// candidate. It returns the whole result, not just the verdict, because a block
+// has to be reportable: the resource that did not fit and its numbers are what
+// an operator acts on (issue #326).
+func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (surge.HeadroomResult, error) {
 	reqs, err := r.candidateRequests(ctx, cand)
 	if err != nil {
-		return false, err
+		return surge.HeadroomResult{}, err
 	}
-	return surge.FitsHeadroom(pool, reqs), nil
+	return surge.Headroom(pool, reqs), nil
 }
 
 // candidateRequests sums the reschedulable Pod requests on the candidate node
