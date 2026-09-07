@@ -69,8 +69,10 @@ var binPackingResources = []corev1.ResourceName{corev1.ResourceCPU, corev1.Resou
 //   - a non-positive limit on a resource the drain requested — its own positive
 //     demand stays for Clamp to refuse on. On a MANDATORY dimension there may be
 //     no such demand, so one is made (see raise): raising to a non-positive limit
-//     would reserve nothing and satisfy surge_ready with an empty placeholder, a
-//     silent break-before-make.
+//     would reserve none of that resource, letting surge_ready be satisfied with
+//     that dimension unreserved — and where the drain requests nothing else, with
+//     an empty placeholder reserving nothing at all. Either way a silent
+//     break-before-make.
 //
 // A drain already above the limit is left alone: Clamp lowers it and reports the
 // shortfall (issue #224).

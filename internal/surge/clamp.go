@@ -142,15 +142,20 @@ type ClampResult struct {
 //
 // A non-positive limit on a resource with positive demand is refused, not
 // clamped. Every clamp value under that ceiling is non-positive, so a clamped
-// placeholder would reserve no amount of that resource at all — and one that
-// reserves nothing could satisfy surge_ready while holding nothing. That is
-// break-before-make, which v1 exposes only as the opt-in, window-bounded
-// surge.forcefulFallback (ADR-0001) — the clamp must not become it silently.
-// Refusing preserves the full drain instead. (This is the reason at limit == 0
-// too, where the arithmetic alone would admit a zero-sized placeholder beside
-// the overhead: what rules it out is that it holds nothing, not that it fails to
-// fit. Nothing here says where such a Pod would land, either — that is the same
-// question the next paragraph refuses to answer.)
+// placeholder would reserve NONE OF THAT RESOURCE while the drain demands it —
+// and could then satisfy surge_ready with that dimension of the drain
+// unreserved. That is break-before-make on that dimension, which v1 exposes only
+// as the opt-in, window-bounded surge.forcefulFallback (ADR-0001) — the clamp
+// must not become it silently. Refusing preserves the full drain instead.
+//
+// The placeholder need not be empty for this to bite: with a positive cpu
+// ceiling and a zero memory ceiling it would still carry cpu, and the memory the
+// evicted Pods need would simply have no reservation behind it. That is also the
+// reason at limit == 0, where a zero request for that one resource is
+// arithmetically admissible beside the overhead: what rules it out is that it
+// holds none of the demand, not that it fails to fit. Nothing here says where
+// such a Pod would land, either — that is the question the next paragraph
+// refuses to answer.
 //
 // Refusing establishes NOTHING about schedulability, and the caller must not
 // report it as if it did. What it establishes is arithmetic about ONE ceiling on

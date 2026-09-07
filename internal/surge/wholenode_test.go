@@ -162,9 +162,11 @@ func TestWholeNodeLeavesResourcesWithNoReportedCeiling(t *testing.T) {
 }
 
 // DaemonSet overhead can exhaust allocatable. Raising to a non-positive limit
-// would reserve nothing at all and satisfy surge_ready with an empty placeholder
-// — a silent break-before-make. The drain is kept so Clamp refuses it and the
-// rotation rolls back, exactly as it does without this mode.
+// would reserve none of that resource, letting surge_ready be satisfied with
+// that dimension of the drain unreserved — a silent break-before-make on it, and
+// where the drain requests nothing else, an empty placeholder reserving nothing
+// at all. The drain is kept so Clamp refuses it, exactly as it does without this
+// mode (issue #328 for the per-resource scope).
 func TestWholeNodeKeepsTheDrainWhenTheLimitIsNonPositive(t *testing.T) {
 	got := surge.WholeNode(
 		rl("cpu", "800m"),

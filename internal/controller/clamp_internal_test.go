@@ -101,11 +101,14 @@ func TestPlaceholderClampWarnsWhenShortfallExceedsBand(t *testing.T) {
 	}
 }
 
-// DaemonSet overhead at or above the NodeClaim's cached allocatable leaves no
-// positive ceiling, so every clamp value under it would reserve none of the
-// drain. Clamping to zero would bind a zero-request Pod anywhere and satisfy
-// surge_ready with nothing reserved — a silent break-before-make. The clamp is
-// refused: the placeholder keeps the full drain (issue #224). What this test
+// DaemonSet overhead at or above the NodeClaim's cached allocatable leaves that
+// resource no positive ceiling, so every clamp value under it would reserve none
+// of it. This fixture is exactly the case that makes the distinction matter: the
+// cpu ceiling is positive and only memory is refused, so a clamped placeholder
+// would still carry 1200m of cpu — not an empty Pod — while satisfying
+// surge_ready with the 500Mi the evicted Pods need entirely unreserved. That is
+// the break-before-make, on that one dimension. The clamp is refused instead:
+// the placeholder keeps the full drain (issue #224). What this test
 // pins is the sizing and the announcement; whether the placeholder then goes
 // unschedulable is not decided by that ceiling at all, and
 // TestClampRefusedEventDoesNotDecideSchedulability pins the Event saying so

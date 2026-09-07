@@ -135,10 +135,11 @@ func TestClampNoOpWhenAllocatableEmpty(t *testing.T) {
 
 func TestClampRefusedWhenLimitNonPositiveWithPositiveDemand(t *testing.T) {
 	// DaemonSet overhead at or above allocatable leaves that resource no positive
-	// ceiling, so every clamp value under it would reserve none of it: a
-	// placeholder holding nothing could satisfy surge_ready while reserving
-	// nothing — a silent break-before-make. Refuse instead, preserving the full
-	// drain. Two limits on what that settles (issue #328): it is per resource, the
+	// ceiling, so every clamp value under it would reserve none of it: the
+	// placeholder could then satisfy surge_ready with that dimension of the drain
+	// unreserved — a silent break-before-make on it, whether or not the
+	// placeholder still carries other resources. Refuse instead, preserving the
+	// full drain. Two limits on what that settles (issue #328): it is per resource, the
 	// loop returning on the first refusal while the drain's others may still be
 	// reservable; and both inputs are the candidate's own CACHED values, so it
 	// says nothing about whether any node can host the full-drain placeholder — a

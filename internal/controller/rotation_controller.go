@@ -1887,7 +1887,7 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	// (on one resource, the candidate's cached allocatable minus the DaemonSet
 	// overhead observed on it leaves no positive ceiling, so every clamp value
 	// under it would reserve none of that resource — a placeholder that could
-	// satisfy surge_ready while holding nothing of what the workload needs is
+	// satisfy surge_ready with that dimension of the drain unreserved is
 	// a silent break-before-make; keep it full so only a node that genuinely has
 	// room can take it, whether or not this NodePool has one). band bounds the
 	// shortfall of a clamp that did fire.
