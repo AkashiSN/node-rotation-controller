@@ -1079,7 +1079,9 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	// started-at, which the predicate needs and which the delete takes away. It
 	// cannot fail the transition: it returns "" for anything it cannot establish,
 	// including its own read errors, and every consumer then omits the field.
-	surgePath := r.surgePathFor(ctx, pool, host, startedAt)
+	// It feeds the write below and nothing else — what gets REPORTED is read back
+	// from the anchor afterwards.
+	resolvedPath := r.surgePathFor(ctx, pool, host, startedAt)
 	// Durable phase record BEFORE the delete — it decides the completion
 	// outcome — plus the drain-start anchor for the §4.2 drain histogram,
 	// stamped write-once in the same update so a re-run never moves it.
@@ -1095,8 +1097,8 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 			// The surge path travels with the duration it qualifies, and for the same
 			// reason: the predicate that derives it needs started-at (#305). An
 			// unresolved path stamps nothing rather than a placeholder value.
-			if surgePath != "" {
-				m[annotations.SurgePath] = surgePath
+			if resolvedPath != "" {
+				m[annotations.SurgePath] = resolvedPath
 			}
 		}
 	}); err != nil {
@@ -1125,7 +1127,15 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	// The qualifier sits next to the number it qualifies: an absorbed surge_wait
 	// measures the bind onto capacity that already existed, not the time until the
 	// evicted Pods can run (#305).
-	if surgePath != "" {
+	//
+	// Read from the anchor patchPool reflected back, NOT from this pass's
+	// resolution. The anchor is write-once, so a transition that is retried — the
+	// claim's state write failing after the pool write landed — resolves the path
+	// again on a later pass while the anchor keeps (or keeps omitting) what the
+	// first one persisted. Reporting the local value there would announce a path
+	// that completion, which reads the anchor, does not carry: the whole point of
+	// the field is that both lines and the Event say the same thing.
+	if surgePath := pool.Annotations[annotations.SurgePath]; surgePath != "" {
 		readyKV = append(readyKV, "surgePath", surgePath)
 	}
 	l.Info("surge node ready", readyKV...)

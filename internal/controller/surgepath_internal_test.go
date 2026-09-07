@@ -205,3 +205,50 @@ func TestSurgeReadyTransitionSurvivesAFailingPathLookup(t *testing.T) {
 		t.Errorf("the transition must still be logged; lines = %v", lines)
 	}
 }
+
+// The value on the two lines must be the same value, and a retried transition is
+// where a locally-recomputed one diverges. The anchor field is write-once at the
+// first transition, so a path resolved only on a later pass is never persisted —
+// and reporting that later resolution would announce on "surge node ready" a
+// path that "rotation complete" and its Event then omit, breaking the contract
+// this feature exists to provide. What is reported is what was persisted.
+func TestSurgeReadyReportsThePersistedPathNotALaterResolution(t *testing.T) {
+	node, cand, pool := pendingRotation(testNow.Add(-3 * time.Minute))
+	cand.Finalizers = []string{"karpenter.sh/termination"}
+	remaining := 1
+	// Pass 1: the surge host has no NodeClaim yet, so the path is unresolved and
+	// the write-once block stamps draining-at and surge-wait without it. The
+	// claim's state=draining update then fails, so the pass returns an error
+	// before the line is emitted and the next pass re-enters pending.
+	r := newFlakyReconciler(t, nil, failDrainingClaimUpdate(&remaining), pool, cand, node,
+		testK8sNode(surgeNode, true, nil, false), placeholderPod(surgeNode, corev1.PodRunning))
+
+	var pass1 []string
+	if _, err := r.reconcileNodePool(log.IntoContext(context.Background(), captureLogger(&pass1)), pool, testPolicy(), mustSchedule(t)); err == nil {
+		t.Fatal("pass 1 must fail on the claim update, leaving the transition to be retried")
+	}
+	p := getPool(t, r)
+	if p.Annotations[annotations.DrainingAt] == "" || p.Annotations[annotations.SurgePath] != "" {
+		t.Fatalf("pass 1 must persist the transition without a path: %+v", p.Annotations)
+	}
+
+	// Between the passes the surge host's NodeClaim becomes visible, so pass 2
+	// resolves a path the write-once block will not stamp.
+	if err := r.Create(context.Background(), testClaim("nc-surge", time.Minute, ncNode(surgeNode))); err != nil {
+		t.Fatalf("create surge claim: %v", err)
+	}
+
+	var pass2 []string
+	if _, err := r.reconcileNodePool(log.IntoContext(context.Background(), captureLogger(&pass2)), getPool(t, r), testPolicy(), mustSchedule(t)); err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	if !containsLine(pass2, "surge node ready") {
+		t.Fatalf("pass 2 must complete the transition; lines = %v", pass2)
+	}
+	if containsLine(pass2, "surge node ready", "surgePath") {
+		t.Errorf("the line must report the persisted path, not a resolution the anchor never took; lines = %v", pass2)
+	}
+	if got := getPool(t, r).Annotations[annotations.SurgePath]; got != "" {
+		t.Errorf("the write-once anchor must stay unstamped: got %q", got)
+	}
+}
