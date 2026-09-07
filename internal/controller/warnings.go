@@ -64,7 +64,7 @@ type poolWarnState struct {
 	noCandidate  string            // last-logged no-candidate reason key ("" = none)
 	staticPool   types.UID         // UID of the NodePool already warned as static ("" = none)
 	phPending    map[string]string // NodeClaim name → last-logged "reason|message"
-	headroom     string            // last-warned headroom block identity, "claim|resource" ("" = none)
+	headroom     string            // last-warned headroom block identity, "claim|resource|refused" ("" = none)
 }
 
 func newWarningEmitter(rec events.EventRecorder) *warningEmitter {
@@ -258,12 +258,26 @@ func (w *warningEmitter) ClearStaticNodePool(pool string) {
 // The Event is raised on the NodePool with the claim as the related object: what
 // is stuck is the pool's rotation, and the pool is where an operator looks to ask
 // why nothing is rotating.
-func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim, hr surge.HeadroomResult) {
+func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim, hr surge.HeadroomResult, clamp surge.ClampResult) {
 	msg := fmt.Sprintf(
-		"NodeClaim %s cannot be rotated: the surge placeholder needs %s %s but the NodePool has %s remaining of its spec.limits ceiling of %s (%s already provisioned). No rotation will start for this NodePool while that holds — the surge reserves replacement capacity before draining, so it consumes budget the limit does not allow. Raise spec.limits, or reduce the pool's provisioned capacity, to let the rotation proceed; until then these nodes remain subject to Karpenter's forceful expiration.",
+		"NodeClaim %s cannot be rotated: the surge placeholder needs %s %s but the NodePool has %s remaining of its spec.limits ceiling of %s (%s already provisioned). No rotation will start for this NodePool while that holds — the surge reserves replacement capacity before draining, so it consumes budget the limit does not allow. ",
 		cand.Name, hr.Want.String(), hr.Resource, hr.Remaining.String(), hr.Limit.String(), provisionedString(hr))
+	// A refused footprint cannot be provisioned on this instance type at ANY
+	// budget — the DaemonSet overhead leaves nothing to reserve — so the usual
+	// advice would send an operator to raise a limit that is not what stops them
+	// (issue #326). Say what actually has to change instead.
+	if clamp.Refused {
+		msg += fmt.Sprintf(
+			"Raising spec.limits alone will NOT let this rotation proceed: the DaemonSet overhead on this node's instance type leaves no provisionable capacity for %s, so the placeholder cannot be sized to induce a node whatever the budget. Reduce the DaemonSet footprint or use an instance type with more headroom — or opt into surge.forcefulFallback for surge-less rotation. These nodes remain subject to Karpenter's forceful expiration.",
+			clamp.RefusedResource)
+	} else {
+		msg += "Raise spec.limits, or reduce the pool's provisioned capacity, to let the rotation proceed; until then these nodes remain subject to Karpenter's forceful expiration."
+	}
 
-	key := cand.Name + "|" + string(hr.Resource)
+	// The refusal is part of the identity: moving between "budget too small" and
+	// "unprovisionable whatever the budget" is a different block with different
+	// advice, and must re-announce.
+	key := fmt.Sprintf("%s|%s|%t", cand.Name, hr.Resource, clamp.Refused)
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -272,10 +286,15 @@ func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.N
 		return // same block, already announced — no re-fire
 	}
 	s.headroom = key
-	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
-		"insufficient limits headroom; cannot surge",
+	kv := []any{
 		"candidate", cand.Name, "resource", hr.Resource,
-		"want", hr.Want.String(), "remaining", hr.Remaining.String(), "limit", hr.Limit.String())
+		"want", hr.Want.String(), "remaining", hr.Remaining.String(), "limit", hr.Limit.String(),
+	}
+	if clamp.Refused {
+		kv = append(kv, "clampRefused", clamp.RefusedResource)
+	}
+	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
+		"insufficient limits headroom; cannot surge", kv...)
 	if w.events != nil {
 		w.events.Eventf(pool, cand, corev1.EventTypeWarning, reasonInsufficientHeadroom, actionEvaluateNodePool, "%s", msg)
 	}

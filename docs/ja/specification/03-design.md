@@ -296,7 +296,7 @@ requests = max(requests, limit)   （limit は上記と同じ）
 ::: warning ハードルを上げるが、保証ではない
 空き cpu または memory が 1 ノード分に満たないホストはすべて除外される — 占有されたホストの大半がこれに当たる。完全に空のホスト（DaemonSet のみ）は引き続き placeholder を受け入れるが、これは正しい: 空のホストには hostname トポロジの anti-affinity が噛みつく相手が居ないからである。
 
-ただし**ホストが空であることを証明はしない**。予約サイズは*候補ノード*の allocatable から決まるため、次の 3 つのごく普通の状況では占有されたホストでも吸収できる: **より大きいホスト**（placeholder が固定するのは NodePool と複製された requirements であってインスタンスタイプではないため、異種混在の NodePool では 8 CPU のホストが 2 CPU 使用中でも 4 CPU の候補 1 台分の空きがある — これは例外ではなく通常ケース）、**候補より DaemonSet オーバーヘッドが小さいホスト**、そして**リソースを要求しない Pod**（スケジューラーが数える資源を一切占有せず、かつ退避 Pod の anti-affinity や `hostPort` に拒否される相手になりうる）。
+ただし**ホストが空であることを証明はしない**。予約サイズは*候補ノード*の allocatable から決まるため、次の 3 つのごく普通の状況では占有されたホストでも吸収できる: **より大きいホスト**（placeholder が固定するのは NodePool と複製された requirements であってインスタンスタイプではないため、異種混在の NodePool では 8 CPU のホストが 2 CPU 使用中でも 4 CPU の候補 1 台分の空きがある — これは例外ではなく通常ケース）、**候補より DaemonSet オーバーヘッドが小さいホスト**、そして **cpu も memory も要求しない Pod**（アクセラレータや ephemeral storage だけを要求する Pod を含む。引き上げるのはこの 2 次元だけなので、それらの Pod は予約が測っている資源を一切占有せず、かつ退避 Pod の anti-affinity や `hostPort` に拒否される相手になりうる）。
 
 「他の Pod が居ないホスト」を表現する手段は無い: **required** な `kubernetes.io/hostname NotIn` term は Karpenter の provisioner にプロビジョニング自体を拒否させ（issue #96）、全 Pod にマッチする required な `podAntiAffinity` はどのノードにも居る DaemonSet まで排除してしまう。1 つ目の残余は `surge.matchNodeRequirements.required` に `node.kubernetes.io/instance-type` を追加して候補自身の型を固定すれば狭められるが、キャパシティが逼迫したときに Karpenter が型を代替する自由を失うという代償がある。
 :::
@@ -306,7 +306,7 @@ requests = max(requests, limit)   （limit は上記と同じ）
 - **より大きいインスタンスを強制はしない:** `limit + DaemonSet = allocatable` なので、リソース適合の観点で候補自身のクラスを超える要求にはならない。ただし placeholder はインスタンスタイプを固定しないので、Karpenter が可用性・価格・複製された requirements に従って別の型を選ぶことはある
 - **非正の limit はクランプの refusal に委ねる** — そこへ引き上げると何も予約せずに `surge_ready` を満たしてしまい、暗黙の break-before-make になる。既に limit を超えているドレインも同様に、クランプが下げて報告する
 - **`surge_headroom`（§5.2）は引き上げ後の footprint を検査する**ので、`spec.limits` がほぼ尽きたプールはローテーションを開始しなくなり、そのことを通知する（`InsufficientHeadroom`、§4.3）
-- **コスト:** 多くのローテーションで追加のインスタンス 1 台（空のホストやより大きいホストに吸収される場合は発生しない）、および surge ホストが `do-not-disrupt` を離れた後の consolidation が 1 回発生しうる
+- **コスト:** 予約が**吸収されなかった**ローテーションごとに追加のインスタンス 1 台、および surge ホストが `do-not-disrupt` を離れた後の consolidation が 1 回発生しうる。その頻度はプールの形状に依存する（§4.4）— ローテーションごとに必ず発生する固定コストではない
 
 ノードより粗い粒度の制約 — ゾーンレベルの `podAntiAffinity`、`topologySpreadConstraints` — は**対象外**である: それらはホスト上に何があるかではなく、ゾーン内に何が居るかで決まる。Pod を忠実にモデル化してもこれらが解決しない理由は ADR-0005 を参照。
 

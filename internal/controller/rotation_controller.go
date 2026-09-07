@@ -629,7 +629,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// no surge, so the headroom gate (which sizes the placeholder) does not apply.
 	surgeless := decide.SurgelessFallback(pick, gi)
 	if !surgeless {
-		hr, err := r.headroom(ctx, pool, res, cand)
+		hr, clamp, err := r.headroom(ctx, pool, res, cand)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -637,7 +637,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 			// Level-triggered: this pass repeats every longRequeue for as long as the
 			// budget stays full, so the announcement is deduplicated on its content
 			// and the line carries the numbers an operator acts on (issue #326).
-			r.warn().EmitHeadroomBlocked(ctx, pool, cand, hr)
+			r.warn().EmitHeadroomBlocked(ctx, pool, cand, hr, clamp)
 			return ctrl.Result{RequeueAfter: longRequeue}, nil
 		}
 		r.warn().ClearHeadroomBlocked(pool.Name)
@@ -1368,7 +1368,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	now := r.now()
 	failedAt, _ := parseTime(cand.Annotations[annotations.FailedAt])
 	retry := parseInt(cand.Annotations[annotations.RetryCount])
-	hr, err := r.headroom(ctx, pool, res, cand)
+	hr, clamp, err := r.headroom(ctx, pool, res, cand)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1399,7 +1399,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	// pause some other gate is holding (issue #326).
 	if dueForRetry {
 		if !hr.Fits {
-			r.warn().EmitHeadroomBlocked(ctx, pool, cand, hr)
+			r.warn().EmitHeadroomBlocked(ctx, pool, cand, hr, clamp)
 		} else {
 			r.warn().ClearHeadroomBlocked(pool.Name)
 		}
@@ -1590,12 +1590,16 @@ func rotationMode(anns map[string]string) string {
 // candidate. It returns the whole result, not just the verdict, because a block
 // has to be reportable: the resource that did not fit and its numbers are what
 // an operator acts on (issue #326).
-func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim) (surge.HeadroomResult, error) {
-	reqs, err := r.candidateRequests(ctx, res, cand)
+func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim) (surge.HeadroomResult, surge.ClampResult, error) {
+	clamp, err := r.candidateRequests(ctx, res, cand)
 	if err != nil {
-		return surge.HeadroomResult{}, err
+		return surge.HeadroomResult{}, surge.ClampResult{}, err
 	}
-	return surge.Headroom(pool, reqs), nil
+	// The clamp result travels with the verdict: a footprint the clamp REFUSES
+	// cannot be provisioned on this instance type at whatever budget, so a
+	// headroom block on top of it must not be announced as if raising spec.limits
+	// would let the rotation through (issue #326).
+	return surge.Headroom(pool, clamp.Requests), clamp, nil
 }
 
 // candidateRequests sums the reschedulable Pod requests on the candidate node
@@ -1606,16 +1610,16 @@ func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool
 // to keep rotatable under a tight-but-sufficient budget (issue #224). A refused
 // clamp returns the full drain, which is correct: that rotation rolls back
 // regardless of the budget. An unscheduled candidate has none.
-func (r *RotationReconciler) candidateRequests(ctx context.Context, res resolved, cand *karpv1.NodeClaim) (corev1.ResourceList, error) {
+func (r *RotationReconciler) candidateRequests(ctx context.Context, res resolved, cand *karpv1.NodeClaim) (surge.ClampResult, error) {
 	if cand.Status.NodeName == "" {
-		return corev1.ResourceList{}, nil
+		return surge.ClampResult{Requests: corev1.ResourceList{}}, nil
 	}
 	pods, err := r.allPods(ctx)
 	if err != nil {
-		return nil, err
+		return surge.ClampResult{}, err
 	}
 	_, clamp := placeholderSizing(pods, res, cand)
-	return clamp.Requests, nil
+	return clamp, nil
 }
 
 // placeholderSizing computes the requests the placeholder will carry, and is the

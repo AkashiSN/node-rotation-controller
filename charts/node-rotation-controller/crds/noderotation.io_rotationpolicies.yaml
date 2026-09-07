@@ -325,17 +325,20 @@ spec:
                       sized from the CANDIDATE's allocatable, so an occupied host can still take it
                       when it is a larger instance type (the placeholder pins the NodePool and the
                       replicated requirements, not the type), when it carries less DaemonSet
-                      overhead, or when the Pods on it request no resources — and such a Pod can be
+                      overhead, or when the Pods on it request no cpu or memory (only those two
+                      dimensions are raised, so a Pod requesting just an accelerator or ephemeral
+                      storage occupies nothing the reservation measures) — and such a Pod can be
                       exactly the one whose anti-affinity or hostPort then refuses an evicted Pod.
                       Adding node.kubernetes.io/instance-type to matchNodeRequirements.required
                       narrows the first of those, at the cost of Karpenter's freedom to substitute
                       instance types.
 
-                      The costs are an extra instance on most rotations and a surge_headroom gate
-                      (§5.2 step 3) that tests a whole-node footprint, so a NodePool whose
-                      spec.limits are nearly exhausted stops starting rotations that the
-                      drain-sized placeholder would have fitted. Default off keeps the aggregate
-                      sizing.
+                      The costs are an extra instance on every rotation whose reservation is not
+                      absorbed — how often that is depends on the pool's shape — and a
+                      surge_headroom gate (§5.2 step 3) that tests a whole-node footprint, so a
+                      NodePool whose spec.limits are nearly exhausted stops starting rotations that
+                      the drain-sized placeholder would have fitted. Default off keeps the
+                      aggregate sizing.
                     properties:
                       enabled:
                         default: false

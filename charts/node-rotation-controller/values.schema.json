@@ -212,7 +212,7 @@
                   "properties": {
                     "enabled": {
                       "type": "boolean",
-                      "description": "Size the placeholder to a whole node's worth of cpu and memory, so a host whose free capacity in those dimensions is short of a node's cannot absorb it. A bounded reduction of the absorb-path gap, not a guarantee: the reservation is sized from the candidate, so a larger host, a host with less DaemonSet overhead, or one running only zero-request Pods can still absorb it. Costs an extra instance on most rotations, and the surge_headroom gate then tests a whole-node footprint."
+                      "description": "Size the placeholder to a whole node's worth of cpu and memory, so a host whose free capacity in those dimensions is short of a node's cannot absorb it. A bounded reduction of the absorb-path gap, not a guarantee: the reservation is sized from the candidate, so a larger host, a host with less DaemonSet overhead, or one running only Pods that request no cpu or memory can still absorb it. Costs an extra instance on every rotation whose reservation is not absorbed, and the surge_headroom gate then tests a whole-node footprint."
                     }
                   }
                 }

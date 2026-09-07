@@ -185,6 +185,42 @@ func TestHeadroomBlockOnRetryEmitsTheEvent(t *testing.T) {
 	}
 }
 
+// A footprint the clamp would REFUSE — the DaemonSet overhead on the candidate's
+// instance type leaves nothing to reserve — can also be short of the pool's
+// budget, and then the headroom gate blocks first and the refusal is never
+// reached. Announcing "raise spec.limits to let the rotation proceed" there is
+// false: raising them only surfaces the refusal next, and the placeholder is
+// unprovisionable either way. The Event has to say so.
+func TestHeadroomBlockNamesAnUnprovisionableReservation(t *testing.T) {
+	// allocatable == DaemonSet overhead → no capacity to reserve on this type.
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
+		ncAllocatable("cpu", "300m", "memory", "1Gi"))
+	pool := tightPool(nil)
+	rec := events.NewFakeRecorder(16)
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false),
+		workloadPod("app", candNode, "2", "1Gi"),
+		asDaemonSet(workloadPod("kube-proxy", candNode, "300m", "1Gi")))
+	r.Events = rec
+
+	if _, err := r.reconcileNodePool(context.Background(), pool, wholeNodePolicy(), mustSchedule(t)); err != nil {
+		t.Fatalf("reconcileNodePool: %v", err)
+	}
+
+	if getPool(t, r).Annotations[annotations.ActiveRotation] != "" {
+		t.Fatal("the rotation must not start")
+	}
+	evs := drain(rec)
+	if len(evs) != 1 {
+		t.Fatalf("want 1 Event, got %d: %v", len(evs), evs)
+	}
+	if containsLine(evs, "to let the rotation proceed") {
+		t.Errorf("the Event must not promise that raising limits alone resolves an unprovisionable reservation: %v", evs)
+	}
+	if !containsLine(evs, "DaemonSet") {
+		t.Errorf("the Event must name the reason the reservation cannot be provisioned at all: %v", evs)
+	}
+}
+
 // The Event claims headroom is the SOLE remaining blocker, and its message tells
 // the operator that raising spec.limits lets the rotation proceed. On a pool
 // whose schedule is fatally infeasible that advice is wrong: the fresh-start

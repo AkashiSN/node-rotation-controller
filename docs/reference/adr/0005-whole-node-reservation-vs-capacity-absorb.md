@@ -41,7 +41,7 @@ It does **not** prove a host is empty, and must not be described as if it did. T
 
 - **A larger host.** The placeholder pins the NodePool and the replicated requirements, not the instance type, so on a heterogeneous NodePool — the default, since Karpenter chooses among many types — an 8-CPU host running 2 CPU of workload has more than a 4-CPU candidate's worth free. This is the common case, not a corner one.
 - **A host with less DaemonSet overhead than the candidate**, whose free capacity is correspondingly larger than the reservation assumed.
-- **Pods that request nothing**, which occupy nothing the scheduler counts, so a host running any number of them still has a whole node's worth free — and such a Pod can be exactly the one whose anti-affinity or `hostPort` then refuses an evicted Pod.
+- **Pods that request no cpu or memory** — including Pods that request only other resources, such as an accelerator or ephemeral storage. Only cpu and memory are raised, so those Pods occupy nothing the reservation measures, a host running any number of them still has a whole node's worth of both free, and such a Pod can be exactly the one whose anti-affinity or `hostPort` then refuses an evicted Pod.
 
 There is no way to express "a host with no other Pods" here: a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision for the Pod at all (the key is in `sigs.k8s.io/karpenter` RestrictedLabels, [#96](https://github.com/AkashiSN/node-rotation-controller/issues/96)), and a required `podAntiAffinity` matching every Pod would also exclude the DaemonSets every node carries.
 
@@ -75,7 +75,7 @@ The clamp caps requests at the same `limit` this mode raises them to, so the two
 
 **Negative**
 
-- **An extra instance on most rotations**, for the rotation's duration, plus possibly a consolidation cycle immediately after completion when a nearly-empty surge host is released from `do-not-disrupt`. Not every rotation: the reservation is still absorbed by an empty host, by a larger one, or by one running only zero-request Pods.
+- **An extra instance on every rotation whose reservation is not absorbed**, for the rotation's duration, plus possibly a consolidation cycle immediately after completion when a nearly-empty surge host is released from `do-not-disrupt`. How often that is depends on the pool's shape and is not something the controller can promise: a pool with spare empty capacity, larger instance types, or hosts running only cpu/memory-free Pods may absorb most reservations and pay little, while a densely packed uniform pool pays on nearly every rotation.
 - **The `surge_headroom` gate (§5.2 step 3) then tests a whole-node footprint**, so a NodePool whose `spec.limits` are nearly exhausted stops starting rotations that the drain-sized placeholder would have fitted. This is a real behaviour regression for such pools and the main reason the mode is opt-in and default off. The same change makes that block announce itself (`InsufficientHeadroom`, §4.3) rather than only logging, so enabling the mode cannot silently stop a pool from rotating.
 
 **Neutral / unresolved**

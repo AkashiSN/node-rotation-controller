@@ -36,19 +36,24 @@ var binPackingResources = []corev1.ResourceName{corev1.ResourceCPU, corev1.Resou
 // # What this does and does not establish
 //
 // Demanding a whole node's worth of both bin-packing dimensions excludes every
-// host whose free cpu or memory is short of a whole node's — which is most
-// occupied hosts, and the reason the mode raises the bar substantially.
+// host whose free cpu or memory is short of a whole node's, which is what raises
+// the bar. How much of the fleet that removes depends on the pool's shape.
 //
-// It does NOT prove a host is empty, and must not be described as if it did.
-// Pods that request no resources occupy nothing the scheduler counts, so a host
-// running any number of them still has a whole node's worth free and can absorb
-// the placeholder — and such a Pod can be exactly the one whose anti-affinity or
-// hostPort then refuses an evicted Pod. Kubernetes offers no way to express
-// "a host with no other Pods" as a requirement here: a required
-// kubernetes.io/hostname NotIn term makes Karpenter's provisioner refuse to
-// provision at all (issue #96), and a required podAntiAffinity matching every
-// Pod would also exclude the DaemonSets every node carries. The mode is a
-// substantial, bounded reduction of the failure mode, not a guarantee against it.
+// It does NOT prove a host is empty, and must not be described as if it did. The
+// reservation is sized from the CANDIDATE's allocatable while the placeholder
+// pins the NodePool and the replicated requirements, not the instance type, so an
+// occupied host can still take it when it is a larger type (the ordinary case on
+// a heterogeneous NodePool), when it carries less DaemonSet overhead, or when the
+// Pods on it request no cpu or memory — including Pods that request only some
+// other resource, since only these two dimensions are raised. Such a Pod can be
+// exactly the one whose anti-affinity or hostPort then refuses an evicted Pod.
+//
+// Kubernetes offers no way to express "a host with no other Pods" as a
+// requirement here: a required kubernetes.io/hostname NotIn term makes
+// Karpenter's provisioner refuse to provision at all (issue #96), and a required
+// podAntiAffinity matching every Pod would also exclude the DaemonSets every node
+// carries. The mode is a bounded reduction of the failure mode, not a guarantee
+// against it.
 //
 // Admitting a genuinely empty host is deliberate and correct: an empty host has
 // nothing for a hostname-topology anti-affinity to bite on, so it is as good as
@@ -61,16 +66,18 @@ var binPackingResources = []corev1.ResourceName{corev1.ResourceCPU, corev1.Resou
 //   - reschedulablePods == 0 — nothing has to re-land, so nothing is reserved;
 //   - allocatable absent or empty — no trustworthy ceiling to raise to;
 //   - a resource allocatable does not report — its ceiling is unknown;
-//   - a non-positive limit — raising to it would reserve nothing and satisfy
-//     surge_ready with an empty placeholder, a silent break-before-make. Keeping
-//     the drain leaves Clamp to refuse it and the rotation to roll back.
+//   - a non-positive limit on a resource the drain requested — its own positive
+//     demand stays for Clamp to refuse on. On a MANDATORY dimension there may be
+//     no such demand, so one is made (see raise): raising to a non-positive limit
+//     would reserve nothing and satisfy surge_ready with an empty placeholder, a
+//     silent break-before-make.
 //
 // A drain already above the limit is left alone: Clamp lowers it and reports the
 // shortfall (issue #224).
 //
 // reschedulablePods is the count, not the sum, because Pods that request nothing
-// still have to land somewhere: a candidate carrying only zero-request Pods has
-// an empty drain and real workload.
+// still have to land somewhere: a candidate carrying only such Pods has an empty
+// drain and real workload.
 //
 // requests is not modified; the caller reports the real drain alongside the
 // raised value on the placeholder line.
