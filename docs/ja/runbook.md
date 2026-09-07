@@ -264,6 +264,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 | drain が止まり、新しい完了が出ない | `noderotation_drain_stuck == 1` | [§5](#5-drain-が詰まったときの対処) — PDB or finalizer |
 | `in_progress` が 1 で張り付き | `noderotation_drain_stuck == 1`。プールに他の未処理 claim があれば `NodeRotationStalledInWindow` も — in-flight のローテーションは `candidates` にも `in_backoff` にも入らないため、それ単独ではこのアラートは上がらない | surge 未着（→ §1）か drain 詰まり（→ §5） |
 | NodePool が一切ローテーションしない、候補が溜まる | `noderotation_policy_conflict == 1` | RotationPolicy のセレクタ重複を修正 |
+| NodePool がローテーションせず、surge が一度も作られない | NodePool 上の `InsufficientHeadroom` Warning Event | プールの `spec.limits` に placeholder の余地がない。placeholder はドレインの*前*に置換キャパシティを予約するため、limit が許さない分の予算を消費する。Event はリソース名・placeholder が必要とする量・ceiling の残量を示すので、その不足分以上に `spec.limits` を引き上げるか、プールのプロビジョニング済みキャパシティを減らす。`surge.wholeNodeReservation` が有効な場合、ゲートは 1 ノード分のフットプリントを検査する（§3.3）— ドレイン分ではなく 1 インスタンス分のヘッドルームが必要 |
 | NodePool が一切ローテーションせず、試行も起きない | NodePool 上の `StaticNodePool` Warning Event | プールが `spec.replicas`（static capacity）を設定しており surge ではローテーションできない。Karpenter は既存 NodePool への `spec.replicas` の追加・削除を禁じているため、ワークロードを dynamic な NodePool へ移すか、ポリシーのセレクタからこのプールを外す |
 | NodePool がいつの間にかローテーション停止 | `freeze_until_timestamp > 0` | 忘れられた freeze — [§4](#4-freeze-ワークフロー) |
 | メンテナンスウィンドウが候補未ローテーションのまま閉じた | `NodeRotationWindowMissed` アラート; NodePool 上の `WindowMissed` Warning Event | [§6](#noderotationwindowmissed-への対処) — 直前の失敗した試行と `retry_count` を確認 |

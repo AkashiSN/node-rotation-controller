@@ -105,7 +105,7 @@ func TestFailedBackstopExpiryIsCountedOnceOnAStaleClaimRead(t *testing.T) {
 	res := r.resolve(pool, testPolicy(), mustSchedule(t))
 
 	for i, view := range claimViews(cand, 2) {
-		if _, err := r.advanceFailed(context.Background(), getPool(t, r), res, view); err != nil {
+		if _, err := r.advanceFailed(context.Background(), getPool(t, r), res, view, nil); err != nil {
 			t.Fatalf("pass %d: %v", i, err)
 		}
 	}
@@ -436,7 +436,7 @@ func TestFailedBackstopExpiryRefusesAClaimThatHasReturnedToPending(t *testing.T)
 	stale := cand.DeepCopy()
 	stale.Annotations[annotations.State] = annotations.StateFailed
 	stale.Annotations[annotations.FailedAt] = rfc(testNow.Add(-time.Hour))
-	if _, err := r.advanceFailed(context.Background(), getPool(t, r), res, stale); err != nil {
+	if _, err := r.advanceFailed(context.Background(), getPool(t, r), res, stale, nil); err != nil {
 		t.Fatalf("advanceFailed: %v", err)
 	}
 

@@ -16,3 +16,4 @@ The ADR records the decision; the canonical behavior lives in [`docs/specificati
 | [0002](0002-drain-estimate-vs-force-kill-deadline.md) | Drain estimate vs. force-kill deadline (split `t_rot` into a deadline bound and a throughput forecast) | Accepted (formula superseded by 0003) |
 | [0003](0003-provisioning-estimate-vs-surge-abandon-deadline.md) | Provisioning estimate vs. surge-abandon deadline (drop `buffer` and `readyTimeout` from `t_rot_est`) | Accepted |
 | [0004](0004-failure-pause-vs-cooldown-after.md) | Split the post-failure pause off `cooldownAfter` (`surge.failurePause`) | Accepted |
+| [0005](0005-whole-node-reservation-vs-capacity-absorb.md) | Whole-node surge reservation vs. capacity absorb (`surge.wholeNodeReservation`) | Accepted |

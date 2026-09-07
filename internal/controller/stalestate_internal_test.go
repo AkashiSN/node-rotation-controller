@@ -129,7 +129,7 @@ func TestFailedRetryRefusesAClaimAnotherPassAlreadyReEntered(t *testing.T) {
 
 	stale := cand.DeepCopy()
 	stale.Annotations[annotations.State] = annotations.StateFailed
-	got, err := r.advanceFailed(context.Background(), getPool(t, r), res, stale)
+	got, err := r.advanceFailed(context.Background(), getPool(t, r), res, stale, nil)
 	if err != nil {
 		t.Fatalf("advanceFailed: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestFailedRetryDoesNotRestartTheAttemptOnAStaleReadOfItsOwnWrite(t *testing
 		pool, cand, testK8sNode(candNode, true, nil, false))
 	res := r.resolve(pool, testPolicy(), mustSchedule(t))
 
-	if _, err := r.advanceFailed(context.Background(), getPool(t, r), res, cand.DeepCopy()); err != nil {
+	if _, err := r.advanceFailed(context.Background(), getPool(t, r), res, cand.DeepCopy(), nil); err != nil {
 		t.Fatalf("advanceFailed: %v", err)
 	}
 

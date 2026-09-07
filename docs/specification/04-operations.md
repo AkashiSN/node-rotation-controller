@@ -98,6 +98,7 @@ Warning-level conditions surfaced via `kubectl describe`:
 | NodeClaim | `ShortLead` | Claim can't guarantee `K` chances |
 | NodePool | `ForcefulFallback` | Surge-less rotation begins |
 | NodePool | `StaticNodePool` | `spec.replicas` set — surge can never rotate the pool (§3.3) |
+| NodePool | `InsufficientHeadroom` | `spec.limits` leaves no room for the placeholder — no rotation starts (§5.2 step 3) |
 | NodePool | `WindowMissed` | Window closed with candidates unrotated and no rotation attributable to it (§4.2) |
 | NodePool | `PolicyConflict` | Equal-specificity RotationPolicy tie — the pool is not rotated (§5.4) |
 | NodePool | `GovernanceLost` | In-flight rotation rolled back after the pool left governance (§5.4) |
@@ -122,6 +123,7 @@ Every state transition emits one `INFO` log line (after the durable annotation w
 | `no rotation candidate` | `reason`, census counts |
 | `surge placeholder created` | `placeholder`, `requests`, exclusion counts, clamp info |
 | `surge placeholder is not schedulable` | `placeholder`, `reason`, `detail` |
+| `insufficient limits headroom; cannot surge` | `candidate`, `resource`, `want`, `remaining`, `limit` |
 | `surge node ready` | `surgeNode`, `surgeWait`, `surgePath` |
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
@@ -129,7 +131,7 @@ Every state transition emits one `INFO` log line (after the durable annotation w
 | `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoffTriggered` |
 
 - **`surgePath`** ∈ {`provisioned`, `absorbed`} names which §3.3 path reserved the capacity, and is what makes `surgeWait` interpretable: an `absorbed` wait measures a bind onto capacity that already existed, so it does not bound the time until the evicted Pods are running. It is **omitted**, never guessed, when no path was established — the surge-less fallback, or a surge host whose NodeClaim could not be resolved. The `RotationCompleted` Event carries the same value
-- **Level-triggered lines** (`no rotation candidate`, `surge placeholder is not schedulable`) use transition dedup — re-fire only when reason/census/message changes
+- **Level-triggered lines** (`no rotation candidate`, `surge placeholder is not schedulable`, `insufficient limits headroom; cannot surge`) use transition dedup — re-fire only when reason/census/message changes
 - **Debug verbosity** (`V(1)`) adds un-deduplicated per-pass findings and a heartbeat
 - **Liveness signal:** read from `controller_runtime_reconcile_total` / workqueue metrics, not from log silence
 
@@ -213,6 +215,12 @@ Brief overlap: old + new nodes billed simultaneously during surge.
 - **Per rotation:** ~10–20 minutes of one extra on-demand instance
 - **Monthly (weekly rotation, N nodes):** `≈ N × 4 × hourly_rate × 0.25`
 - **Peak overlap:** scales with the number of NodePools rotating concurrently
+
+### Whole-node reservation cost (§3.3, ADR-0005)
+
+With `surge.wholeNodeReservation` on, a rotation pays the full overlap above whenever its reservation is **not** absorbed — a placeholder sized to a whole node is absorbed only by a host with a whole node of free cpu and memory. How often that happens depends on the pool's shape: a pool with spare empty capacity or larger instance types may absorb most reservations, while a densely packed uniform pool pays on nearly every rotation. Relative to its workload the mode is most expensive on a nearly-empty candidate, which reserves a full instance for a drain that would have fitted anywhere.
+
+A consolidation cycle can follow completion, once the surge host — now holding only the drained node's Pods — is released from `do-not-disrupt`.
 
 ### Failed surge cost
 

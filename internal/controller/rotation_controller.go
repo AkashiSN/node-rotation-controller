@@ -567,7 +567,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// ── 1. Drive the in-flight rotation, keyed on the anchor (it outlives the
 	//        old NodeClaim's deletion on success).
 	if name := pool.Annotations[annotations.ActiveRotation]; name != "" {
-		return r.advance(ctx, pool, name, res)
+		return r.advance(ctx, pool, name, res, derived.Findings)
 	}
 
 	// ── 1a. Static capacity gate (issue #302, spec §5.2): a NodePool with
@@ -629,14 +629,18 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	// no surge, so the headroom gate (which sizes the placeholder) does not apply.
 	surgeless := decide.SurgelessFallback(pick, gi)
 	if !surgeless {
-		ok, err := r.headroomFits(ctx, pool, cand)
+		hr, clamp, err := r.headroom(ctx, pool, res, cand)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if !ok {
-			log.Info("insufficient limits headroom; cannot surge", "candidate", cand.Name)
+		if !hr.Fits {
+			// Level-triggered: this pass repeats every longRequeue for as long as the
+			// budget stays full, so the announcement is deduplicated on its content
+			// and the line carries the numbers an operator acts on (issue #326).
+			r.warn().EmitHeadroomBlocked(ctx, pool, cand, hr, clamp)
 			return ctrl.Result{RequeueAfter: longRequeue}, nil
 		}
+		r.warn().ClearHeadroomBlocked(pool.Name)
 	}
 	// Anchor BEFORE any other side effect: a conflict-checked, only-if-absent
 	// write (optimistic lock on resourceVersion). A racing reconcile's write
@@ -668,7 +672,7 @@ func (r *RotationReconciler) reconcileNodePool(ctx context.Context, pool *karpv1
 	if surgeless {
 		return r.startForcefulFallback(ctx, pool, cand)
 	}
-	return r.advance(ctx, pool, cand.Name, res)
+	return r.advance(ctx, pool, cand.Name, res, derived.Findings)
 }
 
 // evaluateWindowEdge applies the §4.2 window-close evaluation: it records that a
@@ -933,7 +937,7 @@ func firstFatal(findings []schedule.Finding) (schedule.Finding, bool) {
 // advance runs one step for the in-flight rotation, keyed by the anchor name. res
 // carries the NodePool's governing policy and schedule (spec §5.4), resolved once
 // by the caller.
-func (r *RotationReconciler) advance(ctx context.Context, pool *karpv1.NodePool, name string, res resolved) (ctrl.Result, error) {
+func (r *RotationReconciler) advance(ctx context.Context, pool *karpv1.NodePool, name string, res resolved, findings []schedule.Finding) (ctrl.Result, error) {
 	cand, err := r.getClaim(ctx, name)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -948,7 +952,7 @@ func (r *RotationReconciler) advance(ctx context.Context, pool *karpv1.NodePool,
 	case annotations.StateDraining:
 		return r.advanceDraining(ctx, pool, cand)
 	case annotations.StateFailed:
-		return r.advanceFailed(ctx, pool, res, cand)
+		return r.advanceFailed(ctx, pool, res, cand, findings)
 	case annotations.StateExpired:
 		return r.advanceExpired(ctx, pool, cand)
 	default:
@@ -1343,7 +1347,7 @@ func (r *RotationReconciler) advanceDraining(ctx context.Context, pool *karpv1.N
 // every start gate passes past the effective (window-aware) backoff, or repair a
 // torn failure write by releasing the gate while preserving the pause anchor
 // (spec §5.2).
-func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim) (ctrl.Result, error) {
+func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim, findings []schedule.Finding) (ctrl.Result, error) {
 	if cand.DeletionTimestamp != nil {
 		out, err := r.markExpired(ctx, cand.Name, nil, annotations.StateFailed)
 		if err != nil {
@@ -1364,7 +1368,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	now := r.now()
 	failedAt, _ := parseTime(cand.Annotations[annotations.FailedAt])
 	retry := parseInt(cand.Annotations[annotations.RetryCount])
-	headroomOK, err := r.headroomFits(ctx, pool, cand)
+	hr, clamp, err := r.headroom(ctx, pool, res, cand)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1377,9 +1381,30 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 	// Closing it here drops through to the repair branch below, which releases the
 	// anchor and preserves the failure pause.
 	open, _ := decide.StartGate(r.gateInputs(pool, res, now))
-	if open && !staticPool(pool) &&
-		now.Sub(failedAt) >= r.effectiveBackoff(res, now, failedAt, retry) &&
-		headroomOK {
+	// A fatal feasibility finding refuses a fresh start (step 1b), and this path
+	// sits above that gate exactly as it sits above the static one — so it closes
+	// on fatal findings here for the same reason and with the same outcome: the
+	// retry drops through to the repair branch, which releases the anchor and lets
+	// the next pass reach the fresh-start gate that reports the finding. Without
+	// it a "NEW attempt" would begin on a schedule a fresh start would refuse, and
+	// the headroom announcement below would name itself the sole blocker while a
+	// fatal finding also blocked (issue #326, the shape of #302).
+	_, fatal := firstFatal(findings)
+	dueForRetry := open && !staticPool(pool) && !fatal &&
+		now.Sub(failedAt) >= r.effectiveBackoff(res, now, failedAt, retry)
+	// Headroom is the one condition here that can hold a due retry back
+	// indefinitely while every other gate is open, and it was the silent one: no
+	// line, no Event, once per effective backoff, forever. Announce it only when it
+	// is the SOLE remaining blocker, so the message never blames headroom for a
+	// pause some other gate is holding (issue #326).
+	if dueForRetry {
+		if !hr.Fits {
+			r.warn().EmitHeadroomBlocked(ctx, pool, cand, hr, clamp)
+		} else {
+			r.warn().ClearHeadroomBlocked(pool.Name)
+		}
+	}
+	if dueForRetry && hr.Fits {
 		// Only from failed — the state this handler was dispatched on. That guard is
 		// also what bounds the re-entry below: advance() re-reads the claim through
 		// the cache, and a read still lagging this very write dispatches straight back
@@ -1400,7 +1425,7 @@ func (r *RotationReconciler) advanceFailed(ctx context.Context, pool *karpv1.Nod
 			// attempt; either way this pass starts nothing.
 			return ctrl.Result{RequeueAfter: shortRequeue}, nil
 		}
-		return r.advance(ctx, pool, cand.Name, res) // falls into the pending handler, re-stamps started-at
+		return r.advance(ctx, pool, cand.Name, res, findings) // falls into the pending handler, re-stamps started-at
 	}
 
 	// Otherwise: repair a torn failure write (crash between the failed write and
@@ -1561,12 +1586,22 @@ func rotationMode(anns map[string]string) string {
 
 // ── Surge readiness / induced-claim resolution ─────────────────────────────
 
-func (r *RotationReconciler) headroomFits(ctx context.Context, pool *karpv1.NodePool, cand *karpv1.NodeClaim) (bool, error) {
-	reqs, err := r.candidateRequests(ctx, cand)
+// headroom evaluates the surge_headroom gate (spec §5.2 step 3) for this
+// candidate. It returns the whole result, not just the verdict, because a block
+// has to be reportable: the resource that did not fit and its numbers are what
+// an operator acts on (issue #326).
+func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool, res resolved, cand *karpv1.NodeClaim) (surge.HeadroomResult, surge.ClampResult, error) {
+	clamp, err := r.candidateRequests(ctx, res, cand)
 	if err != nil {
-		return false, err
+		return surge.HeadroomResult{}, surge.ClampResult{}, err
 	}
-	return surge.FitsHeadroom(pool, reqs), nil
+	// The clamp result travels with the verdict. A REFUSED footprint is a second,
+	// independent condition — the candidate's own instance class has no
+	// provisionable capacity left once its DaemonSet overhead is counted — and
+	// since the placeholder does not pin the instance type, Karpenter may still
+	// satisfy it on a larger allowed type. The announcement needs it so the
+	// operator hears both conditions instead of only the budget (issue #326).
+	return surge.Headroom(pool, clamp.Requests), clamp, nil
 }
 
 // candidateRequests sums the reschedulable Pod requests on the candidate node
@@ -1577,16 +1612,55 @@ func (r *RotationReconciler) headroomFits(ctx context.Context, pool *karpv1.Node
 // to keep rotatable under a tight-but-sufficient budget (issue #224). A refused
 // clamp returns the full drain, which is correct: that rotation rolls back
 // regardless of the budget. An unscheduled candidate has none.
-func (r *RotationReconciler) candidateRequests(ctx context.Context, cand *karpv1.NodeClaim) (corev1.ResourceList, error) {
+func (r *RotationReconciler) candidateRequests(ctx context.Context, res resolved, cand *karpv1.NodeClaim) (surge.ClampResult, error) {
 	if cand.Status.NodeName == "" {
-		return corev1.ResourceList{}, nil
+		return surge.ClampResult{Requests: corev1.ResourceList{}}, nil
 	}
 	pods, err := r.allPods(ctx)
 	if err != nil {
-		return nil, err
+		return surge.ClampResult{}, err
 	}
-	requests := surge.ReschedulableRequests(pods, cand.Status.NodeName)
-	return surge.Clamp(requests, cand.Status.Allocatable, surge.DaemonSetRequests(pods, cand.Status.NodeName)).Requests, nil
+	_, clamp := placeholderSizing(pods, res, cand)
+	return clamp, nil
+}
+
+// placeholderSizing computes the requests the placeholder will carry, and is the
+// ONE definition of that sizing: createPlaceholder builds the Pod from it and
+// candidateRequests pre-checks it against the NodePool budget. Split definitions
+// would let the two drift as rules — the #224 lesson, which the whole-node mode
+// would otherwise reopen by raising the placeholder above what the gate tested
+// (issue #326).
+//
+// It shares the RULE, not the value. The gate runs before the anchor and reads
+// its own Pod snapshot; createPlaceholder runs on a later pass and reads another.
+// Pods can bind to or leave the candidate in between, and NodePool.status.resources
+// moves independently, so the gate is a pre-check that avoids burning an attempt —
+// not an invariant that the placeholder fits. The enforcement is Karpenter's own
+// spec.limits: a placeholder that no longer fits is simply not provisioned for,
+// stays unschedulable, and the rotation rolls back at readyTimeout with
+// SurgeUnschedulable.
+//
+// It returns the raw drain alongside the final sizing so the placeholder line can
+// state what the workload actually needs next to what was reserved for it.
+//
+// Order matters: whole-node raises the drain towards the provisionable limit and
+// the clamp caps it at that same limit, so where the raw drain is at or below the
+// limit the clamp then has nothing to cut. Where the raw drain already EXCEEDS it
+// (the #224 case) whole-node leaves it and the clamp lowers it, reporting Clamped
+// and the shortfall exactly as it does without the mode; a non-positive limit is
+// likewise left for the clamp to refuse. On the default path it behaves exactly
+// as before.
+func placeholderSizing(pods []corev1.Pod, res resolved, cand *karpv1.NodeClaim) (drain corev1.ResourceList, clamp surge.ClampResult) {
+	drain = surge.ReschedulableRequests(pods, cand.Status.NodeName)
+	daemonSet := surge.DaemonSetRequests(pods, cand.Status.NodeName)
+	requests := drain
+	if res.pol.Surge.WholeNodeReservation.Enabled {
+		// The count, not the sum: Pods that request nothing still have to re-land,
+		// and a candidate carrying only those has an empty drain and real workload.
+		requests = surge.WholeNode(drain, cand.Status.Allocatable, daemonSet,
+			surge.CensusOnNode(pods, cand.Status.NodeName).Counted)
+	}
+	return drain, surge.Clamp(requests, cand.Status.Allocatable, daemonSet)
 }
 
 // surgeReady reports whether the placeholder is Running on a Ready host distinct
@@ -1799,12 +1873,14 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	if err != nil {
 		return err
 	}
-	requests := surge.ReschedulableRequests(pods, cand.Status.NodeName)
-	// Clamp the placeholder to what Karpenter can actually provision for a fresh
-	// node of this instance type — NodeClaim.status.allocatable minus DaemonSet
-	// overhead — so a node the scheduler filled past Karpenter's per-AZ cached
-	// estimate is still rotatable (issue #224). No-op when allocatable is absent.
-	clamp := surge.Clamp(requests, cand.Status.Allocatable, surge.DaemonSetRequests(pods, cand.Status.NodeName))
+	// The same sizing RULE the surge_headroom gate pre-checked, on this pass's own
+	// snapshot: whole-node raises the drain to the provisionable limit when the
+	// mode is on (#326), and the clamp
+	// caps it at what Karpenter can actually provision for a fresh node of this
+	// instance type — allocatable minus DaemonSet overhead — so a node the
+	// scheduler filled past Karpenter's per-AZ cached estimate is still rotatable
+	// (issue #224). No-op when allocatable is absent.
+	requests, clamp := placeholderSizing(pods, res, cand)
 	// clamp.Requests is the full drain on both the common path and a refused clamp
 	// (DaemonSet overhead exhausts allocatable, so no clamp value induces a node —
 	// sizing the placeholder to zero would satisfy surge_ready with nothing
@@ -1846,6 +1922,14 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 		"mirrorPods", c.Mirror,
 		"completedPods", c.Completed,
 		"nodePinnedPods", c.NodePinned,
+	}
+	// Under whole-node reservation the requests are the node's, not the workload's,
+	// so the line states the drain too. Without it the reservation reads as a
+	// workload that genuinely needs a whole node, and the mode — the reason this
+	// rotation costs an instance — is invisible in the only place it is decided
+	// (issue #326).
+	if res.pol.Surge.WholeNodeReservation.Enabled {
+		kv = append(kv, "reservation", "whole-node", "drain", formatRequests(requests))
 	}
 	// Three mutually exclusive surge states, each announced on this one line and,
 	// except the common path, with a matching Event (issue #224):

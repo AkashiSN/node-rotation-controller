@@ -155,13 +155,9 @@ func Clamp(requests, allocatable, daemonSet corev1.ResourceList) ClampResult {
 	// iteration order.
 	for _, name := range slices.Sorted(maps.Keys(requests)) {
 		want := requests[name]
-		alloc, ok := allocatable[name]
+		limit, ok := provisionableLimit(allocatable, daemonSet, name)
 		if !ok {
 			continue // no ceiling reported for this resource — leave it unclamped
-		}
-		limit := alloc.DeepCopy()
-		if ds, ok := daemonSet[name]; ok {
-			limit.Sub(ds)
 		}
 		if limit.Sign() <= 0 {
 			if want.Sign() <= 0 {

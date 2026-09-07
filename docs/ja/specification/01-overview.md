@@ -61,6 +61,7 @@ Karpenter（および EKS Auto Mode）はノードの disruption を2つに分�
 - **voluntary パス:** Consolidation、Drift、および本コントローラーの `NodeClaim` 削除 — PDB を尊重
 - **forceful パス:** `expireAfter`、Spot Interruption — `terminationGracePeriod` までのみ PDB を尊重
 - **forceful fallback:** オプトイン、ウィンドウ内限定モード（`surge.forcefulFallback`、デフォルト off; ADR-0001）。リスクのある `NodeClaim` を surge **なし** でウィンドウ内に削除 — voluntary パス経由（PDB 適用、§3.3）
+- **whole-node 予約:** オプトインモード（`surge.wholeNodeReservation`、デフォルト off; ADR-0005）。placeholder を cpu と memory の 1 ノード分にサイズし、それらの空きが 1 ノード分に満たないホストには吸収されないようにする（§3.3）
 
 ### シンボル
 

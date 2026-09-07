@@ -59,7 +59,7 @@ flowchart TD
     q2 -->|yes| pick["earliest-deadline の適格候補を選択"]
     pick --> q3{"候補<br/>あり?"}
     q3 -->|no| rq
-    q3 -->|yes| q4{"surge_headroom?<br/>クランプ済みフットプリント<br/>vs spec.limits バジェット"}
+    q3 -->|yes| q4{"surge_headroom?<br/>placeholder のフットプリント<br/>vs spec.limits バジェット"}
     q4 -->|no| warn["warn: limits ヘッドルーム不足;<br/>Requeue (1m)"]
     q4 -->|yes| anchor["active-rotation anchor を書き込み<br/>(conflict-checked, only-if-absent)"]
     anchor --> adv
@@ -166,7 +166,8 @@ reconcile_nodepool(np):
   if cand == nil: return Requeue(1m)
   surgeless := forceful_fallback(np, cand)
   if not surgeless and not surge_headroom(np, cand):
-      warn("insufficient limits headroom"); return Requeue(1m)
+      warn(InsufficientHeadroom, resource, want, remaining, limit)  # deduped
+      return Requeue(1m)
   annotate(np, active-rotation=cand.name)    # conflict-checked, only-if-absent
   if surgeless:
       annotate(np, rotation-mode=forceful-fallback,
@@ -270,9 +271,11 @@ advance(np, name):
           if out == claimed: emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
-      # リトライは新しい試行: このパスが上位にある step 1a の static ゲート
-      # （anchor により先に advance() へ入る）も通過する必要がある。
+      # リトライは新しい試行: このパスが上位にある step 1a の static ゲートと
+      # step 1b の fatal feasibility ゲート（anchor により先に advance() へ入る）も
+      # 通過する必要がある。
       if start_gates(np) and np.spec.replicas is unset
+         and no fatal feasibility finding                          # step 1b の再主張: この経路はその上にいる
          and elapsed(cand.failed-at) >= effective_backoff(cand)   # エスカレート済み、発生（occurrence）にクランプ（§3.2）
          and surge_headroom(np, cand):
           # failed からのみ。同じガードが下の再入も抑える: advance() はキャッシュ
@@ -468,6 +471,8 @@ spec:
         - karpenter.sh/capacity-type
       preferred: []
     forcefulFallback:             # オプトイン surge なしフォールバック（§3.6）
+      enabled: false
+    wholeNodeReservation:         # オプトイン whole-node 予約（§3.3、ADR-0005）
       enabled: false
   prePull:                        # v2（v1 では無効）
     enabled: false

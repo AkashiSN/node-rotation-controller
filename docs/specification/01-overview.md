@@ -61,6 +61,7 @@ Karpenter (and EKS Auto Mode) classifies node disruption into two categories:
 - **voluntary path:** Consolidation, Drift, and this controller's `NodeClaim` delete — honors PDBs
 - **forceful path:** `expireAfter`, Spot Interruption — respects PDBs only up to `terminationGracePeriod`
 - **forceful fallback:** Opt-in, window-bounded mode (`surge.forcefulFallback`, default off; ADR-0001) that deletes an at-risk `NodeClaim` in-window **without** the surge — still via the voluntary path (PDBs apply, §3.3)
+- **whole-node reservation:** Opt-in mode (`surge.wholeNodeReservation`, default off; ADR-0005) that sizes the placeholder to a whole node's worth of cpu and memory, so a host whose free capacity in those dimensions is short of a node's cannot absorb it (§3.3)
 
 ### Symbols
 

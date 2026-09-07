@@ -204,6 +204,17 @@
                       "description": "Rotate a candidate that cannot finish a graceful surge before its own deadline surge-less, in-window, via the voluntary (PDB-respecting) path."
                     }
                   }
+                },
+                "wholeNodeReservation": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Opt-in whole-node surge reservation (spec §3.3, ADR-0005). Default off.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Size the placeholder to a whole node's worth of cpu and memory, so a host whose free capacity in those dimensions is short of a node's cannot absorb it. A bounded reduction of the absorb-path gap, not a guarantee: the reservation is sized from the candidate, so a larger host, a host with less DaemonSet overhead, or one running only Pods that request no cpu or memory can still absorb it. Costs an extra instance on every rotation whose reservation is not absorbed, and the surge_headroom gate then tests a whole-node footprint."
+                    }
+                  }
                 }
               }
             },

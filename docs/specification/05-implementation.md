@@ -59,7 +59,7 @@ flowchart TD
     q2 -->|yes| pick["pick earliest-deadline eligible candidate"]
     pick --> q3{"candidate<br/>found?"}
     q3 -->|no| rq
-    q3 -->|yes| q4{"surge_headroom?<br/>clamped footprint<br/>vs spec.limits budget"}
+    q3 -->|yes| q4{"surge_headroom?<br/>placeholder footprint<br/>vs spec.limits budget"}
     q4 -->|no| warn["warn: insufficient limits;<br/>Requeue (1m)"]
     q4 -->|yes| anchor["write active-rotation anchor<br/>(conflict-checked, only-if-absent)"]
     anchor --> adv
@@ -166,7 +166,8 @@ reconcile_nodepool(np):
   if cand == nil: return Requeue(1m)
   surgeless := forceful_fallback(np, cand)
   if not surgeless and not surge_headroom(np, cand):
-      warn("insufficient limits headroom"); return Requeue(1m)
+      warn(InsufficientHeadroom, resource, want, remaining, limit)  # deduped
+      return Requeue(1m)
   annotate(np, active-rotation=cand.name)    # conflict-checked, only-if-absent
   if surgeless:
       annotate(np, rotation-mode=forceful-fallback,
@@ -271,9 +272,11 @@ advance(np, name):
           if out == claimed: emit_metrics(expired); alert
           clear(np, anchor)
           return Requeue(1m)
-      # A retry is a NEW attempt: it must also clear the step-1a static gate,
-      # which this path sits above (the anchor entered advance() first).
+      # A retry is a NEW attempt: it must also clear the step-1a static gate and
+      # the step-1b fatal feasibility gate, which this path sits above (the
+      # anchor entered advance() first).
       if start_gates(np) and np.spec.replicas is unset
+         and no fatal feasibility finding                          # step 1b, re-asserted: this path sits above it
          and elapsed(cand.failed-at) >= effective_backoff(cand)   # escalated, clamped to the occurrence (§3.2)
          and surge_headroom(np, cand):
           # only from failed. The same guard bounds the re-entry below: advance()
@@ -469,6 +472,8 @@ spec:
         - karpenter.sh/capacity-type
       preferred: []
     forcefulFallback:             # opt-in surge-less fallback (§3.6)
+      enabled: false
+    wholeNodeReservation:         # opt-in whole-node reservation (§3.3, ADR-0005)
       enabled: false
   prePull:                        # v2 (disabled in v1)
     enabled: false

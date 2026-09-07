@@ -148,6 +148,42 @@ type Surge struct {
 	// +optional
 	ForcefulFallback FeatureToggle `json:"forcefulFallback,omitempty"`
 
+	// wholeNodeReservation is the opt-in whole-node surge reservation (spec §3.3,
+	// ADR-0005). When enabled, the placeholder is sized to a whole node's worth of
+	// what the drain needs — NodeClaim.status.allocatable minus DaemonSet overhead
+	// — instead of to the reschedulable request sum.
+	//
+	// The default aggregate sizing reserves capacity that is fungible with the
+	// individual evicted Pods' placement only on a host that can accept all of
+	// them; a host already running other Pods can offer a big enough hole while a
+	// Pod's own podAntiAffinity or hostPort still refuses it, so Karpenter
+	// provisions for that Pod after the drain has started. Demanding a whole node's
+	// worth of cpu and memory excludes every host whose free capacity in those
+	// dimensions is short of the candidate-sized footprint (how much of the fleet
+	// that removes depends on the pool's shape), while a genuinely
+	// empty host still absorbs the placeholder, and should.
+	//
+	// It raises the bar; it does not guarantee an empty host. The reservation is
+	// sized from the CANDIDATE's allocatable, so an occupied host can still take it
+	// when it is a larger instance type (the placeholder pins the NodePool and the
+	// replicated requirements, not the type), when it carries less DaemonSet
+	// overhead, or when the Pods on it request no cpu or memory (only those two
+	// dimensions are raised, so a Pod requesting just an accelerator or ephemeral
+	// storage occupies nothing the reservation measures) — and such a Pod can be
+	// exactly the one whose anti-affinity or hostPort then refuses an evicted Pod.
+	// Adding node.kubernetes.io/instance-type to matchNodeRequirements.required
+	// narrows the first of those, at the cost of Karpenter's freedom to substitute
+	// instance types.
+	//
+	// The costs are an extra instance on every rotation whose reservation is not
+	// absorbed — how often that is depends on the pool's shape — and a
+	// surge_headroom gate (§5.2 step 3) that tests a whole-node footprint, so a
+	// NodePool whose spec.limits are nearly exhausted stops starting rotations that
+	// the drain-sized placeholder would have fitted. Default off keeps the
+	// aggregate sizing.
+	// +optional
+	WholeNodeReservation FeatureToggle `json:"wholeNodeReservation,omitempty"`
+
 	// drainEstimate is the expected duration of a healthy, PDB-respecting drain. It
 	// feeds ONLY the layer-2 throughput forecast (spec §3.2): C = m·ceil(D /
 	// (provisioningEstimate + drainEstimate + cooldownAfter)). It is not a bound and
