@@ -9,10 +9,13 @@ import (
 )
 
 // DaemonSetRequests sums the effective requests of the DaemonSet Pods scheduled
-// on nodeName — the overhead Karpenter adds to every node it provisions. The
-// clamp subtracts this from NodeClaim.status.allocatable to find the largest
-// placeholder Karpenter can actually fit onto a fresh node of the candidate's
-// instance type (spec §3.3).
+// on nodeName — the controller's observation of the overhead Karpenter adds to
+// a node it provisions. The clamp subtracts this from
+// NodeClaim.status.allocatable to estimate the largest placeholder that fits
+// onto a fresh node of the candidate's instance type (spec §3.3). It is an
+// estimate on both terms: the allocatable is Karpenter's cached per-type value,
+// and the overhead is the set observed HERE, which Karpenter's own estimate for
+// a fresh node need not match (issue #328).
 //
 // It sizes each Pod with the same effective-request algorithm as
 // ReschedulableRequests (resourcehelper.PodRequests). Only *running* DaemonSet
@@ -105,17 +108,23 @@ type ClampResult struct {
 	// exactly the resources that were clamped. Nil when Clamped is false.
 	Shortfall corev1.ResourceList
 	// Refused is true when a resource with positive demand has a non-positive
-	// limit, so no clamp value could induce a node. Requests then carries the full
-	// un-clamped drain and Clamped is false.
+	// limit, so no clamp value under that ceiling would reserve any positive
+	// amount of RefusedResource. It is per-resource — the loop returns on the
+	// first such resource, and the drain's others may still be reservable — and
+	// the ceiling is the candidate's CACHED allocatable minus the DaemonSet
+	// overhead observed on it, so it says nothing about whether the full-drain
+	// placeholder is schedulable anywhere. See Clamp (issue #328). Requests then
+	// carries the full un-clamped drain and Clamped is false.
 	Refused bool
 	// RefusedResource names the resource that forced the refusal. Empty unless
 	// Refused.
 	RefusedResource corev1.ResourceName
 }
 
-// Clamp caps requests at what Karpenter can actually provision for a fresh node
-// of the candidate's instance type: NodeClaim.status.allocatable minus the
-// DaemonSet overhead Karpenter adds to every node it creates (spec §3.3).
+// Clamp caps requests at a candidate-derived estimate of what Karpenter can
+// provision for a fresh node of the candidate's instance type:
+// NodeClaim.status.allocatable minus the DaemonSet overhead observed on the
+// candidate (spec §3.3).
 //
 //	limit    = allocatable − daemonSet   (per resource, floored at zero)
 //	requests = min(requests, limit)      (per resource)
@@ -125,9 +134,15 @@ type ClampResult struct {
 // scheduler filled past that estimate yields a placeholder Karpenter refuses to
 // provision ("no instance type has enough resources"). The clamp trades the full
 // capacity guarantee — the shortfall is bounded by that per-AZ band — for a
-// placeholder Karpenter can always fit; the drain absorbs the shortfall through
+// placeholder intended to fit; the drain absorbs the shortfall through
 // placeholder preemption (priority −10) plus Karpenter follow-up provisioning
 // (issue #224).
+//
+// "Intended", not guaranteed: the ceiling subtracts the DaemonSet overhead
+// OBSERVED on the candidate, and Karpenter's own estimate of the set for a fresh
+// node need not match it — the same asymmetry the refusal wording below turns
+// into a way out. Where Karpenter estimates MORE applicable overhead, even a
+// clamped placeholder can fail resource fit (issue #328).
 //
 // When allocatable is empty/absent (a NodeClaim that has not registered yet, or
 // a nil map) there is no trustworthy ceiling, so the clamp is a no-op: it returns
@@ -136,13 +151,39 @@ type ClampResult struct {
 // from allocatable is likewise left untouched — its ceiling is unknown.
 //
 // A non-positive limit on a resource with positive demand is refused, not
-// clamped. Karpenter could not fit even a zero-sized placeholder beside the
-// DaemonSet overhead, so no clamp value induces a node; a zero-request Pod would
-// merely bind to an existing node and satisfy surge_ready with nothing reserved.
-// That is break-before-make, which v1 exposes only as the opt-in, window-bounded
-// surge.forcefulFallback (ADR-0001) — the clamp must not become it silently.
-// Refusing preserves the full drain, leaves the placeholder unschedulable, and
-// lets the rotation roll back.
+// clamped. Every clamp value under that ceiling is non-positive, so a clamped
+// placeholder would reserve NONE OF THAT RESOURCE while the drain demands it —
+// and could then satisfy surge_ready with that dimension of the drain
+// unreserved. That is break-before-make on that dimension, which v1 exposes only
+// as the opt-in, window-bounded surge.forcefulFallback (ADR-0001) — the clamp
+// must not become it silently. Refusing preserves the full drain instead.
+//
+// The placeholder need not be empty for this to bite: with a positive cpu
+// ceiling and a zero memory ceiling it would still carry cpu, and the memory the
+// evicted Pods need would simply have no reservation behind it. That is also the
+// reason at limit == 0, where a zero request for that one resource is
+// arithmetically admissible beside the overhead: what rules it out is that it
+// holds none of the demand, not that it fails to fit. Nothing here says where
+// such a Pod would land, either — that is the question the next paragraph
+// refuses to answer.
+//
+// Refusing establishes NOTHING about schedulability, and the caller must not
+// report it as if it did. What it establishes is arithmetic about ONE ceiling on
+// ONE resource: under the candidate's CACHED per-type allocatable minus the
+// DaemonSet overhead observed running on it, no clamp value reserves any
+// positive amount of the resource this returned on. It does not extend to the
+// rest of the drain — the loop returns on the first such resource, and the
+// others may have positive ceilings and be reservable.
+//
+// Real scheduling happens elsewhere: Node.status.allocatable can exceed the
+// cached estimate, which is the whole premise of this clamp and the gap Band
+// measures, so even a node of the SAME instance type carrying the SAME
+// DaemonSets can have room for the full drain. A larger allowed instance type
+// and a node carrying less applicable overhead are two further ordinary cases,
+// since the placeholder pins the NodePool and the replicated requirements but
+// never the instance type. Those are examples, not an exhaustive set: the
+// rollback that follows when no node can take the placeholder is an outcome,
+// never the complement of a list (issue #328).
 func Clamp(requests, allocatable, daemonSet corev1.ResourceList) ClampResult {
 	if len(allocatable) == 0 {
 		return ClampResult{Requests: requests}

@@ -134,12 +134,17 @@ func TestClampNoOpWhenAllocatableEmpty(t *testing.T) {
 }
 
 func TestClampRefusedWhenLimitNonPositiveWithPositiveDemand(t *testing.T) {
-	// DaemonSet overhead at or above allocatable leaves no room for any placeholder,
-	// so no clamp value can induce a node. Clamping to zero would bind a
-	// zero-request Pod to any existing node and satisfy surge_ready with nothing
-	// reserved — a silent break-before-make. Refuse instead: the full drain is
-	// preserved, the placeholder stays unschedulable, and the rotation rolls back.
-	// Operators who want surge-less rotation opt into surge.forcefulFallback.
+	// DaemonSet overhead at or above allocatable leaves that resource no positive
+	// ceiling, so every clamp value under it would reserve none of it: the
+	// placeholder could then satisfy surge_ready with that dimension of the drain
+	// unreserved — a silent break-before-make on it, whether or not the
+	// placeholder still carries other resources. Refuse instead, preserving the
+	// full drain. Two limits on what that settles (issue #328): it is per resource, the
+	// loop returning on the first refusal while the drain's others may still be
+	// reservable; and both inputs are the candidate's own CACHED values, so it
+	// says nothing about whether any node can host the full-drain placeholder — a
+	// real node's allocatable can exceed the cached estimate, which is the very
+	// band this clamp trades against.
 	for _, tc := range []struct {
 		name      string
 		daemonSet corev1.ResourceList

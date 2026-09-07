@@ -162,9 +162,11 @@ func TestWholeNodeLeavesResourcesWithNoReportedCeiling(t *testing.T) {
 }
 
 // DaemonSet overhead can exhaust allocatable. Raising to a non-positive limit
-// would reserve nothing at all and satisfy surge_ready with an empty placeholder
-// — a silent break-before-make. The drain is kept so Clamp refuses it and the
-// rotation rolls back, exactly as it does without this mode.
+// would reserve none of that resource, letting surge_ready be satisfied with
+// that dimension of the drain unreserved — a silent break-before-make on it, and
+// where the drain requests nothing else, an empty placeholder reserving nothing
+// at all. The drain is kept so Clamp refuses it, exactly as it does without this
+// mode (issue #328 for the per-resource scope).
 func TestWholeNodeKeepsTheDrainWhenTheLimitIsNonPositive(t *testing.T) {
 	got := surge.WholeNode(
 		rl("cpu", "800m"),
@@ -181,8 +183,8 @@ func TestWholeNodeKeepsTheDrainWhenTheLimitIsNonPositive(t *testing.T) {
 // The case the drain-shaped test above could not reach: workload that requests
 // nothing, on a node whose DaemonSet overhead exhausts allocatable. There is no
 // drain value to keep, so leaving the mandatory dimension out produced an EMPTY
-// placeholder — one that binds anywhere and satisfies surge_ready with nothing
-// reserved, the silent break-before-make this whole path exists to avoid. A
+// placeholder — one that could satisfy surge_ready while reserving nothing,
+// the silent break-before-make this whole path exists to avoid. A
 // whole node cannot be reserved here, and "cannot" is Clamp's refusal, so the
 // demand has to reach Clamp for it to refuse on.
 func TestWholeNodeLeavesARefusableDemandWhenAMandatoryLimitIsNonPositive(t *testing.T) {

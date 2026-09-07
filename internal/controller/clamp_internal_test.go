@@ -101,12 +101,18 @@ func TestPlaceholderClampWarnsWhenShortfallExceedsBand(t *testing.T) {
 	}
 }
 
-// DaemonSet overhead at or above the NodeClaim's allocatable leaves no room for
-// any placeholder, so no clamp value can induce a node. Clamping to zero would
-// bind a zero-request Pod anywhere and satisfy surge_ready with nothing
-// reserved — a silent break-before-make. The clamp is refused: the placeholder
-// keeps the full drain, stays unschedulable, and the rotation rolls back
-// (issue #224).
+// DaemonSet overhead at or above the NodeClaim's cached allocatable leaves that
+// resource no positive ceiling, so every clamp value under it would reserve none
+// of it. This fixture is exactly the case that makes the distinction matter: the
+// cpu ceiling is positive and only memory is refused, so a clamped placeholder
+// would still carry 1200m of cpu — not an empty Pod — while satisfying
+// surge_ready with the 500Mi the evicted Pods need entirely unreserved. That is
+// the break-before-make, on that one dimension. The clamp is refused instead:
+// the placeholder keeps the full drain (issue #224). What this test
+// pins is the sizing and the announcement; whether the placeholder then goes
+// unschedulable is not decided by that ceiling at all, and
+// TestClampRefusedEventDoesNotDecideSchedulability pins the Event saying so
+// (issue #328).
 func TestPlaceholderClampRefusedWhenDaemonSetExhaustsAllocatable(t *testing.T) {
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
 		ncAllocatable("cpu", "3770m", "memory", "1000Mi"))
@@ -216,6 +222,17 @@ func TestPlaceholderClampedWhenNodeExceedsProvisionableCapacity(t *testing.T) {
 	if !strings.Contains(clamped, "Normal") {
 		t.Errorf("SurgeClamped must be a Normal Event, got %q", clamped)
 	}
+	// The limit it reports is the SAME candidate-derived estimate the refusal is
+	// computed from — cached allocatable minus the DaemonSet overhead observed
+	// here — so it must not be announced as capacity Karpenter definitely has.
+	// Karpenter's own estimate of the overhead for a fresh node can be larger, in
+	// which case even this clamped placeholder fails resource fit (issue #328).
+	if !containsLine([]string{clamped}, "candidate-derived provisionable estimate") {
+		t.Errorf("SurgeClamped must name the limit as an estimate: %q", clamped)
+	}
+	if containsLine([]string{clamped}, "Karpenter's provisionable capacity") {
+		t.Errorf("SurgeClamped must not report the limit as capacity Karpenter has: %q", clamped)
+	}
 	// The shortfall is inside the band, so no divergence warning.
 	for _, e := range evs {
 		if strings.Contains(e, reasonSurgeClampBandExceeded) {
@@ -296,5 +313,89 @@ func TestPlaceholderNotClampedWhenAllocatableEmpty(t *testing.T) {
 	}
 	if got := ph.Spec.Containers[0].Resources.Requests.Memory(); got.Cmp(resource.MustParse("13600Mi")) != 0 {
 		t.Errorf("placeholder memory must be the full drain: got %s, want 13600Mi", got.String())
+	}
+}
+
+// The refusal is arithmetic about ONE ceiling on ONE resource: the candidate's
+// own CACHED NodeClaim.status.allocatable minus the DaemonSet overhead observed
+// running on it, for the resource Clamp refused on. Under that ceiling no clamp
+// value reserves any positive share of THAT resource — that much is exact, and
+// no more: the drain's other resources may have positive ceilings and be
+// reservable, since Clamp returns on the first refusal it finds. Everything past
+// it is not exact either: whether the
+// full-drain placeholder finds a host is decided by kube-scheduler against real
+// nodes, whose Node.status.allocatable can EXCEED the cached per-type estimate.
+// That gap is the band the clamp itself is built on, so a node of the same type
+// carrying the same DaemonSets can still have room — a third way out that is
+// neither "a larger instance type" nor "less applicable overhead".
+//
+// So the Event must not enumerate the ways out and then treat the rollback as
+// the complement of that set. It names them as examples, says the measurement
+// does not decide schedulability, and reaches the rollback only as an outcome
+// (issue #328). Asserting otherwise is the same overclaim in a smaller box.
+func TestClampRefusedEventDoesNotDecideSchedulability(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
+		ncAllocatable("cpu", "3770m", "memory", "1000Mi"))
+	pool := withTGP(testNodePool(nil))
+	workload := workloadPod("app", candNode, "1200m", "500Mi")
+	ds := asDaemonSet(workloadPod("kube-proxy", candNode, "300m", "1500Mi"))
+	rec := events.NewFakeRecorder(16)
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false), workload, ds)
+	r.Events = rec
+
+	if _, err := r.reconcileNodePool(context.Background(), pool, testPolicy(), mustSchedule(t)); err != nil {
+		t.Fatalf("reconcileNodePool: %v", err)
+	}
+
+	var evs []string
+	for _, e := range drain(rec) {
+		if strings.Contains(e, reasonSurgeClampRefused) {
+			evs = append(evs, e)
+		}
+	}
+	if len(evs) != 1 {
+		t.Fatalf("want 1 SurgeClampRefused Event, got %d: %v", len(evs), evs)
+	}
+	// What was measured, and on what — not a verdict about the NodePool.
+	if !containsLine(evs, "this candidate's own values", "observed on it", "memory") {
+		t.Errorf("the Event must scope the refusal to the candidate's observed values: %v", evs)
+	}
+	// The one thing the ceiling really settles — and it is PER RESOURCE. Clamp
+	// returns Refused on the first resource whose ceiling is non-positive while
+	// the drain demands it; the other resources may have positive ceilings and be
+	// reservable. Saying "any of the drain" widens a per-resource fact into a
+	// whole-drain one.
+	if !containsLine(evs, "no clamp value reserves any positive amount of memory") {
+		t.Errorf("the Event must state what the ceiling settles, scoped to the resource: %v", evs)
+	}
+	// And the thing it does not.
+	if !containsLine(evs, "does not decide whether", "schedulable") {
+		t.Errorf("the Event must disclaim deciding schedulability: %v", evs)
+	}
+	// The band escape — a node of the SAME type with the SAME DaemonSets, whose
+	// real allocatable exceeds the cached estimate. Its absence is what made the
+	// earlier two-item list read as exhaustive.
+	if !containsLine(evs, "more allocatable than", "cached estimate") {
+		t.Errorf("the Event must name the band escape, not only type and overhead: %v", evs)
+	}
+	// Named as examples, with the controller disclaiming which apply.
+	if !containsLine(evs, "larger instance type", "less applicable DaemonSet overhead",
+		"not something this controller can determine", "examples rather than the full set") {
+		t.Errorf("the ways out must be examples, not an enumerated set: %v", evs)
+	}
+	// The rollback is an outcome, never the complement of the list above.
+	if !containsLine(evs, "If nothing can take it", "rolls back") {
+		t.Errorf("the rollback must be stated as an outcome: %v", evs)
+	}
+	for _, absolute := range []string{
+		"the surge placeholder cannot be clamped and the rotation will roll back",
+		"the rotation will roll back",
+		"If neither is",
+		"cannot be induced on a node like this one",
+		"reserves any of the drain",
+	} {
+		if containsLine(evs, absolute) {
+			t.Errorf("the Event must not assert %q — the measurement does not reach it: %v", absolute, evs)
+		}
 	}
 }

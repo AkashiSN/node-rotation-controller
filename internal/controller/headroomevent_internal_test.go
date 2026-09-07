@@ -229,9 +229,25 @@ func TestHeadroomBlockNamesAnUnprovisionableReservation(t *testing.T) {
 	if !containsLine(evs, "on this candidate's own values", "observed on it", "DaemonSet") {
 		t.Errorf("the caveat must be scoped to the candidate's observed values: %v", evs)
 	}
-	// Both escapes it cannot rule out are named, and neither as the only one.
+	// The escapes it cannot rule out are named as EXAMPLES. Listing two and
+	// stopping reads as a closed set, which the ceiling does not support: it is
+	// the cached per-type estimate, and a real node's allocatable can exceed it
+	// (the band this clamp is built on), so even a node of the same type carrying
+	// the same DaemonSets can have room (issue #328).
 	if !containsLine(evs, "larger instance type", "less applicable DaemonSet overhead", "not something this controller can determine") {
-		t.Errorf("the caveat must name both possible satisfactions and disclaim knowing which applies: %v", evs)
+		t.Errorf("the caveat must name possible satisfactions and disclaim knowing which applies: %v", evs)
+	}
+	if !containsLine(evs, "more allocatable than", "cached estimate", "examples rather than the full set") {
+		t.Errorf("the caveat must name the band escape and mark the list as examples: %v", evs)
+	}
+	// Refused is per-resource: Clamp returns on the first resource whose ceiling
+	// is non-positive, so the other resources may still be reservable. "any of the
+	// drain" would widen that into a whole-drain claim.
+	if !containsLine(evs, "no clamp value reserves any positive amount of cpu") {
+		t.Errorf("the caveat must scope what the ceiling settles to the refused resource: %v", evs)
+	}
+	if containsLine(evs, "reserves any of the drain") {
+		t.Errorf("the caveat must not widen a per-resource refusal to the whole drain: %v", evs)
 	}
 	for _, absolute := range []string{"whatever the budget", "will NOT let this rotation proceed", "can only be satisfied on a larger instance type"} {
 		if containsLine(evs, absolute) {

@@ -25,9 +25,14 @@ const (
 	// measured per-AZ band explains — the controller's request accounting has
 	// diverged from the scheduler's. The rotation still proceeds (issue #224).
 	reasonSurgeClampBandExceeded = "SurgeClampBandExceeded"
-	// reasonSurgeClampRefused warns that DaemonSet overhead leaves no room for any
-	// placeholder, so the clamp is refused rather than sized to zero; the rotation
-	// rolls back instead of a silent break-before-make (issue #224).
+	// reasonSurgeClampRefused warns that on one resource the candidate's cached
+	// allocatable minus the DaemonSet overhead observed on it leaves no positive
+	// ceiling, so every clamp value under it would reserve none of that resource;
+	// the clamp is refused rather than sized to zero there, which would let
+	// surge_ready be satisfied with that dimension of the drain unreserved — a
+	// silent break-before-make on it (issue #224). That ceiling settles no
+	// question of schedulability, so the Event gives the ways out as examples and
+	// the rollback as an outcome (issue #328).
 	reasonSurgeClampRefused = "SurgeClampRefused"
 
 	actionRotateNode     = "RotateNode"
