@@ -79,6 +79,38 @@ func TestHeadroomBlockEventDedupsWhileTheConditionHolds(t *testing.T) {
 	}
 }
 
+// The numbers in the message move on their own: status.resources tracks the
+// pool's provisioned capacity, so any scale or consolidation elsewhere in the
+// pool changes `remaining` while the block itself is unchanged. Deduplicating on
+// the rendered message would re-fire the Event on every one of those, which on a
+// busy pool means every longRequeue — the spam this dedup exists to prevent.
+func TestHeadroomBlockEventDedupsWhileTheNumbersMove(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode))
+	pool := tightPool(nil)
+	rec := events.NewFakeRecorder(16)
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false),
+		workloadPod("app", candNode, "2", "1Gi"))
+	r.Events = rec
+
+	step(t, r, getPool(t, r))
+	if evs := drain(rec); len(evs) != 1 {
+		t.Fatalf("pass 1 must announce the block, got %v", evs)
+	}
+
+	// Another node joins the pool: provisioned rises, remaining falls, the block
+	// is the same block.
+	moved := getPool(t, r)
+	moved.Status.Resources = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")}
+	if err := r.Update(context.Background(), moved); err != nil {
+		t.Fatalf("move status.resources: %v", err)
+	}
+
+	step(t, r, getPool(t, r))
+	if evs := drain(rec); len(evs) != 0 {
+		t.Errorf("a moved budget under an unchanged block must not re-fire, got %v", evs)
+	}
+}
+
 // A block that clears and returns is a new occurrence and must be announced
 // again, or an operator who raises the limit and later exhausts it hears nothing.
 func TestHeadroomBlockEventRefiresAfterTheBlockClears(t *testing.T) {
@@ -150,5 +182,42 @@ func TestHeadroomBlockOnRetryEmitsTheEvent(t *testing.T) {
 	}
 	if !containsLine(evs, reasonInsufficientHeadroom) {
 		t.Errorf("Event must name the headroom block: %v", evs)
+	}
+}
+
+// The Event claims headroom is the SOLE remaining blocker, and its message tells
+// the operator that raising spec.limits lets the rotation proceed. On a pool
+// whose schedule is fatally infeasible that advice is wrong: the fresh-start
+// fatal gate would refuse the rotation anyway. The retry leg sits above that gate
+// — the same shape #302 closed for static pools — so it has to close on fatal
+// feasibility too, or the Event misdirects and the retry starts an attempt a
+// fresh start would have refused.
+func TestHeadroomBlockOnRetryStaysSilentWhenFeasibilityIsFatal(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
+		ncAnn(annotations.State, annotations.StateFailed,
+			annotations.FailedAt, rfc(testNow.Add(-2*time.Hour)),
+			annotations.RetryCount, "1"))
+	// A short template expireAfter drives a fatal ANonPositive finding (§3.2).
+	pool := withTemplateE(tightPool(map[string]string{
+		annotations.ActiveRotation:      "nc-old",
+		annotations.ActiveRotationState: annotations.StateFailed,
+	}), 40*time.Hour)
+	rec := events.NewFakeRecorder(16)
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false),
+		workloadPod("app", candNode, "2", "1Gi"))
+	r.Events = rec
+
+	step(t, r, getPool(t, r))
+
+	if containsLine(drain(rec), reasonInsufficientHeadroom) {
+		t.Error("headroom must not be announced as the blocker while a fatal finding also blocks")
+	}
+	if c := getClaimOrNil(t, r, "nc-old"); c == nil || c.Annotations[annotations.State] != annotations.StateFailed {
+		t.Error("the retry must not start on a fatally infeasible schedule")
+	}
+	// Same treatment as the static gate: the repair branch releases the anchor so
+	// the pool falls through to the fresh-start fatal gate on the next pass.
+	if got := getPool(t, r).Annotations[annotations.ActiveRotation]; got != "" {
+		t.Errorf("the anchor must be released, got %q", got)
 	}
 }

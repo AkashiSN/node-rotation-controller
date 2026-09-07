@@ -158,14 +158,19 @@ type Surge struct {
 	// them; a host already running other Pods can offer a big enough hole while a
 	// Pod's own podAntiAffinity or hostPort still refuses it, so Karpenter
 	// provisions for that Pod after the drain has started. Demanding a whole node's
-	// worth excludes exactly those hosts — a genuinely empty host still absorbs the
-	// placeholder, and should.
+	// worth of cpu and memory excludes every host whose free capacity in those
+	// dimensions is short of a node's — most occupied hosts — while a genuinely
+	// empty host still absorbs the placeholder, and should.
 	//
-	// The costs are an instance of the candidate's own class per rotation and a
-	// surge_headroom gate (§5.2 step 3) that tests a whole-node footprint, so a
-	// NodePool whose spec.limits are nearly exhausted stops starting rotations that
-	// the drain-sized placeholder would have fitted. Default off keeps the
-	// aggregate sizing.
+	// It raises the bar; it does not guarantee an empty host. Pods that request no
+	// resources occupy nothing the scheduler counts, so a host running them still
+	// has a whole node free and can absorb the placeholder — and such a Pod can be
+	// exactly the one whose anti-affinity or hostPort then refuses an evicted Pod.
+	//
+	// The costs are an extra instance per rotation and a surge_headroom gate (§5.2
+	// step 3) that tests a whole-node footprint, so a NodePool whose spec.limits
+	// are nearly exhausted stops starting rotations that the drain-sized
+	// placeholder would have fitted. Default off keeps the aggregate sizing.
 	// +optional
 	WholeNodeReservation FeatureToggle `json:"wholeNodeReservation,omitempty"`
 

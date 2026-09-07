@@ -522,7 +522,7 @@ func TestAnchoredRetryReentersOnTheClampedBackoff(t *testing.T) {
 			r := newReconciler(t, tc.now, nil, pool.DeepCopy(), cand.DeepCopy(),
 				testK8sNode(candNode, true, nil, false))
 			res := r.resolve(pool, clampPolicy(), mustScheduleFor(t, clampPolicy()))
-			if _, err := r.advanceFailed(context.Background(), pool.DeepCopy(), res, getClaim(t, r, "nc-old")); err != nil {
+			if _, err := r.advanceFailed(context.Background(), pool.DeepCopy(), res, getClaim(t, r, "nc-old"), nil); err != nil {
 				t.Fatalf("advanceFailed: %v", err)
 			}
 			if got := getClaim(t, r, "nc-old").Annotations[annotations.State]; got != tc.wantState {

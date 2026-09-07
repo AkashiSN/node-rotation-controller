@@ -212,7 +212,7 @@
                   "properties": {
                     "enabled": {
                       "type": "boolean",
-                      "description": "Size the placeholder to a whole node's worth of what the drain needs, so a host already running other Pods cannot absorb it. Costs an instance of the candidate's class per rotation, and the surge_headroom gate then tests a whole-node footprint."
+                      "description": "Size the placeholder to a whole node's worth of cpu and memory, so a host whose free capacity in those dimensions is short of a node's cannot absorb it. A substantial reduction of the absorb-path gap, not a guarantee: zero-request Pods occupy nothing the scheduler counts. Costs an extra instance per rotation, and the surge_headroom gate then tests a whole-node footprint."
                     }
                   }
                 }

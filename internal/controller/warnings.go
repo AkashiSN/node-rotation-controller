@@ -64,7 +64,7 @@ type poolWarnState struct {
 	noCandidate  string            // last-logged no-candidate reason key ("" = none)
 	staticPool   types.UID         // UID of the NodePool already warned as static ("" = none)
 	phPending    map[string]string // NodeClaim name → last-logged "reason|message"
-	headroom     string            // last-warned headroom block ("" = none)
+	headroom     string            // last-warned headroom block identity, "claim|resource" ("" = none)
 }
 
 func newWarningEmitter(rec events.EventRecorder) *warningEmitter {
@@ -241,11 +241,19 @@ func (w *warningEmitter) ClearStaticNodePool(pool string) {
 //
 // Both call sites are level-triggered — the start gate re-evaluates every
 // longRequeue and the failed-retry gate once per effective backoff — so this
-// deduplicates on the message, which carries the claim, the resource and its
-// numbers. A different candidate, a different resource, or a budget that moved
-// is a new occurrence and re-fires; the unchanged block stays silent. That is why
-// surge.Headroom examines resources in sorted order: an unstable resource name
-// would make every pass look like a new occurrence.
+// deduplicates on the block's IDENTITY: the candidate and the resource that did
+// not fit. A different candidate or a different blocking resource is a new
+// occurrence and re-fires; the same block stays silent however its numbers move.
+//
+// The numbers are deliberately not part of the key. `remaining` is derived from
+// NodePool.status.resources, which tracks the pool's provisioned capacity, so any
+// scale or consolidation elsewhere in the pool changes it while the block itself
+// is unchanged — keying on the rendered message would re-fire the Event on every
+// one of those, which on a busy pool means every longRequeue. They stay in the
+// message and the log line, where they are what an operator acts on.
+//
+// The identity is still only as stable as the resource name, which is why
+// surge.Headroom examines resources in sorted order.
 //
 // The Event is raised on the NodePool with the claim as the related object: what
 // is stuck is the pool's rotation, and the pool is where an operator looks to ask
@@ -255,13 +263,15 @@ func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.N
 		"NodeClaim %s cannot be rotated: the surge placeholder needs %s %s but the NodePool has %s remaining of its spec.limits ceiling of %s (%s already provisioned). No rotation will start for this NodePool while that holds — the surge reserves replacement capacity before draining, so it consumes budget the limit does not allow. Raise spec.limits, or reduce the pool's provisioned capacity, to let the rotation proceed; until then these nodes remain subject to Karpenter's forceful expiration.",
 		cand.Name, hr.Want.String(), hr.Resource, hr.Remaining.String(), hr.Limit.String(), provisionedString(hr))
 
+	key := cand.Name + "|" + string(hr.Resource)
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	s := w.poolStateLocked(pool.Name)
-	if s.headroom == msg {
+	if s.headroom == key {
 		return // same block, already announced — no re-fire
 	}
-	s.headroom = msg
+	s.headroom = key
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info(
 		"insufficient limits headroom; cannot surge",
 		"candidate", cand.Name, "resource", hr.Resource,

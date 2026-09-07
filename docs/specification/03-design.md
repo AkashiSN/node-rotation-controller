@@ -288,18 +288,23 @@ requests = min(reschedulable sum, limit)                        (per resource)
 **Solution (opt-in, `surge.wholeNodeReservation`, default off):**
 
 ```
-requests = max(reschedulable sum, limit)   (per resource; limit as above)
+requests = max(requests, limit)   (limit as above)
 ```
 
-::: tip It is not "force a new node"
-It requires a host with **a whole node's worth of free space**. A partially-filled host — the class on which the aggregate assumption breaks — can no longer take the placeholder; a genuinely empty host (DaemonSets only) still can, and should, because an empty host has nothing for a hostname-topology anti-affinity to bite on. Excluding hosts directly is not available: a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision at all (issue #96).
+applied to **cpu and memory** whenever the candidate has reschedulable Pods, plus every other resource the drain itself requests.
+
+::: warning It raises the bar; it is not a guarantee
+Every host whose free cpu or memory is short of a whole node's is excluded — most occupied hosts — and a genuinely empty host (DaemonSets only) still absorbs the placeholder, which is correct: an empty host has nothing for a hostname-topology anti-affinity to bite on.
+
+It does **not** prove a host is empty. Pods that request no resources occupy nothing the scheduler counts, so a host running them still has a whole node free — and such a Pod can be the one whose anti-affinity or `hostPort` refuses an evicted Pod. There is no way to express "a host with no other Pods": a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision at all (issue #96), and a required `podAntiAffinity` matching every Pod would exclude the DaemonSets every node carries.
 :::
 
-- **Never upsizes:** `limit + DaemonSet = allocatable`, so the candidate's own instance class is the smallest type that fits
-- **Only resources the drain requests are raised** — a resource the evicted Pods do not request is not one they need reserved, and `pods` is not a container request at all. A drain that requests nothing reserves nothing
-- **A non-positive limit is left to the clamp's refusal** — raising to it would reserve nothing and satisfy `surge_ready` with an empty placeholder, a silent break-before-make
+- **Both bin-packing dimensions, whatever the drain declares** — a cpu-only drain that reserved only cpu could still be absorbed by a host filled with memory-only Pods. `pods` is never requested (it is not a container request); ephemeral storage and accelerators are raised only when the drain asks for them
+- **The Pod count decides whether to reserve**, not the sum: a candidate carrying only zero-request Pods has an empty drain and real workload. No reschedulable Pods reserves nothing
+- **Does not force a larger instance:** `limit + DaemonSet = allocatable`, so the request never exceeds the candidate's own class on resource fit — though the placeholder does not pin the instance type, so Karpenter may still choose another by availability, price, or the replicated requirements
+- **A non-positive limit is left to the clamp's refusal** — raising to it would reserve nothing and satisfy `surge_ready` with an empty placeholder, a silent break-before-make. A drain already above the limit is likewise left for the clamp to lower and report
 - **`surge_headroom` (§5.2) tests the raised footprint**, so a pool whose `spec.limits` are nearly exhausted stops starting rotations and says so (`InsufficientHeadroom`, §4.3)
-- **Cost:** an instance of the candidate's class per rotation, and possibly a consolidation cycle once the surge host leaves `do-not-disrupt`
+- **Cost:** an extra instance per rotation, and possibly a consolidation cycle once the surge host leaves `do-not-disrupt`
 
 Constraints coarser than the node — zone-level `podAntiAffinity`, `topologySpreadConstraints` — are **not** addressed: they are decided by what is in the zone, not by what is on the host. See ADR-0005 for why modelling the Pods faithfully does not address them either.
 

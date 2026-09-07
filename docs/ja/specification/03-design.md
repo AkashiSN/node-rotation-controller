@@ -288,18 +288,23 @@ requests = min(再スケジュール可能合計, limit)                    （�
 **解決（オプトイン、`surge.wholeNodeReservation`、デフォルト off）:**
 
 ```
-requests = max(再スケジュール可能合計, limit)   （リソースごと; limit は上記と同じ）
+requests = max(requests, limit)   （limit は上記と同じ）
 ```
 
-::: tip 「新規ノードの強制」ではない
-要求するのは**1 ノード分の空きを持つホスト**である。部分的に埋まったホスト — 集約の仮定が壊れるクラス — は placeholder を受け入れられなくなるが、完全に空のホスト（DaemonSet のみ）は引き続き受け入れられるし、そうあるべきである: 空のホストには hostname トポロジの anti-affinity が噛みつく相手が居らず、新規ノードと等価だからである。ホストを直接除外する方法は取れない: **required** な `kubernetes.io/hostname NotIn` term は Karpenter の provisioner にプロビジョニング自体を拒否させる（issue #96）。
+候補に再スケジュール対象の Pod がある限り **cpu と memory** に適用し、加えてドレイン自身が要求している他のリソースにも適用する。
+
+::: warning ハードルを上げるが、保証ではない
+空き cpu または memory が 1 ノード分に満たないホストはすべて除外される — 占有されたホストの大半がこれに当たる。完全に空のホスト（DaemonSet のみ）は引き続き placeholder を受け入れるが、これは正しい: 空のホストには hostname トポロジの anti-affinity が噛みつく相手が居ないからである。
+
+ただし**ホストが空であることを証明はしない**。リソースを要求しない Pod はスケジューラーが数える資源を一切占有しないため、そうした Pod が載っているホストにも 1 ノード分の空きがあり、placeholder を吸収しうる — そしてその Pod こそが、退避 Pod の anti-affinity や `hostPort` に拒否される相手かもしれない。「他の Pod が居ないホスト」を表現する手段は無い: **required** な `kubernetes.io/hostname NotIn` term は Karpenter の provisioner にプロビジョニング自体を拒否させ（issue #96）、全 Pod にマッチする required な `podAntiAffinity` はどのノードにも居る DaemonSet まで排除してしまう。
 :::
 
-- **サイズを大きくすることはない:** `limit + DaemonSet = allocatable` なので、候補自身のインスタンスクラスが収まる最小の型になる
-- **引き上げるのはドレインが要求しているリソースのみ** — 退避 Pod が要求していないリソースは予約が必要なものではなく、`pods` はそもそもコンテナが要求できない。何も要求しないドレインは何も予約しない
-- **非正の limit はクランプの refusal に委ねる** — そこへ引き上げると何も予約せずに `surge_ready` を満たしてしまい、暗黙の break-before-make になる
+- **ドレインの宣言内容によらず bin-packing の 2 次元を引き上げる** — cpu のみのドレインが cpu だけを予約すると、memory だけを使う Pod で埋まったホストに吸収されうる。`pods` は決して要求しない（コンテナ要求ではない）。ephemeral storage とアクセラレータは、ドレインが要求している場合のみ引き上げる
+- **予約するかどうかは Pod 数で決める**（合計値ではない）: ゼロ要求の Pod だけを載せた候補はドレイン合計が空でも実ワークロードを抱えている。再スケジュール対象が 0 なら何も予約しない
+- **より大きいインスタンスを強制はしない:** `limit + DaemonSet = allocatable` なので、リソース適合の観点で候補自身のクラスを超える要求にはならない。ただし placeholder はインスタンスタイプを固定しないので、Karpenter が可用性・価格・複製された requirements に従って別の型を選ぶことはある
+- **非正の limit はクランプの refusal に委ねる** — そこへ引き上げると何も予約せずに `surge_ready` を満たしてしまい、暗黙の break-before-make になる。既に limit を超えているドレインも同様に、クランプが下げて報告する
 - **`surge_headroom`（§5.2）は引き上げ後の footprint を検査する**ので、`spec.limits` がほぼ尽きたプールはローテーションを開始しなくなり、そのことを通知する（`InsufficientHeadroom`、§4.3）
-- **コスト:** ローテーションごとに候補と同じクラスのインスタンス 1 台、および surge ホストが `do-not-disrupt` を離れた後の consolidation が 1 回発生しうる
+- **コスト:** ローテーションごとに追加のインスタンス 1 台、および surge ホストが `do-not-disrupt` を離れた後の consolidation が 1 回発生しうる
 
 ノードより粗い粒度の制約 — ゾーンレベルの `podAntiAffinity`、`topologySpreadConstraints` — は**対象外**である: それらはホスト上に何があるかではなく、ゾーン内に何が居るかで決まる。Pod を忠実にモデル化してもこれらが解決しない理由は ADR-0005 を参照。
 

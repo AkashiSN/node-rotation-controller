@@ -218,7 +218,7 @@ Brief overlap: old + new nodes billed simultaneously during surge.
 
 ### Whole-node reservation cost (§3.3, ADR-0005)
 
-With `surge.wholeNodeReservation` on, every rotation of that pool pays the full overlap above rather than only the rotations that induce a node: a placeholder sized to a whole node is absorbed only by a host that is already empty. A nearly-empty candidate is the most expensive case relative to its workload — it reserves a whole node's worth of what it needs, which for a small drain is still a small request, but any drain that fills its node reserves a full instance.
+With `surge.wholeNodeReservation` on, most rotations of that pool pay the full overlap above rather than only the ones that induce a node: a placeholder sized to a whole node is absorbed only by a host with a whole node of free cpu and memory. Relative to its workload the mode is most expensive on a nearly-empty candidate, which reserves a full instance for a drain that would have fitted anywhere.
 
 A consolidation cycle can follow completion, once the surge host — now holding only the drained node's Pods — is released from `do-not-disrupt`.
 
