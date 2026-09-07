@@ -105,10 +105,11 @@ type ClampResult struct {
 	// exactly the resources that were clamped. Nil when Clamped is false.
 	Shortfall corev1.ResourceList
 	// Refused is true when a resource with positive demand has a non-positive
-	// limit, so no clamp value could induce a node LIKE THE CANDIDATE — the limit
-	// is the candidate's own allocatable minus the DaemonSet overhead observed on
-	// it, and says nothing about the rest of the NodePool (issue #328). Requests
-	// then carries the full un-clamped drain and Clamped is false.
+	// limit, so no clamp value under that ceiling would reserve any of the drain.
+	// The ceiling is the candidate's CACHED allocatable minus the DaemonSet
+	// overhead observed on it, so this says nothing about whether the full-drain
+	// placeholder is schedulable anywhere — see Clamp (issue #328). Requests then
+	// carries the full un-clamped drain and Clamped is false.
 	Refused bool
 	// RefusedResource names the resource that forced the refusal. Empty unless
 	// Refused.
@@ -138,22 +139,29 @@ type ClampResult struct {
 // from allocatable is likewise left untouched — its ceiling is unknown.
 //
 // A non-positive limit on a resource with positive demand is refused, not
-// clamped. Beside that DaemonSet overhead a fresh node of the candidate's type
-// has nothing left for even a zero-sized placeholder, so no clamp value induces
-// a node like it; a zero-request Pod would merely bind to an existing node and
-// satisfy surge_ready with nothing reserved. That is break-before-make, which v1
-// exposes only as the opt-in, window-bounded surge.forcefulFallback (ADR-0001) —
-// the clamp must not become it silently. Refusing preserves the full drain.
+// clamped. Every clamp value under that ceiling is non-positive, so clamping
+// would reserve none of the drain: a zero-request Pod merely binds to an
+// existing node and satisfies surge_ready with nothing reserved. That is
+// break-before-make, which v1 exposes only as the opt-in, window-bounded
+// surge.forcefulFallback (ADR-0001) — the clamp must not become it silently.
+// Refusing preserves the full drain instead. (This is the reason at limit == 0
+// too, where the arithmetic alone would admit a zero-sized placeholder beside
+// the overhead: what rules it out is that it holds nothing, not that it fails to
+// fit.)
 //
-// It does NOT establish that the placeholder is unschedulable. Both terms of the
-// limit are scoped to the candidate — its instance type's cached allocatable and
-// the DaemonSet overhead observed running on it — while the placeholder pins the
-// NodePool and the replicated requirements, never the instance type. A larger
-// allowed type can supply the same footprint, and so can a node of the same type
-// carrying less applicable overhead, since a DaemonSet the candidate matches by
-// label need not land on every node. Only where neither exists does the
-// placeholder stay unschedulable and the rotation roll back at readyTimeout; the
-// caller says so in exactly that conditional form (issue #328).
+// Refusing establishes NOTHING about schedulability, and the caller must not
+// report it as if it did. It is arithmetic about one ceiling, and both terms of
+// that ceiling come from the candidate: the CACHED per-type allocatable Karpenter
+// plans against, and the DaemonSet overhead observed running on it. Real
+// scheduling happens elsewhere — Node.status.allocatable can exceed the cached
+// estimate, which is the whole premise of this clamp and the gap Band measures,
+// so even a node of the SAME instance type carrying the SAME DaemonSets can have
+// room for the full drain. A larger allowed instance type and a node carrying
+// less applicable overhead are two further ordinary cases, since the placeholder
+// pins the NodePool and the replicated requirements but never the instance type.
+// Those are examples, not an exhaustive set: the rollback that follows when no
+// node can take the placeholder is an outcome, never the complement of a list
+// (issue #328).
 func Clamp(requests, allocatable, daemonSet corev1.ResourceList) ClampResult {
 	if len(allocatable) == 0 {
 		return ClampResult{Requests: requests}

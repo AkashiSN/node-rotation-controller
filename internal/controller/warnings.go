@@ -268,19 +268,24 @@ func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.N
 	// budget does, and whether anything else stands behind it is stated next
 	// (issue #326).
 	msg += "Raise spec.limits, or reduce the pool's provisioned capacity, to clear this headroom gate; until then these nodes remain subject to Karpenter's forceful expiration."
-	// A refused clamp is a second, independent condition, and every part of it is
-	// scoped to what was OBSERVED on the candidate: its own status.allocatable
-	// minus the DaemonSet overhead running on it. It says nothing about the
-	// NodePool. The placeholder does not pin the instance type, so a larger
-	// allowed type can satisfy the same request — and so can a host of the SAME
-	// type carrying less applicable DaemonSet overhead, since a DaemonSet the
-	// candidate matches by label need not land on every node. Karpenter's own
-	// estimate for a fresh node is not provably the set observed here either. The
-	// operator is therefore told what was measured and which questions to ask,
-	// never which of those is the case.
+	// A refused clamp is a second, independent condition, and it is arithmetic
+	// about ONE ceiling: the candidate's cached status.allocatable minus the
+	// DaemonSet overhead OBSERVED running on it. All it settles is that no clamp
+	// value under that ceiling reserves any of the drain. It does not reach
+	// schedulability — kube-scheduler decides that against real nodes, whose
+	// Node.status.allocatable can exceed the cached per-type estimate (the band
+	// the clamp is built on), so even a node of the SAME type carrying the SAME
+	// DaemonSets can have room. A larger allowed type and a host with less
+	// applicable overhead are two more ordinary ways, and Karpenter's estimate of
+	// the set for a fresh node is not provably the set observed here either.
+	//
+	// The list is therefore EXAMPLES, and says so: naming two and treating the
+	// rollback as what is left over would be the same overclaim this caveat exists
+	// to avoid, one box smaller (issue #328). The operator is told what was
+	// measured and which questions to ask, never which of them is the case.
 	if clamp.Refused {
 		msg += fmt.Sprintf(
-			" Note that the budget may not be the only thing in the way: on this candidate's own values — its instance type's allocatable minus the DaemonSet overhead observed on it — %s has no provisionable capacity left, so the placeholder cannot be induced on a node like this one. It can still be satisfied by a larger instance type the NodePool allows, or by a node carrying less applicable DaemonSet overhead; which of those is available is not something this controller can determine. If neither is, widen the allowed instance types or reduce the DaemonSet footprint — or opt into surge.forcefulFallback for surge-less rotation.",
+			" Note that the budget may not be the only thing in the way: on this candidate's own values — its instance type's cached allocatable minus the DaemonSet overhead observed on it — %s has no positive ceiling left, so under that ceiling no clamp value reserves any of the drain. That does not decide whether the full-drain placeholder is schedulable. Ordinary ways it still is include a node reporting more allocatable than Karpenter's cached estimate for the type, a larger instance type the NodePool allows, and a node carrying less applicable DaemonSet overhead; which of these apply is not something this controller can determine, and they are examples rather than the full set. Widening the allowed instance types or reducing the DaemonSet footprint addresses the ones you control — or opt into surge.forcefulFallback for surge-less rotation.",
 			clamp.RefusedResource)
 	}
 

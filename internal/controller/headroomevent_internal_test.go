@@ -229,9 +229,16 @@ func TestHeadroomBlockNamesAnUnprovisionableReservation(t *testing.T) {
 	if !containsLine(evs, "on this candidate's own values", "observed on it", "DaemonSet") {
 		t.Errorf("the caveat must be scoped to the candidate's observed values: %v", evs)
 	}
-	// Both escapes it cannot rule out are named, and neither as the only one.
+	// The escapes it cannot rule out are named as EXAMPLES. Listing two and
+	// stopping reads as a closed set, which the ceiling does not support: it is
+	// the cached per-type estimate, and a real node's allocatable can exceed it
+	// (the band this clamp is built on), so even a node of the same type carrying
+	// the same DaemonSets can have room (issue #328).
 	if !containsLine(evs, "larger instance type", "less applicable DaemonSet overhead", "not something this controller can determine") {
-		t.Errorf("the caveat must name both possible satisfactions and disclaim knowing which applies: %v", evs)
+		t.Errorf("the caveat must name possible satisfactions and disclaim knowing which applies: %v", evs)
+	}
+	if !containsLine(evs, "more allocatable than", "cached estimate", "examples rather than the full set") {
+		t.Errorf("the caveat must name the band escape and mark the list as examples: %v", evs)
 	}
 	for _, absolute := range []string{"whatever the budget", "will NOT let this rotation proceed", "can only be satisfied on a larger instance type"} {
 		if containsLine(evs, absolute) {

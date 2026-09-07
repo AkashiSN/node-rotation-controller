@@ -25,12 +25,12 @@ const (
 	// measured per-AZ band explains — the controller's request accounting has
 	// diverged from the scheduler's. The rotation still proceeds (issue #224).
 	reasonSurgeClampBandExceeded = "SurgeClampBandExceeded"
-	// reasonSurgeClampRefused warns that the DaemonSet overhead observed on the
-	// candidate leaves its own instance type no room for any placeholder, so the
-	// clamp is refused rather than sized to zero — a zero-sized reservation would
-	// be a silent break-before-make (issue #224). The measurement is scoped to the
-	// candidate, so the Event names the rollback only as the case where no larger
-	// allowed type and no less-loaded node can supply the footprint (issue #328).
+	// reasonSurgeClampRefused warns that the candidate's cached allocatable minus
+	// the DaemonSet overhead observed on it leaves no positive ceiling, so every
+	// clamp value under it would reserve nothing; the clamp is refused rather than
+	// sized to zero, which would be a silent break-before-make (issue #224). That
+	// ceiling settles no question of schedulability, so the Event gives the ways
+	// out as examples and the rollback as an outcome (issue #328).
 	reasonSurgeClampRefused = "SurgeClampRefused"
 
 	actionRotateNode     = "RotateNode"

@@ -101,15 +101,15 @@ func TestPlaceholderClampWarnsWhenShortfallExceedsBand(t *testing.T) {
 	}
 }
 
-// DaemonSet overhead at or above the NodeClaim's allocatable leaves no room for
-// any placeholder on a node of the candidate's own shape, so no clamp value can
-// induce one. Clamping to zero would
-// bind a zero-request Pod anywhere and satisfy surge_ready with nothing
-// reserved — a silent break-before-make. The clamp is refused: the placeholder
-// keeps the full drain (issue #224). What this test pins is the sizing and the
-// announcement; whether the placeholder then goes unschedulable is not decided
-// by the candidate's values, and TestClampRefusedEventIsScopedToTheCandidate
-// pins the Event saying so (issue #328).
+// DaemonSet overhead at or above the NodeClaim's cached allocatable leaves no
+// positive ceiling, so every clamp value under it would reserve none of the
+// drain. Clamping to zero would bind a zero-request Pod anywhere and satisfy
+// surge_ready with nothing reserved — a silent break-before-make. The clamp is
+// refused: the placeholder keeps the full drain (issue #224). What this test
+// pins is the sizing and the announcement; whether the placeholder then goes
+// unschedulable is not decided by that ceiling at all, and
+// TestClampRefusedEventDoesNotDecideSchedulability pins the Event saying so
+// (issue #328).
 func TestPlaceholderClampRefusedWhenDaemonSetExhaustsAllocatable(t *testing.T) {
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
 		ncAllocatable("cpu", "3770m", "memory", "1000Mi"))
@@ -302,19 +302,21 @@ func TestPlaceholderNotClampedWhenAllocatableEmpty(t *testing.T) {
 	}
 }
 
-// The refusal is computed from the CANDIDATE: its own NodeClaim.status.allocatable
-// minus the DaemonSet overhead observed running on it. The placeholder pins the
-// NodePool and the replicated requirements, never the instance type, so a larger
-// allowed type — or a node of the same type carrying less applicable DaemonSet
-// overhead, since a DaemonSet the candidate matches by label need not land on
-// every node — can satisfy the very footprint that was refused here. The Event
-// therefore states what was measured and on what, and reaches the unschedulable
-// placeholder and the rollback only as the case where neither of those is
-// available (issue #328).
+// The refusal is arithmetic about ONE ceiling: the candidate's own CACHED
+// NodeClaim.status.allocatable minus the DaemonSet overhead observed running on
+// it. Under that ceiling no clamp value reserves any positive share of the
+// demanded resource — that much is exact. Everything past it is not: whether the
+// full-drain placeholder finds a host is decided by kube-scheduler against real
+// nodes, whose Node.status.allocatable can EXCEED the cached per-type estimate.
+// That gap is the band the clamp itself is built on, so a node of the same type
+// carrying the same DaemonSets can still have room — a third way out that is
+// neither "a larger instance type" nor "less applicable overhead".
 //
-// The same scope caveat already governs the InsufficientHeadroom Event (#326);
-// this Event contradicted it while describing the same computation.
-func TestClampRefusedEventIsScopedToTheCandidate(t *testing.T) {
+// So the Event must not enumerate the ways out and then treat the rollback as
+// the complement of that set. It names them as examples, says the measurement
+// does not decide schedulability, and reaches the rollback only as an outcome
+// (issue #328). Asserting otherwise is the same overclaim in a smaller box.
+func TestClampRefusedEventDoesNotDecideSchedulability(t *testing.T) {
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
 		ncAllocatable("cpu", "3770m", "memory", "1000Mi"))
 	pool := withTGP(testNodePool(nil))
@@ -341,21 +343,37 @@ func TestClampRefusedEventIsScopedToTheCandidate(t *testing.T) {
 	if !containsLine(evs, "this candidate's own values", "observed on it", "memory") {
 		t.Errorf("the Event must scope the refusal to the candidate's observed values: %v", evs)
 	}
-	// Both satisfactions it cannot rule out are named, and neither as the only one.
-	if !containsLine(evs, "larger instance type", "less applicable DaemonSet overhead",
-		"not something this controller can determine") {
-		t.Errorf("the Event must name both possible satisfactions and disclaim knowing which applies: %v", evs)
+	// The one thing the ceiling really settles.
+	if !containsLine(evs, "no clamp value reserves any of the drain") {
+		t.Errorf("the Event must state what the ceiling actually settles: %v", evs)
 	}
-	// The rollback is reachable, but only where neither satisfaction exists.
-	if !containsLine(evs, "If neither is", "rolls back") {
-		t.Errorf("the rollback must be stated as the remaining case, not the outcome: %v", evs)
+	// And the thing it does not.
+	if !containsLine(evs, "does not decide whether", "schedulable") {
+		t.Errorf("the Event must disclaim deciding schedulability: %v", evs)
+	}
+	// The band escape — a node of the SAME type with the SAME DaemonSets, whose
+	// real allocatable exceeds the cached estimate. Its absence is what made the
+	// earlier two-item list read as exhaustive.
+	if !containsLine(evs, "more allocatable than", "cached estimate") {
+		t.Errorf("the Event must name the band escape, not only type and overhead: %v", evs)
+	}
+	// Named as examples, with the controller disclaiming which apply.
+	if !containsLine(evs, "larger instance type", "less applicable DaemonSet overhead",
+		"not something this controller can determine", "examples rather than the full set") {
+		t.Errorf("the ways out must be examples, not an enumerated set: %v", evs)
+	}
+	// The rollback is an outcome, never the complement of the list above.
+	if !containsLine(evs, "If nothing can take it", "rolls back") {
+		t.Errorf("the rollback must be stated as an outcome: %v", evs)
 	}
 	for _, absolute := range []string{
 		"the surge placeholder cannot be clamped and the rotation will roll back",
 		"the rotation will roll back",
+		"If neither is",
+		"cannot be induced on a node like this one",
 	} {
 		if containsLine(evs, absolute) {
-			t.Errorf("the Event must not assert %q — Refused is scoped to the candidate: %v", absolute, evs)
+			t.Errorf("the Event must not assert %q — the measurement does not reach it: %v", absolute, evs)
 		}
 	}
 }
