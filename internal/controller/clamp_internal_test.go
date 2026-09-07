@@ -102,11 +102,14 @@ func TestPlaceholderClampWarnsWhenShortfallExceedsBand(t *testing.T) {
 }
 
 // DaemonSet overhead at or above the NodeClaim's allocatable leaves no room for
-// any placeholder, so no clamp value can induce a node. Clamping to zero would
+// any placeholder on a node of the candidate's own shape, so no clamp value can
+// induce one. Clamping to zero would
 // bind a zero-request Pod anywhere and satisfy surge_ready with nothing
 // reserved — a silent break-before-make. The clamp is refused: the placeholder
-// keeps the full drain, stays unschedulable, and the rotation rolls back
-// (issue #224).
+// keeps the full drain (issue #224). What this test pins is the sizing and the
+// announcement; whether the placeholder then goes unschedulable is not decided
+// by the candidate's values, and TestClampRefusedEventIsScopedToTheCandidate
+// pins the Event saying so (issue #328).
 func TestPlaceholderClampRefusedWhenDaemonSetExhaustsAllocatable(t *testing.T) {
 	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
 		ncAllocatable("cpu", "3770m", "memory", "1000Mi"))
@@ -296,5 +299,63 @@ func TestPlaceholderNotClampedWhenAllocatableEmpty(t *testing.T) {
 	}
 	if got := ph.Spec.Containers[0].Resources.Requests.Memory(); got.Cmp(resource.MustParse("13600Mi")) != 0 {
 		t.Errorf("placeholder memory must be the full drain: got %s, want 13600Mi", got.String())
+	}
+}
+
+// The refusal is computed from the CANDIDATE: its own NodeClaim.status.allocatable
+// minus the DaemonSet overhead observed running on it. The placeholder pins the
+// NodePool and the replicated requirements, never the instance type, so a larger
+// allowed type — or a node of the same type carrying less applicable DaemonSet
+// overhead, since a DaemonSet the candidate matches by label need not land on
+// every node — can satisfy the very footprint that was refused here. The Event
+// therefore states what was measured and on what, and reaches the unschedulable
+// placeholder and the rollback only as the case where neither of those is
+// available (issue #328).
+//
+// The same scope caveat already governs the InsufficientHeadroom Event (#326);
+// this Event contradicted it while describing the same computation.
+func TestClampRefusedEventIsScopedToTheCandidate(t *testing.T) {
+	cand := testClaim("nc-old", 20*24*time.Hour, ncNode(candNode),
+		ncAllocatable("cpu", "3770m", "memory", "1000Mi"))
+	pool := withTGP(testNodePool(nil))
+	workload := workloadPod("app", candNode, "1200m", "500Mi")
+	ds := asDaemonSet(workloadPod("kube-proxy", candNode, "300m", "1500Mi"))
+	rec := events.NewFakeRecorder(16)
+	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false), workload, ds)
+	r.Events = rec
+
+	if _, err := r.reconcileNodePool(context.Background(), pool, testPolicy(), mustSchedule(t)); err != nil {
+		t.Fatalf("reconcileNodePool: %v", err)
+	}
+
+	var evs []string
+	for _, e := range drain(rec) {
+		if strings.Contains(e, reasonSurgeClampRefused) {
+			evs = append(evs, e)
+		}
+	}
+	if len(evs) != 1 {
+		t.Fatalf("want 1 SurgeClampRefused Event, got %d: %v", len(evs), evs)
+	}
+	// What was measured, and on what — not a verdict about the NodePool.
+	if !containsLine(evs, "this candidate's own values", "observed on it", "memory") {
+		t.Errorf("the Event must scope the refusal to the candidate's observed values: %v", evs)
+	}
+	// Both satisfactions it cannot rule out are named, and neither as the only one.
+	if !containsLine(evs, "larger instance type", "less applicable DaemonSet overhead",
+		"not something this controller can determine") {
+		t.Errorf("the Event must name both possible satisfactions and disclaim knowing which applies: %v", evs)
+	}
+	// The rollback is reachable, but only where neither satisfaction exists.
+	if !containsLine(evs, "If neither is", "rolls back") {
+		t.Errorf("the rollback must be stated as the remaining case, not the outcome: %v", evs)
+	}
+	for _, absolute := range []string{
+		"the surge placeholder cannot be clamped and the rotation will roll back",
+		"the rotation will roll back",
+	} {
+		if containsLine(evs, absolute) {
+			t.Errorf("the Event must not assert %q — Refused is scoped to the candidate: %v", absolute, evs)
+		}
 	}
 }

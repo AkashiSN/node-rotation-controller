@@ -108,7 +108,7 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | NodeClaim | `SurgeUnschedulable` | placeholder `PodScheduled=False` |
 | NodeClaim | `SurgeClamped` | placeholder クランプ済み（`Normal`） |
 | NodeClaim | `SurgeClampBandExceeded` | クランプ shortfall > バンド（`Warning`） |
-| NodeClaim | `SurgeClampRefused` | DaemonSet が allocatable を消費（`Warning`） |
+| NodeClaim | `SurgeClampRefused` | DaemonSet オーバーヘッドが候補自身の allocatable を消費（`Warning`） |
 
 - **重複排除:** 状態への遷移時に発行; クリアして再発時に再発行
 - **Fatal finding** は Event ではない — ローテーション開始をブロックし §5.2 feasibility gate でログ

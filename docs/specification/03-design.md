@@ -277,7 +277,7 @@ requests = min(reschedulable sum, limit)                        (per resource)
 
 **Edge cases:**
 
-- **Refused** (`limit ≤ 0`): DaemonSet overhead exhausts allocatable → placeholder keeps full drain, stays unschedulable, rotation rolls back
+- **Refused** (`limit ≤ 0`): the DaemonSet overhead observed on the candidate exhausts its own allocatable → placeholder keeps the full drain rather than being sized to zero. Both terms of `limit` are read off the candidate, while the placeholder pins the NodePool and the replicated requirements — never the instance type — so the same footprint can still be satisfied by **a larger allowed instance type** or by **a node carrying less applicable DaemonSet overhead** (a DaemonSet the candidate matches by label need not land on every node). A refusal is therefore a reason the placeholder cannot be induced on a node *like this one*, not a verdict that no node can take it; only where neither of those exists does it stay unschedulable and the rotation roll back at `readyTimeout`. The `SurgeClampRefused` Warning Event (§4.3) states it in exactly that form
 - **Band-exceeded** (shortfall > measured band): `SurgeClampBandExceeded` Warning Event; rotation proceeds
 - **Common case** (fits under limit): silent
 

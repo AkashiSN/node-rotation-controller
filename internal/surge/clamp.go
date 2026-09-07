@@ -105,8 +105,10 @@ type ClampResult struct {
 	// exactly the resources that were clamped. Nil when Clamped is false.
 	Shortfall corev1.ResourceList
 	// Refused is true when a resource with positive demand has a non-positive
-	// limit, so no clamp value could induce a node. Requests then carries the full
-	// un-clamped drain and Clamped is false.
+	// limit, so no clamp value could induce a node LIKE THE CANDIDATE — the limit
+	// is the candidate's own allocatable minus the DaemonSet overhead observed on
+	// it, and says nothing about the rest of the NodePool (issue #328). Requests
+	// then carries the full un-clamped drain and Clamped is false.
 	Refused bool
 	// RefusedResource names the resource that forced the refusal. Empty unless
 	// Refused.
@@ -136,13 +138,22 @@ type ClampResult struct {
 // from allocatable is likewise left untouched — its ceiling is unknown.
 //
 // A non-positive limit on a resource with positive demand is refused, not
-// clamped. Karpenter could not fit even a zero-sized placeholder beside the
-// DaemonSet overhead, so no clamp value induces a node; a zero-request Pod would
-// merely bind to an existing node and satisfy surge_ready with nothing reserved.
-// That is break-before-make, which v1 exposes only as the opt-in, window-bounded
-// surge.forcefulFallback (ADR-0001) — the clamp must not become it silently.
-// Refusing preserves the full drain, leaves the placeholder unschedulable, and
-// lets the rotation roll back.
+// clamped. Beside that DaemonSet overhead a fresh node of the candidate's type
+// has nothing left for even a zero-sized placeholder, so no clamp value induces
+// a node like it; a zero-request Pod would merely bind to an existing node and
+// satisfy surge_ready with nothing reserved. That is break-before-make, which v1
+// exposes only as the opt-in, window-bounded surge.forcefulFallback (ADR-0001) —
+// the clamp must not become it silently. Refusing preserves the full drain.
+//
+// It does NOT establish that the placeholder is unschedulable. Both terms of the
+// limit are scoped to the candidate — its instance type's cached allocatable and
+// the DaemonSet overhead observed running on it — while the placeholder pins the
+// NodePool and the replicated requirements, never the instance type. A larger
+// allowed type can supply the same footprint, and so can a node of the same type
+// carrying less applicable overhead, since a DaemonSet the candidate matches by
+// label need not land on every node. Only where neither exists does the
+// placeholder stay unschedulable and the rotation roll back at readyTimeout; the
+// caller says so in exactly that conditional form (issue #328).
 func Clamp(requests, allocatable, daemonSet corev1.ResourceList) ClampResult {
 	if len(allocatable) == 0 {
 		return ClampResult{Requests: requests}

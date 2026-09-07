@@ -67,7 +67,7 @@ The clamp caps requests at the same `limit` this mode raises them to, so the two
 
 `Refused` is scoped to what was **observed on the candidate** — its own `status.allocatable` minus the DaemonSet overhead running on it — and says nothing about the NodePool. Since the placeholder does not pin the instance type, the same request can still be satisfied by a larger allowed type, or by a node of the same type carrying less applicable DaemonSet overhead (a DaemonSet the candidate matches by label need not land on every node). A refusal is therefore a reason the placeholder cannot be induced on a node *like this one*, never a verdict that no node can take it, and the `InsufficientHeadroom` Event states it as a scoped caveat for that reason.
 
-The pre-existing `SurgeClampRefused` surface from [#224](https://github.com/AkashiSN/node-rotation-controller/issues/224) still describes the refusal as ending in an unschedulable placeholder and a rollback, which has exactly this scope problem. Correcting it is out of scope here and tracked in [#328](https://github.com/AkashiSN/node-rotation-controller/issues/328).
+At the time this decision was taken, the pre-existing `SurgeClampRefused` surface from [#224](https://github.com/AkashiSN/node-rotation-controller/issues/224) still described the refusal as ending in an unschedulable placeholder and a rollback, which has exactly this scope problem. Correcting it was out of scope here and was tracked in [#328](https://github.com/AkashiSN/node-rotation-controller/issues/328), which has since narrowed that Event and §3.3 to the same conditional form with no behaviour change.
 
 ## Consequences
 

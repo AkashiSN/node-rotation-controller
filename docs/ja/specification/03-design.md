@@ -277,7 +277,7 @@ requests = min(再スケジュール可能合計, limit)                    （�
 
 **エッジケース:**
 
-- **Refused**（`limit ≤ 0`）: DaemonSet オーバーヘッドが allocatable を消費 → placeholder はフルドレインを維持し、スケジュール不可のまま、ローテーションはロールバック
+- **Refused**（`limit ≤ 0`）: 候補ノード上で観測された DaemonSet オーバーヘッドがその候補自身の allocatable を消費 → placeholder はゼロサイズにされることなくフルドレインを維持する。`limit` の両項はいずれも候補ノードから読み取った値であり、一方 placeholder が固定するのは NodePool と複製された requirements であってインスタンスタイプではない。したがって同じフットプリントでも、**NodePool が許可するより大きいインスタンスタイプ**や、**適用される DaemonSet オーバーヘッドがより小さいノード**（候補がラベルでマッチする DaemonSet が全ノードに載っているとは限らない）でなお満たされうる。つまり refusal は「*この候補のような*ノードでは placeholder を誘導できない」という理由であって、「どのノードでも受け入れられない」という判定ではない。それらのいずれも存在しない場合に限り、placeholder はスケジュール不可のままとなり `readyTimeout` でローテーションがロールバックする。`SurgeClampRefused` Warning Event（§4.3）はこの形のまま通知する
 - **Band-exceeded**（shortfall > 計測バンド）: `SurgeClampBandExceeded` Warning Event; ローテーションは続行
 - **通常ケース**（limit 内に収まる）: サイレント
 

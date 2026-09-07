@@ -1610,8 +1610,10 @@ func (r *RotationReconciler) headroom(ctx context.Context, pool *karpv1.NodePool
 // NodePool budget — the pre-check the spec §4.2 note describes. Testing the
 // un-clamped sum here would reject exactly the nearly-full nodes the clamp exists
 // to keep rotatable under a tight-but-sufficient budget (issue #224). A refused
-// clamp returns the full drain, which is correct: that rotation rolls back
-// regardless of the budget. An unscheduled candidate has none.
+// clamp returns the full drain, which is the right footprint to test: nothing was
+// given up, so that is what the placeholder asks the budget for — and whether it
+// is satisfiable at all is a separate question the candidate's own values cannot
+// answer (issue #328). An unscheduled candidate has none.
 func (r *RotationReconciler) candidateRequests(ctx context.Context, res resolved, cand *karpv1.NodeClaim) (surge.ClampResult, error) {
 	if cand.Status.NodeName == "" {
 		return surge.ClampResult{Requests: corev1.ResourceList{}}, nil
@@ -1882,10 +1884,12 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	// (issue #224). No-op when allocatable is absent.
 	requests, clamp := placeholderSizing(pods, res, cand)
 	// clamp.Requests is the full drain on both the common path and a refused clamp
-	// (DaemonSet overhead exhausts allocatable, so no clamp value induces a node —
-	// sizing the placeholder to zero would satisfy surge_ready with nothing
-	// reserved, a silent break-before-make; keep it full and unschedulable so the
-	// rotation rolls back). band bounds the shortfall of a clamp that did fire.
+	// (the DaemonSet overhead observed on the candidate exhausts its own
+	// allocatable, so no clamp value induces a node like it — sizing the
+	// placeholder to zero would satisfy surge_ready with nothing reserved, a
+	// silent break-before-make; keep it full so only a node that genuinely has
+	// room can take it, whether or not this NodePool has one). band bounds the
+	// shortfall of a clamp that did fire.
 	band := surge.Band(node.Status.Allocatable, cand.Status.Allocatable)
 	ph := surge.BuildPlaceholder(surge.PlaceholderInputs{
 		Candidate:         cand,
@@ -1933,8 +1937,11 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 	}
 	// Three mutually exclusive surge states, each announced on this one line and,
 	// except the common path, with a matching Event (issue #224):
-	//   - refused: DaemonSet overhead exhausts allocatable; the placeholder keeps
-	//     the full drain, stays unschedulable, and the rotation rolls back.
+	//   - refused: the DaemonSet overhead observed on the candidate exhausts its
+	//     own allocatable, so no clamp value induces a node LIKE THIS ONE; the
+	//     placeholder keeps the full drain, and unless Karpenter can satisfy that
+	//     on another shape it stays unschedulable and the rotation rolls back
+	//     (issue #328).
 	//   - clamped: the placeholder gives up a bounded shortfall; if that shortfall
 	//     exceeds the measured band, the controller's accounting has diverged from
 	//     the scheduler's and it says so — but still proceeds.
@@ -1945,8 +1952,20 @@ func (r *RotationReconciler) createPlaceholder(ctx context.Context, pool *karpv1
 		kv = append(kv, "clampRefused", clamp.RefusedResource)
 		l.Info("surge placeholder created", kv...)
 		if r.Events != nil {
+			// Every term here is scoped to what was OBSERVED on the candidate: its
+			// own status.allocatable minus the DaemonSet overhead running on it. The
+			// placeholder pins the NodePool and the replicated requirements, never
+			// the instance type, so a larger allowed type can satisfy the same
+			// footprint — and so can a node carrying less applicable DaemonSet
+			// overhead, since a DaemonSet the candidate matches by label need not
+			// land on every node, and Karpenter's own estimate of the set for a
+			// fresh node is not provably the set observed here. The operator is told
+			// what was measured and which questions to ask, never which is the case;
+			// the rollback is the remaining branch, not the announced outcome
+			// (issue #328). The InsufficientHeadroom caveat says the same thing about
+			// the same computation (issue #326) — the two must not diverge.
 			r.Events.Eventf(cand, pool, corev1.EventTypeWarning, reasonSurgeClampRefused, actionProvisionSurge,
-				"DaemonSet overhead leaves no provisionable capacity for %s; the surge placeholder cannot be clamped and the rotation will roll back — opt into surge.forcefulFallback for surge-less rotation",
+				"On this candidate's own values — its instance type's allocatable minus the DaemonSet overhead observed on it — %s has no provisionable capacity left, so no clamp value induces a node like this one and the surge placeholder keeps the full drain. It can still be satisfied by a larger instance type the NodePool allows, or by a node carrying less applicable DaemonSet overhead; which of those is available is not something this controller can determine. If neither is, the placeholder stays unschedulable and the rotation rolls back at readyTimeout — widen the allowed instance types, reduce the DaemonSet footprint, or opt into surge.forcefulFallback for surge-less rotation.",
 				clamp.RefusedResource)
 		}
 	case clamp.Clamped:

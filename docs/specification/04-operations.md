@@ -108,7 +108,7 @@ Warning-level conditions surfaced via `kubectl describe`:
 | NodeClaim | `SurgeUnschedulable` | Placeholder `PodScheduled=False` |
 | NodeClaim | `SurgeClamped` | Placeholder clamped (`Normal`) |
 | NodeClaim | `SurgeClampBandExceeded` | Clamp shortfall > band (`Warning`) |
-| NodeClaim | `SurgeClampRefused` | DaemonSet exhausts allocatable (`Warning`) |
+| NodeClaim | `SurgeClampRefused` | DaemonSet overhead exhausts the candidate's own allocatable (`Warning`) |
 
 - **Deduplication:** emitted on transition into the condition; clears and re-fires on return
 - **Fatal findings** are not events — they block rotation start and are logged by the §5.2 feasibility gate
