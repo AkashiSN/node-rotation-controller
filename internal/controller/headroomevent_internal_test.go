@@ -219,17 +219,24 @@ func TestHeadroomBlockNamesAnUnprovisionableReservation(t *testing.T) {
 	if len(evs) != 1 {
 		t.Fatalf("want 1 Event, got %d: %v", len(evs), evs)
 	}
-	// The budget really is blocking, so the ordinary advice stays.
-	if !containsLine(evs, "Raise spec.limits") {
-		t.Errorf("the Event must still name the budget that is blocking: %v", evs)
+	// The budget really is blocking, so the ordinary advice stays — scoped to the
+	// gate it actually clears, since the caveat that follows would otherwise
+	// retract a promise the same message just made.
+	if !containsLine(evs, "Raise spec.limits", "to clear this headroom gate") {
+		t.Errorf("the Event must name the budget and what raising it clears: %v", evs)
 	}
-	// And the second condition is stated as a caveat, scoped to the candidate's
-	// own instance type rather than asserted as unprovisionable everywhere.
-	if !containsLine(evs, "may not be sufficient on its own", "DaemonSet", "larger instance type") {
-		t.Errorf("the Event must add the refusal caveat with its scope: %v", evs)
+	// The caveat states what was MEASURED and on what, not a verdict.
+	if !containsLine(evs, "on this candidate's own values", "observed on it", "DaemonSet") {
+		t.Errorf("the caveat must be scoped to the candidate's observed values: %v", evs)
 	}
-	if containsLine(evs, "whatever the budget") || containsLine(evs, "will NOT let this rotation proceed") {
-		t.Errorf("the caveat must not claim the reservation is unprovisionable on every type: %v", evs)
+	// Both escapes it cannot rule out are named, and neither as the only one.
+	if !containsLine(evs, "larger instance type", "less applicable DaemonSet overhead", "not something this controller can determine") {
+		t.Errorf("the caveat must name both possible satisfactions and disclaim knowing which applies: %v", evs)
+	}
+	for _, absolute := range []string{"whatever the budget", "will NOT let this rotation proceed", "can only be satisfied on a larger instance type"} {
+		if containsLine(evs, absolute) {
+			t.Errorf("the caveat must not assert %q — Refused is scoped to the candidate: %v", absolute, evs)
+		}
 	}
 }
 

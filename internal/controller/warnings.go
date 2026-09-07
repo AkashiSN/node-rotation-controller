@@ -262,18 +262,25 @@ func (w *warningEmitter) EmitHeadroomBlocked(ctx context.Context, pool *karpv1.N
 	msg := fmt.Sprintf(
 		"NodeClaim %s cannot be rotated: the surge placeholder needs %s %s but the NodePool has %s remaining of its spec.limits ceiling of %s (%s already provisioned). No rotation will start for this NodePool while that holds — the surge reserves replacement capacity before draining, so it consumes budget the limit does not allow. ",
 		cand.Name, hr.Want.String(), hr.Resource, hr.Remaining.String(), hr.Limit.String(), provisionedString(hr))
-	msg += "Raise spec.limits, or reduce the pool's provisioned capacity, to let the rotation proceed; until then these nodes remain subject to Karpenter's forceful expiration."
-	// A refused clamp is a second, independent condition, and the caveat is
-	// deliberately conditional. Refused means only that the CANDIDATE's own
-	// instance class has no provisionable capacity left once its DaemonSet
-	// overhead is counted — the placeholder does not pin the instance type, so
-	// Karpenter may still satisfy it on a larger type the NodePool allows. Raising
-	// the budget may therefore be the whole fix, or may leave the rotation needing
-	// a larger type to exist; the operator is told which question to ask rather
-	// than a verdict this controller cannot reach (issue #326).
+	// The promise is scoped to the gate this Event is about. Saying "to let the
+	// rotation proceed" and then, on the refused path, "may not be sufficient"
+	// would retract its own sentence; clearing THIS gate is what raising the
+	// budget does, and whether anything else stands behind it is stated next
+	// (issue #326).
+	msg += "Raise spec.limits, or reduce the pool's provisioned capacity, to clear this headroom gate; until then these nodes remain subject to Karpenter's forceful expiration."
+	// A refused clamp is a second, independent condition, and every part of it is
+	// scoped to what was OBSERVED on the candidate: its own status.allocatable
+	// minus the DaemonSet overhead running on it. It says nothing about the
+	// NodePool. The placeholder does not pin the instance type, so a larger
+	// allowed type can satisfy the same request — and so can a host of the SAME
+	// type carrying less applicable DaemonSet overhead, since a DaemonSet the
+	// candidate matches by label need not land on every node. Karpenter's own
+	// estimate for a fresh node is not provably the set observed here either. The
+	// operator is therefore told what was measured and which questions to ask,
+	// never which of those is the case.
 	if clamp.Refused {
 		msg += fmt.Sprintf(
-			" Note that raising the budget may not be sufficient on its own: %s has no provisionable capacity left on the candidate's own instance type once its DaemonSet overhead is counted, so the placeholder can only be satisfied on a larger instance type. If the NodePool already allows one, the budget is the only thing in the way; if it does not, widen the allowed types or reduce the DaemonSet footprint — or opt into surge.forcefulFallback for surge-less rotation.",
+			" Note that the budget may not be the only thing in the way: on this candidate's own values — its instance type's allocatable minus the DaemonSet overhead observed on it — %s has no provisionable capacity left, so the placeholder cannot be induced on a node like this one. It can still be satisfied by a larger instance type the NodePool allows, or by a node carrying less applicable DaemonSet overhead; which of those is available is not something this controller can determine. If neither is, widen the allowed instance types or reduce the DaemonSet footprint — or opt into surge.forcefulFallback for surge-less rotation.",
 			clamp.RefusedResource)
 	}
 
