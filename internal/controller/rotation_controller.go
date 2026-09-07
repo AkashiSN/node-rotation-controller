@@ -1073,6 +1073,15 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	if err := r.freezeNode(ctx, host, cand.Name); err != nil {
 		return ctrl.Result{}, err
 	}
+	// Which of the two §3.3 paths reserved the capacity (issue #305). Resolved
+	// after the freeze — a reporting lookup must never delay a protective marker —
+	// and before the write below, the last point that still holds the candidate's
+	// started-at, which the predicate needs and which the delete takes away. ""
+	// when the host's claim cannot be resolved; every consumer then omits the field.
+	surgePath, err := r.surgePathFor(ctx, pool, host, startedAt)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	// Durable phase record BEFORE the delete — it decides the completion
 	// outcome — plus the drain-start anchor for the §4.2 drain histogram,
 	// stamped write-once in the same update so a re-run never moves it.
@@ -1085,6 +1094,12 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 			// a different reconcile pass — could not otherwise recover it to report
 			// the whole rotation's total = surge_wait + drain (#228, spec §5.3).
 			m[annotations.SurgeWait] = surgeWait.String()
+			// The surge path travels with the duration it qualifies, and for the same
+			// reason: the predicate that derives it needs started-at (#305). An
+			// unresolved path stamps nothing rather than a placeholder value.
+			if surgePath != "" {
+				m[annotations.SurgePath] = surgePath
+			}
 		}
 	}); err != nil {
 		return ctrl.Result{}, err
@@ -1107,8 +1122,15 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	// Both lines are emitted only after that same write has landed, for the same
 	// reason — an emission before it would repeat on every retry.
 	l := log.FromContext(ctx).WithValues("nodepool", pool.Name)
-	l.Info("surge node ready", "nodeclaim", cand.Name, "surgeNode", host,
-		"surgeWait", surgeWait.Round(time.Second).String())
+	readyKV := []any{"nodeclaim", cand.Name, "surgeNode", host,
+		"surgeWait", surgeWait.Round(time.Second).String()}
+	// The qualifier sits next to the number it qualifies: an absorbed surge_wait
+	// measures the bind onto capacity that already existed, not the time until the
+	// evicted Pods can run (#305).
+	if surgePath != "" {
+		readyKV = append(readyKV, "surgePath", surgePath)
+	}
+	l.Info("surge node ready", readyKV...)
 	l.Info("drain started", "nodeclaim", cand.Name, "node", cand.Status.NodeName, "mode", "surge")
 	if err := client.IgnoreNotFound(r.Delete(ctx, cand)); err != nil {
 		return ctrl.Result{}, err
@@ -1438,11 +1460,12 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 	// (success + cooldown) rather than force-expiring out of pending.
 	var released, rotated, hasDrain, hasSurgeWait bool
 	var drain, surgeWait time.Duration
-	var mode string
+	var mode, surgePath string
 	if _, err := r.patchPoolIf(ctx, pool, func(m map[string]string) bool {
 		// RetryOnConflict re-runs this against a newer read, so every value it
 		// produces is reset here and derived from that read alone.
 		released, rotated, hasDrain, hasSurgeWait = false, false, false, false
+		surgePath = ""
 		if m[annotations.ActiveRotation] != name {
 			return false // an earlier pass already completed this rotation
 		}
@@ -1459,6 +1482,10 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 			// surge_wait was carried forward from the transition (#228); absent on the
 			// surge-less forceful-fallback path, which has no surge phase.
 			surgeWait, hasSurgeWait = parseDuration(m[annotations.SurgeWait])
+			// Carried from the same transition as surge-wait, and absent for the same
+			// reasons: no surge phase (forceful fallback), or a host whose claim the
+			// transition could not resolve (#305).
+			surgePath = m[annotations.SurgePath]
 			m[annotations.LastRotationAt] = rfc3339(r.now()) // the cooldown starts here
 		}
 		clearRotationAnchorFields(m)
@@ -1486,6 +1513,9 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 	if hasSurgeWait {
 		kv = append(kv, "surgeWait", surgeWait.Round(time.Second).String())
 	}
+	if surgePath != "" {
+		kv = append(kv, "surgePath", surgePath)
+	}
 	if hasDrain {
 		kv = append(kv, "drain", drain.Round(time.Second).String())
 	}
@@ -1496,8 +1526,15 @@ func (r *RotationReconciler) completeOrAbort(ctx context.Context, pool *karpv1.N
 	}
 	log.FromContext(ctx).WithValues("nodepool", pool.Name).Info("rotation complete", kv...)
 	if r.Events != nil {
-		r.Events.Eventf(pool, nil, corev1.EventTypeNormal, reasonRotationCompleted, actionRotateNode,
-			"NodeClaim %s rotated", name)
+		// The Event is all an operator without log access sees, so it names the path
+		// too — but only when the transition established one (#305).
+		if surgePath != "" {
+			r.Events.Eventf(pool, nil, corev1.EventTypeNormal, reasonRotationCompleted, actionRotateNode,
+				"NodeClaim %s rotated; surge path: %s", name, surgePath)
+		} else {
+			r.Events.Eventf(pool, nil, corev1.EventTypeNormal, reasonRotationCompleted, actionRotateNode,
+				"NodeClaim %s rotated", name)
+		}
 	}
 	return ctrl.Result{RequeueAfter: longRequeue}, nil
 }
@@ -1629,6 +1666,28 @@ func (r *RotationReconciler) claimForNode(ctx context.Context, pool *karpv1.Node
 	return "", nil
 }
 
+// surgePathFor names which §3.3 path reserved the surge capacity, from the
+// NodeClaim that owns the host the placeholder bound to (issue #305). It is
+// resolved from the host rather than from the persisted surge-claim because at
+// surge_ready the placeholder is bound and its host is the authoritative answer,
+// while surge-claim may still hold the never-bound claim the rollback guard
+// tracks.
+//
+// It returns "" — not a guess — when the host has no NodeClaim in this pool, or
+// when the claim has vanished between the two cache reads. Callers omit the
+// field, so its absence means "not established", never "absorbed".
+func (r *RotationReconciler) surgePathFor(ctx context.Context, pool *karpv1.NodePool, host string, startedAt time.Time) (string, error) {
+	name, err := r.claimForNode(ctx, pool, host)
+	if err != nil || name == "" {
+		return "", err
+	}
+	sc, err := r.getClaim(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	return surge.HostPath(sc, startedAt), nil
+}
+
 // reapSurgeClaim deletes the induced claim on rollback, guarded so it never
 // removes an absorb host: only a claim created after started-at, and whose node
 // hosts nothing but the placeholder (+ DaemonSets). No registered Node passes
@@ -1645,7 +1704,10 @@ func (r *RotationReconciler) reapSurgeClaim(ctx context.Context, cand *karpv1.No
 	if !ok {
 		return nil // cannot verify the after-start guard → never reap
 	}
-	if !sc.CreationTimestamp.After(startedAt) {
+	// The same predicate the surge-path reporting uses, so the rollback can never
+	// reap a host the log called pre-existing capacity, nor spare one it called
+	// this attempt's (#305).
+	if !surge.CreatedByAttempt(sc, startedAt) {
 		return nil // pre-existing claim, not this attempt's
 	}
 	if sc.Status.NodeName != "" {
@@ -1998,6 +2060,7 @@ func clearRotationAnchorFields(m map[string]string) {
 	delete(m, annotations.ActiveRotationState)
 	delete(m, annotations.DrainingAt)
 	delete(m, annotations.SurgeWait)
+	delete(m, annotations.SurgePath)
 	delete(m, annotations.RotationMode)
 }
 

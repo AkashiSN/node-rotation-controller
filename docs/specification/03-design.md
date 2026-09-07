@@ -256,6 +256,10 @@ flowchart LR
 
 Either way, the host becomes the **surge target**, frozen for the rotation's duration.
 
+The two paths cost very different amounts of time and reserve very different things, so the controller **names the one it took** (issue #305): `surgePath` ∈ {`provisioned`, `absorbed`} on the `surge node ready` and `rotation complete` lines and on the `RotationCompleted` Event, carried between them on the `surge-path` anchor field (§5.3).
+
+The path is decided by one question — did the surge host's `NodeClaim` come into existence during this attempt? — evaluated with the **same predicate** the rollback's reap guard uses, so the two can never disagree about the same host. It reports what is observable, not causality: a node Karpenter provisioned for some other pending Pod inside this attempt's window, which then absorbed the placeholder, reads as `provisioned`. A host whose `NodeClaim` cannot be resolved yields **no value rather than a guessed one**.
+
 ### Placeholder sizing clamp (issue #224)
 
 **Problem:** Karpenter caches one `allocatable` per instance type, but actual allocatable can be higher per-AZ. A node filled past the cached estimate produces an unprovisionable placeholder.
@@ -306,7 +310,7 @@ sequenceDiagram
     end
     PH-->>C: Running on Ready host ≠ candidate = surge_ready
     C->>New: freeze surge target
-    C->>NP: active-rotation-state=draining, draining-at, surge-wait
+    C->>NP: active-rotation-state=draining, draining-at, surge-wait, surge-path
     C->>Old: state=draining, delete NodeClaim
     K->>Old: graceful drain (Eviction API, PDBs apply)
     Old-->>New: evicted pods reschedule onto reserved capacity
@@ -330,7 +334,9 @@ A preempted placeholder stays Running with `deletionTimestamp` set → not ready
 The placeholder reserves one node's worth of capacity. The guard is **physical reservation**: `surge_ready` requires the placeholder to be Running on a Ready node other than the candidate. Whether new or pre-existing, the host's admission means reschedulable capacity is physically held.
 
 ::: warning Absorb-path limitation
-On the absorb path, the reservation is aggregate — one node's requests held on a host already running other Pods. An individual displaced Pod can still fail to use it (pod anti-affinity, `hostPort` collisions). The controller guarantees node-level capacity; per-Pod placement is the scheduler's and PDB's domain (§3.5).
+On the absorb path, the reservation is aggregate — one node's requests held on a host already running other Pods. An individual displaced Pod can still fail to use it (pod anti-affinity, `hostPort` collisions), in which case Karpenter provisions for it *after* the drain has started. The controller guarantees node-level capacity; per-Pod placement is the scheduler's and PDB's domain (§3.5).
+
+`surge_wait` therefore does not bound the time until the evicted Pods are running on this path — a four-second wait can precede a node launch that has simply moved behind the drain. That is why the path is named alongside the duration (§4.2): the two paths are otherwise indistinguishable in the log.
 :::
 
 ## 3.4 Mid-surge Protection

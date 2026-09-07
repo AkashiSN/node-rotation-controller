@@ -122,12 +122,13 @@ Warning レベルの状態が `kubectl describe` で確認可能:
 | `no rotation candidate` | `reason`、census カウント |
 | `surge placeholder created` | `placeholder`, `requests`、除外カウント、クランプ情報 |
 | `surge placeholder is not schedulable` | `placeholder`, `reason`, `detail` |
-| `surge node ready` | `surgeNode`, `surgeWait` |
+| `surge node ready` | `surgeNode`, `surgeWait`, `surgePath` |
 | `drain started` | `node`, `mode` ∈ {`surge`, `forceful-fallback`} |
 | `rotation attempt failed` | `reason`, `readyTimeout`, `retryCount`, `backoffUntil` |
-| `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `total` |
+| `rotation complete` | `mode`, `drain`, `surgeNode`, `surgeWait`, `surgePath`, `total` |
 | `maintenance window closed with candidates unrotated` | `windowOpenedAt`, `eligible`, `inBackoffTriggered` |
 
+- **`surgePath`** ∈ {`provisioned`, `absorbed`} はどちらの §3.3 パスがキャパシティを予約したかを示し、`surgeWait` を解釈可能にする値である: `absorbed` の待機時間は既に存在したキャパシティへの bind を測っているだけなので、退避 Pod が稼働するまでの時間を上界しない。パスが確定しなかった場合 — surge なしのフォールバック、または surge ホストの NodeClaim を解決できなかった場合 — は推測せず **省略**する。`RotationCompleted` Event も同じ値を持つ
 - **レベルトリガー行**（`no rotation candidate`、`surge placeholder is not schedulable`）は遷移 dedup を使用 — reason/census/message が変化した場合のみ再発行
 - **デバッグ冗長性**（`V(1)`）で dedup なしの各パス findings とハートビートを追加
 - **ライブネスシグナル:** ログの沈黙ではなく `controller_runtime_reconcile_total` / workqueue メトリクスから読み取る

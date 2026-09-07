@@ -541,6 +541,7 @@ func TestReadyTimeoutFailsAndReaps(t *testing.T) {
 		annotations.ActiveRotation: "nc-old",
 		annotations.DrainingAt:     rfc(testNow.Add(-5 * time.Minute)),
 		annotations.SurgeWait:      (90 * time.Second).String(),
+		annotations.SurgePath:      surge.PathAbsorbed,
 	}))
 	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)
 	ph := placeholderPod("", corev1.PodPending)
@@ -567,6 +568,9 @@ func TestReadyTimeoutFailsAndReaps(t *testing.T) {
 	}
 	if p.Annotations[annotations.SurgeWait] != "" {
 		t.Error("surge-wait must be cleared on the failPending path")
+	}
+	if p.Annotations[annotations.SurgePath] != "" {
+		t.Error("surge-path must be cleared on the failPending path")
 	}
 	if p.Annotations[annotations.LastFailureAt] == "" {
 		t.Error("last-failure-at must be stamped")
@@ -1236,6 +1240,7 @@ func TestFailedTornWriteRepairReleasesAnchorAndPreservesPause(t *testing.T) {
 		annotations.LastFailureAt:  rfc(testNow.Add(-1 * time.Hour)),   // stale, older than failed-at
 		annotations.DrainingAt:     rfc(testNow.Add(-5 * time.Minute)), // defensive-invariant seed
 		annotations.SurgeWait:      (90 * time.Second).String(),        // defensive-invariant seed (#228)
+		annotations.SurgePath:      surge.PathProvisioned,              // same seed, one field later (#305)
 	}))
 	r := newReconciler(t, testNow, nil, pool, cand, testK8sNode(candNode, true, nil, false))
 
@@ -1253,6 +1258,9 @@ func TestFailedTornWriteRepairReleasesAnchorAndPreservesPause(t *testing.T) {
 	}
 	if p.Annotations[annotations.SurgeWait] != "" {
 		t.Error("surge-wait must be cleared on the advanceFailed torn-repair path")
+	}
+	if p.Annotations[annotations.SurgePath] != "" {
+		t.Error("surge-path must be cleared on the advanceFailed torn-repair path")
 	}
 	if got, want := p.Annotations[annotations.LastFailureAt], rfc(testNow.Add(-5*time.Minute)); got != want {
 		t.Errorf("last-failure-at must advance to max(existing, failed-at): got %q, want %q", got, want)
