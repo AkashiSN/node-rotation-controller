@@ -245,8 +245,8 @@ advance(np, name):
           return Requeue(30s)
       if surge_ready(cand):
           host := placeholder_node(name)
-          path := surge_path(host, cand.started-at)   # provisioned | absorbed | unknown
           freeze(host, surge-for=name)
+          path := surge_path(host, cand.started-at)   # provisioned | absorbed | unknown
           annotate(np, active-rotation-state=draining, draining-at=now,
                    surge-wait=now − cand.started-at,
                    surge-path=path if known)

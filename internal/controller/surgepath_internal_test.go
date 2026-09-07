@@ -2,12 +2,16 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
 	"github.com/AkashiSN/node-rotation-controller/internal/surge"
@@ -152,5 +156,52 @@ func TestRotationCompleteOmitsAnAbsentSurgePath(t *testing.T) {
 	}
 	if evs := drain(rec); len(evs) != 1 || containsLine(evs, "surge path") {
 		t.Errorf("the Event must not name a path that was never observed: %v", evs)
+	}
+}
+
+// failGetOfClaim fails every Get of the named NodeClaim — the second of the two
+// reads the path lookup makes, and the only one in this pass that belongs to it
+// alone (the candidate's surge-claim is seeded, so nothing else resolves a claim
+// by that name).
+func failGetOfClaim(name string) interceptor.Funcs {
+	return interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*karpv1.NodeClaim); ok && key.Name == name {
+				return errors.New("simulated transient API error")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+}
+
+// The path is an observation, so failing to make it must cost the field and
+// nothing else. The lookup sits after surge_ready and before the durable
+// draining write, where returning an error aborts the transition — and since
+// readyTimeout is evaluated ahead of surge_ready on the next pass, one transient
+// error near the deadline would roll back a surge that was already Ready.
+func TestSurgeReadyTransitionSurvivesAFailingPathLookup(t *testing.T) {
+	node, cand, pool := pendingRotation(testNow.Add(-3 * time.Minute))
+	cand.Finalizers = []string{"karpenter.sh/termination"}
+	cand.Annotations[annotations.SurgeClaim] = "nc-surge"
+	surgeClaim := testClaim("nc-surge", time.Minute, ncNode(surgeNode))
+	r := newFlakyReconciler(t, nil, failGetOfClaim("nc-surge"), pool, cand, node, surgeClaim,
+		testK8sNode(surgeNode, true, nil, false), placeholderPod(surgeNode, corev1.PodRunning))
+
+	var lines []string
+	if _, err := r.reconcileNodePool(log.IntoContext(context.Background(), captureLogger(&lines)), pool, testPolicy(), mustSchedule(t)); err != nil {
+		t.Fatalf("a failed path lookup must not fail the reconcile: %v", err)
+	}
+	p := getPool(t, r)
+	if p.Annotations[annotations.ActiveRotationState] != annotations.StateDraining {
+		t.Errorf("the transition must still reach draining: got %q", p.Annotations[annotations.ActiveRotationState])
+	}
+	if p.Annotations[annotations.SurgePath] != "" {
+		t.Errorf("an unresolved path must stamp nothing: got %q", p.Annotations[annotations.SurgePath])
+	}
+	if c := getClaimOrNil(t, r, "nc-old"); c == nil || c.DeletionTimestamp == nil {
+		t.Error("the old NodeClaim must still be deleted")
+	}
+	if !containsLine(lines, "surge node ready") {
+		t.Errorf("the transition must still be logged; lines = %v", lines)
 	}
 }

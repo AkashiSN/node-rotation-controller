@@ -13,7 +13,9 @@ import (
 // Pods are running (issue #305).
 const (
 	// PathProvisioned means the surge host's NodeClaim came into existence during
-	// this rotation attempt — Karpenter launched a node for the placeholder.
+	// this rotation attempt. That is what is observed; "Karpenter launched it for
+	// the placeholder" is the usual cause but not a claim this value makes (see
+	// HostPath).
 	PathProvisioned = "provisioned"
 	// PathAbsorbed means the surge host predates this attempt — the scheduler
 	// bin-packed the placeholder onto pre-existing capacity.
@@ -43,9 +45,10 @@ func CreatedByAttempt(claim *karpv1.NodeClaim, startedAt time.Time) bool {
 // It reports what it can observe — the host's claim came into existence during
 // this attempt — not causality. A node Karpenter provisioned for some other
 // pending Pod inside this attempt's window, which then absorbed the placeholder,
-// reads as PathProvisioned. That ambiguity is already accepted on the rollback
-// path, where such a claim is reapable; sharing CreatedByAttempt keeps it a
-// single accepted imprecision instead of two divergent ones.
+// reads as PathProvisioned. The rollback path accepts the same imprecision in
+// its created-after leg (such a claim passes it; the separate occupancy guard
+// may still spare it), and sharing CreatedByAttempt keeps that one accepted
+// imprecision from becoming two divergent ones.
 func HostPath(hostClaim *karpv1.NodeClaim, startedAt time.Time) string {
 	if hostClaim == nil {
 		return ""

@@ -1076,12 +1076,10 @@ func (r *RotationReconciler) advancePending(ctx context.Context, pool *karpv1.No
 	// Which of the two §3.3 paths reserved the capacity (issue #305). Resolved
 	// after the freeze — a reporting lookup must never delay a protective marker —
 	// and before the write below, the last point that still holds the candidate's
-	// started-at, which the predicate needs and which the delete takes away. ""
-	// when the host's claim cannot be resolved; every consumer then omits the field.
-	surgePath, err := r.surgePathFor(ctx, pool, host, startedAt)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
+	// started-at, which the predicate needs and which the delete takes away. It
+	// cannot fail the transition: it returns "" for anything it cannot establish,
+	// including its own read errors, and every consumer then omits the field.
+	surgePath := r.surgePathFor(ctx, pool, host, startedAt)
 	// Durable phase record BEFORE the delete — it decides the completion
 	// outcome — plus the drain-start anchor for the §4.2 drain histogram,
 	// stamped write-once in the same update so a re-run never moves it.
@@ -1673,19 +1671,36 @@ func (r *RotationReconciler) claimForNode(ctx context.Context, pool *karpv1.Node
 // while surge-claim may still hold the never-bound claim the rollback guard
 // tracks.
 //
-// It returns "" — not a guess — when the host has no NodeClaim in this pool, or
-// when the claim has vanished between the two cache reads. Callers omit the
-// field, so its absence means "not established", never "absorbed".
-func (r *RotationReconciler) surgePathFor(ctx context.Context, pool *karpv1.NodePool, host string, startedAt time.Time) (string, error) {
+// It returns "" — not a guess — when the host has no NodeClaim in this pool,
+// when the claim has vanished between the two cache reads, or when either read
+// fails. Callers omit the field, so its absence means "not established", never
+// "absorbed".
+//
+// It returns no error, deliberately, and the signature is the guarantee: this is
+// an observation taken between surge_ready and the durable draining write, where
+// a returned error would abort the transition. The next pass evaluates
+// readyTimeout ahead of surge_ready, so one transient API error near the
+// deadline would roll back a surge that was already Ready — a failed lookup must
+// cost the field and nothing else.
+func (r *RotationReconciler) surgePathFor(ctx context.Context, pool *karpv1.NodePool, host string, startedAt time.Time) string {
+	unknown := func(err error) string {
+		// V(1): a persistent API problem would otherwise show only as a field that
+		// is quietly always missing.
+		log.FromContext(ctx).V(1).Info("surge path unresolved", "nodepool", pool.Name, "surgeNode", host, "err", err)
+		return ""
+	}
 	name, err := r.claimForNode(ctx, pool, host)
-	if err != nil || name == "" {
-		return "", err
+	if err != nil {
+		return unknown(err)
+	}
+	if name == "" {
+		return ""
 	}
 	sc, err := r.getClaim(ctx, name)
 	if err != nil {
-		return "", err
+		return unknown(err)
 	}
-	return surge.HostPath(sc, startedAt), nil
+	return surge.HostPath(sc, startedAt)
 }
 
 // reapSurgeClaim deletes the induced claim on rollback, guarded so it never
