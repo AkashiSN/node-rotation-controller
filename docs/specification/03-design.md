@@ -219,7 +219,7 @@ Karpenter **rejects a transition between static and dynamic** on an existing Nod
 | Kind | Bare Pod (no controller) |
 | Priority | Dedicated negative `PriorityClass` |
 | Preemption | `preemptionPolicy: Never` |
-| Requests | Reschedulable Pod sum (clamped) |
+| Requests | Reschedulable Pod sum (clamped), or a whole node when `wholeNodeReservation` is on |
 | Node selector | `karpenter.sh/nodepool = <pool>` |
 | Node affinity | Soft: avoid candidate + near-deadline |
 | Tolerations | From NodePool `spec.template.spec.taints` |
@@ -280,6 +280,28 @@ requests = min(reschedulable sum, limit)                        (per resource)
 - **Refused** (`limit ≤ 0`): DaemonSet overhead exhausts allocatable → placeholder keeps full drain, stays unschedulable, rotation rolls back
 - **Band-exceeded** (shortfall > measured band): `SurgeClampBandExceeded` Warning Event; rotation proceeds
 - **Common case** (fits under limit): silent
+
+### Whole-node reservation (issue #326, ADR-0005)
+
+**Problem:** the placeholder reserves the *sum* of the drain as a single Pod. On the capacity-absorb path that aggregate hole sits on a host already running other Pods, and it is fungible with the individual evicted Pods' placement only if that host can accept all of them. A host can offer a big enough hole while a Pod's own `podAntiAffinity` or `hostPort` still refuses it — and Karpenter then provisions for that Pod **after** the drain has started, behind the surge rather than in front of it.
+
+**Solution (opt-in, `surge.wholeNodeReservation`, default off):**
+
+```
+requests = max(reschedulable sum, limit)   (per resource; limit as above)
+```
+
+::: tip It is not "force a new node"
+It requires a host with **a whole node's worth of free space**. A partially-filled host — the class on which the aggregate assumption breaks — can no longer take the placeholder; a genuinely empty host (DaemonSets only) still can, and should, because an empty host has nothing for a hostname-topology anti-affinity to bite on. Excluding hosts directly is not available: a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision at all (issue #96).
+:::
+
+- **Never upsizes:** `limit + DaemonSet = allocatable`, so the candidate's own instance class is the smallest type that fits
+- **Only resources the drain requests are raised** — a resource the evicted Pods do not request is not one they need reserved, and `pods` is not a container request at all. A drain that requests nothing reserves nothing
+- **A non-positive limit is left to the clamp's refusal** — raising to it would reserve nothing and satisfy `surge_ready` with an empty placeholder, a silent break-before-make
+- **`surge_headroom` (§5.2) tests the raised footprint**, so a pool whose `spec.limits` are nearly exhausted stops starting rotations and says so (`InsufficientHeadroom`, §4.3)
+- **Cost:** an instance of the candidate's class per rotation, and possibly a consolidation cycle once the surge host leaves `do-not-disrupt`
+
+Constraints coarser than the node — zone-level `podAntiAffinity`, `topologySpreadConstraints` — are **not** addressed: they are decided by what is in the zone, not by what is on the host. See ADR-0005 for why modelling the Pods faithfully does not address them either.
 
 ### Placeholder priority and preemption
 

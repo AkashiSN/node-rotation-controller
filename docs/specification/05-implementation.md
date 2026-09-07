@@ -59,7 +59,7 @@ flowchart TD
     q2 -->|yes| pick["pick earliest-deadline eligible candidate"]
     pick --> q3{"candidate<br/>found?"}
     q3 -->|no| rq
-    q3 -->|yes| q4{"surge_headroom?<br/>clamped footprint<br/>vs spec.limits budget"}
+    q3 -->|yes| q4{"surge_headroom?<br/>placeholder footprint<br/>vs spec.limits budget"}
     q4 -->|no| warn["warn: insufficient limits;<br/>Requeue (1m)"]
     q4 -->|yes| anchor["write active-rotation anchor<br/>(conflict-checked, only-if-absent)"]
     anchor --> adv
@@ -166,7 +166,8 @@ reconcile_nodepool(np):
   if cand == nil: return Requeue(1m)
   surgeless := forceful_fallback(np, cand)
   if not surgeless and not surge_headroom(np, cand):
-      warn("insufficient limits headroom"); return Requeue(1m)
+      warn(InsufficientHeadroom, resource, want, remaining, limit)  # deduped
+      return Requeue(1m)
   annotate(np, active-rotation=cand.name)    # conflict-checked, only-if-absent
   if surgeless:
       annotate(np, rotation-mode=forceful-fallback,
@@ -469,6 +470,8 @@ spec:
         - karpenter.sh/capacity-type
       preferred: []
     forcefulFallback:             # opt-in surge-less fallback (§3.6)
+      enabled: false
+    wholeNodeReservation:         # opt-in whole-node reservation (§3.3, ADR-0005)
       enabled: false
   prePull:                        # v2 (disabled in v1)
     enabled: false

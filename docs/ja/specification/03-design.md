@@ -219,7 +219,7 @@ Karpenter は既存 NodePool の static と dynamic の**相互移行を拒否�
 | Kind | Bare Pod（コントローラーなし） |
 | Priority | 専用の負の `PriorityClass` |
 | Preemption | `preemptionPolicy: Never` |
-| Requests | 再スケジュール可能 Pod 合計（クランプ済み） |
+| Requests | 再スケジュール可能 Pod 合計（クランプ済み）。`wholeNodeReservation` 有効時は 1 ノード分 |
 | Node selector | `karpenter.sh/nodepool = <pool>` |
 | Node affinity | Soft: 候補 + 期限近いノードを回避 |
 | Tolerations | NodePool `spec.template.spec.taints` から |
@@ -280,6 +280,28 @@ requests = min(再スケジュール可能合計, limit)                    （�
 - **Refused**（`limit ≤ 0`）: DaemonSet オーバーヘッドが allocatable を消費 → placeholder はフルドレインを維持し、スケジュール不可のまま、ローテーションはロールバック
 - **Band-exceeded**（shortfall > 計測バンド）: `SurgeClampBandExceeded` Warning Event; ローテーションは続行
 - **通常ケース**（limit 内に収まる）: サイレント
+
+### whole-node 予約（issue #326、ADR-0005）
+
+**問題:** placeholder はドレインの*合計*を 1 個の Pod として予約する。キャパシティ吸収パスでは、その集約的な穴は既に他の Pod が稼働しているホスト上に置かれ、そのホストが全員を受け入れられる場合にのみ個別の退避 Pod の配置と交換可能になる。穴の大きさは足りていても、個々の Pod 自身の `podAntiAffinity` や `hostPort` がそのホストを拒否することがあり、その場合 Karpenter はドレイン開始**後**にその Pod のためにプロビジョニングする — surge の前ではなく後ろで。
+
+**解決（オプトイン、`surge.wholeNodeReservation`、デフォルト off）:**
+
+```
+requests = max(再スケジュール可能合計, limit)   （リソースごと; limit は上記と同じ）
+```
+
+::: tip 「新規ノードの強制」ではない
+要求するのは**1 ノード分の空きを持つホスト**である。部分的に埋まったホスト — 集約の仮定が壊れるクラス — は placeholder を受け入れられなくなるが、完全に空のホスト（DaemonSet のみ）は引き続き受け入れられるし、そうあるべきである: 空のホストには hostname トポロジの anti-affinity が噛みつく相手が居らず、新規ノードと等価だからである。ホストを直接除外する方法は取れない: **required** な `kubernetes.io/hostname NotIn` term は Karpenter の provisioner にプロビジョニング自体を拒否させる（issue #96）。
+:::
+
+- **サイズを大きくすることはない:** `limit + DaemonSet = allocatable` なので、候補自身のインスタンスクラスが収まる最小の型になる
+- **引き上げるのはドレインが要求しているリソースのみ** — 退避 Pod が要求していないリソースは予約が必要なものではなく、`pods` はそもそもコンテナが要求できない。何も要求しないドレインは何も予約しない
+- **非正の limit はクランプの refusal に委ねる** — そこへ引き上げると何も予約せずに `surge_ready` を満たしてしまい、暗黙の break-before-make になる
+- **`surge_headroom`（§5.2）は引き上げ後の footprint を検査する**ので、`spec.limits` がほぼ尽きたプールはローテーションを開始しなくなり、そのことを通知する（`InsufficientHeadroom`、§4.3）
+- **コスト:** ローテーションごとに候補と同じクラスのインスタンス 1 台、および surge ホストが `do-not-disrupt` を離れた後の consolidation が 1 回発生しうる
+
+ノードより粗い粒度の制約 — ゾーンレベルの `podAntiAffinity`、`topologySpreadConstraints` — は**対象外**である: それらはホスト上に何があるかではなく、ゾーン内に何が居るかで決まる。Pod を忠実にモデル化してもこれらが解決しない理由は ADR-0005 を参照。
 
 ### placeholder の優先度とプリエンプション
 
