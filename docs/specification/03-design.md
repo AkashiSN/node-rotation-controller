@@ -210,7 +210,9 @@ A NodePool with `spec.replicas` set (Karpenter **static capacity**) maintains a 
 
 The controller therefore **refuses to start a rotation** on a static NodePool and says so once via a `StaticNodePool` Warning Event (§4.3, gate in §5.2). Those nodes remain subject to Karpenter's forceful expiration.
 
-Karpenter **rejects a transition between static and dynamic** on an existing NodePool (a CEL rule on `spec.replicas`), so the remedy is to migrate the workload to a dynamic NodePool or to exclude this one from the RotationPolicy selector — not to edit the field in place. Surge-less replacement driven by replica reconciliation is **not part of v1**.
+Karpenter **rejects a transition between static and dynamic** on an existing NodePool (a CEL rule on `spec.replicas`), so the remedy is to migrate the workload to a dynamic NodePool or to exclude this one from the RotationPolicy selector — not to edit the field in place.
+
+Surge-less replacement driven by replica reconciliation — raising `spec.replicas` to surge, or deleting the NodeClaim and letting replica reconciliation refill it — was evaluated and **rejected**, not deferred (issue #302). Karpenter's static deprovisioning selects empty nodes first, so a node provisioned by raising `replicas` is the *first* candidate for the scale-down that follows rather than merely a possible one; and the concurrency that would make delete-and-refill a one-node dip instead of a stall for the whole drain holds only while `limits.nodes` exceeds `replicas`, which is the operator's configuration rather than a property of the mode. `surge.forcefulFallback` is not a precedent for shipping it anyway: that is an opt-in, window-bounded escape for a pool that would otherwise miss its deadline entirely (ADR-0001), not a pool's steady-state mechanism. Both constraints are properties of Karpenter's current node accounting (v1.14), so the decision is worth revisiting if that changes — not because rotating static pools is undesirable.
 
 ### The placeholder Pod
 

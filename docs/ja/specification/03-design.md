@@ -210,7 +210,9 @@ ageThreshold (A) = E − (K·P + t_rot)
 
 したがってコントローラは static NodePool でのローテーション開始を**拒否**し、`StaticNodePool` Warning Event（§4.3、ゲートは §5.2）で 1 度だけ通知する。それらのノードは Karpenter の forceful expiration の対象のまま残る。
 
-Karpenter は既存 NodePool の static と dynamic の**相互移行を拒否する**（`spec.replicas` に対する CEL ルール）。したがって対処はフィールドをその場で編集することではなく、ワークロードを dynamic な NodePool へ移すか、この NodePool を RotationPolicy のセレクタから外すことである。replica 収束に置換を任せる surge-less なローテーションは **v1 の対象ではない**。
+Karpenter は既存 NodePool の static と dynamic の**相互移行を拒否する**（`spec.replicas` に対する CEL ルール）。したがって対処はフィールドをその場で編集することではなく、ワークロードを dynamic な NodePool へ移すか、この NodePool を RotationPolicy のセレクタから外すことである。
+
+replica 収束に置換を任せる surge-less なローテーション — surge のために `spec.replicas` を増やす案と、NodeClaim を削除して replica 収束に補充させる案 — は、先送りではなく**不採用**として決着した（issue #302）。Karpenter の static deprovisioning は空のノードを最初に選ぶため、`replicas` を増やして立てたノードは、続く scale-down で選ばれうる候補の 1 つではなく*最初の*候補になる。また、削除して補充させる案がドレイン全体の停止ではなく 1 ノード分の目減りで済むという並走性は、`limits.nodes` が `replicas` を上回っている間しか成立せず、これはモードの性質ではなくオペレーターの設定である。`surge.forcefulFallback` があることは、それでも出荷してよい前例にはならない。あれは締切をまるごと逃すプールのための opt-in かつウィンドウに限定された脱出路（ADR-0001）であって、プールの常態の機構ではない。どちらの制約も Karpenter の現在のノードアカウンティング（v1.14）に由来するので、それが変われば決定は再検討に値する — static プールのローテーションが望ましくないからではない。
 
 ### placeholder Pod
 
