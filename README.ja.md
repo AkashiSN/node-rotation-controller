@@ -1,7 +1,7 @@
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.6.1_released_(pre--1.0)-blue.svg)](docs/ja/specification/)
+[![Status](https://img.shields.io/badge/status-v0.7.0_released_(pre--1.0)-blue.svg)](docs/ja/specification/)
 
 Karpenter 配下のノードを、設定可能なメンテナンスウィンドウ内で **make-before-break（surge）** 型に先回り置換し、Karpenter の Forceful な `expireAfter` 発火を実質起こさないようにする Kubernetes コントローラ。
 
@@ -9,7 +9,7 @@ EKS Auto Mode をはじめ、ノードの Expiration が Forceful で Disruption
 
 ## ステータス
 
-**v0.6.1 — 最新リリース。v1 surge MVP、pre-1.0。** この節は `main` の状態を説明しており、最新リリースより先行していることがある。リリースごとの変更点とアップグレード時の対処は [changelog](CHANGELOG.md)（英語）にある。
+**v0.7.0 — 最新リリース。v1 surge MVP、pre-1.0。** この節は `main` の状態を説明しており、最新リリースより先行していることがある。リリースごとの変更点とアップグレード時の対処は [changelog](CHANGELOG.md)（英語）にある。
 
 実装済み: make-before-break ローテーションステートマシン（仕様 §5.2）、NodePool ごとの `RotationPolicy` 解決（§5.4）、導出される `ageThreshold` と候補選定（§3.2）、surge placeholder（§3.3）、スループット予測とその入力の export（§3.2、§4.2）、メトリクス・Warning Events・ステートマシンのログ行（§4.2、§4.3）、Helm chart、Karpenter v1 起動時プリフライト（§5.1）。候補は **deadline の早い順** に並べられ、運用者が付けた `karpenter.sh/do-not-disrupt` アノテーションを持つノードは候補選定から除外される。ユニット・envtest・KWOK・ドキュメントの各テストが CI で動いている。
 

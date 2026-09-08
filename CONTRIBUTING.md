@@ -1,14 +1,15 @@
 # Contributing to node-rotation-controller
 
-Thanks for your interest! The latest release is **v0.6.1**. The v1 surge MVP,
-per-NodePool `RotationPolicy`, opt-in forceful fallback, throughput forecast,
-observability, Helm chart, and browser policy simulator are implemented. The
-project remains pre-1.0 while the CRD and compatibility surface stabilize
-toward v1.0.
+Thanks for your interest! The latest release is **v0.7.0**. The v1 surge MVP,
+per-NodePool `RotationPolicy`, opt-in forceful fallback, opt-in whole-node surge
+reservation, throughput forecast, observability, Helm chart, and browser policy
+simulator are implemented. The project remains pre-1.0 while the CRD and
+compatibility surface stabilize toward v1.0.
 
-The core paths and a 12-hour tight-race soak are validated on EKS Auto Mode. A
-genuine same-AZ capacity shortage (ICE) driving rollback remains a documented
-real-cloud validation gap. See the
+The core paths and a 12-hour tight-race soak are validated on EKS Auto Mode. Two
+gaps remain: a genuine same-AZ capacity shortage (ICE) driving rollback, and the
+whole-node surge reservation, which shipped with unit and controller-level tests
+only — no KWOK e2e and no real-cloud run. See the
 [`roadmap`](docs/specification/06-release.md#62-roadmap) and
 [`validated assumptions`](docs/specification/07-risks.md#72-validated-assumptions).
 
