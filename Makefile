@@ -186,6 +186,17 @@ helm-lint: aqua-tools
 	helm template rot $(CHART) --namespace node-rotation-system >/dev/null
 	helm template rot $(CHART) --namespace node-rotation-system --set metrics.serviceMonitor.enabled=true >/dev/null
 
+# helm lint renders the PrometheusRule and helm-unittest asserts its rendered
+# content; neither parses the PromQL inside it. This target does, via promtool
+# (pinned in aqua.yaml) — so a syntax error in the §4.2 alert expressions fails
+# here instead of in a user's cluster. The self-test runs first: it breaks a copy
+# of the chart three ways and asserts the guard catches each, so a green run is
+# evidence rather than silence.
+.PHONY: helm-rules
+helm-rules: aqua-tools
+	bash .github/scripts/check-prometheus-rules.test.sh
+	bash .github/scripts/check-prometheus-rules.sh
+
 # e2e-kwok is a STANDALONE target — deliberately NOT a dependency of `test`. It
 # builds the controller image, spins up a kind cluster running the real
 # Karpenter v1 KWOK reference cloudprovider + this controller, and runs the

@@ -102,7 +102,9 @@
         "ko-build/ko",
         "kubernetes-sigs/kustomize",
         "golang.org/x/tools/gopls",
-        "sigs.k8s.io/controller-tools/cmd/controller-gen"
+        "sigs.k8s.io/controller-tools/cmd/controller-gen",
+        "prometheus/prometheus",
+        "mikefarah/yq"
       ]
     },
     {

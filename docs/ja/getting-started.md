@@ -199,6 +199,7 @@ rotationPolicies:
 | `make test` | ユニットテスト + envtest スモークテスト |
 | `make lint` | golangci-lint |
 | `make helm-lint` | Helm chart の lint とレンダリング |
+| `make helm-rules` | chart の `PrometheusRule` の PromQL を promtool でパース |
 | `make docker-build` | コンテナイメージのビルド |
 
 開発ワークフローは [CONTRIBUTING.md](https://github.com/AkashiSN/node-rotation-controller/blob/main/CONTRIBUTING.md) を参照。

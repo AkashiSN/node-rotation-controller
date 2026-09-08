@@ -199,6 +199,7 @@ Requires [aqua](https://aquaproj.github.io) and `make`. All tooling is version-p
 | `make test` | Unit tests + envtest smoke test |
 | `make lint` | golangci-lint |
 | `make helm-lint` | Lint and render the Helm chart |
+| `make helm-rules` | Parse the PromQL in the chart's `PrometheusRule` (promtool) |
 | `make docker-build` | Build the container image |
 
 See [CONTRIBUTING.md](https://github.com/AkashiSN/node-rotation-controller/blob/main/CONTRIBUTING.md) for the development workflow.
