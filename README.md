@@ -154,6 +154,7 @@ first use; a `make` run links them onto `$PATH` for you). The Go version in
 | `make test` | Run unit tests and the envtest-based smoke test |
 | `make lint` | Run golangci-lint |
 | `make helm-lint` | Lint and render the Helm chart |
+| `make helm-rules` | Parse the PromQL in the chart's `PrometheusRule` (promtool) |
 | `make docker-build` | Build the container image |
 
 `make test` downloads the envtest control-plane binaries on first run.

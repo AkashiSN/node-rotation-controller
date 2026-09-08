@@ -155,6 +155,7 @@ terraform・awscli）は [`aqua.yaml`](aqua.yaml) でバージョン固定され
 | `make test` | ユニットテストと envtest ベースのスモークテストを実行 |
 | `make lint` | golangci-lint を実行 |
 | `make helm-lint` | Helm chart の lint とレンダリング |
+| `make helm-rules` | chart の `PrometheusRule` の PromQL を promtool でパース |
 | `make docker-build` | コンテナイメージをビルド |
 
 `make test` は初回実行時に envtest のコントロールプレーンバイナリをダウンロードする。

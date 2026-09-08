@@ -219,6 +219,17 @@ jobs:
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
+      # This job had no tool cache while helm was all it fetched. The PromQL guard
+      # adds promtool, which aqua takes from the prometheus release archive — far
+      # larger than helm — so the aqua store is cached here as the other jobs cache
+      # it. Only the aqua path: this job runs no Go.
+      - name: Cache aqua tools
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/aquaproj-aqua
+          key: chart-${{ runner.os }}-${{ hashFiles('aqua.yaml') }}
+          restore-keys: chart-${{ runner.os }}-
       - name: helm lint
         if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         run: helm lint charts/node-rotation-controller
@@ -240,6 +251,21 @@ jobs:
       - name: helm unittest (RBAC + PriorityClass assertions)
         if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         run: helm unittest charts/node-rotation-controller
+
+      # The steps above render the PrometheusRule and assert its rendered content;
+      # neither parses the PromQL inside it, so until this guard a syntax error in
+      # the §4.2 alert expressions would have gone green here and surfaced only
+      # when a user's Prometheus rejected the rule. The self-test runs first (as
+      # the `changes` job runs the classifier's), breaking a copy of the chart
+      # three ways so a green guard is evidence rather than silence — promtool
+      # exits 0 on an empty rule file, which is exactly what one of those cases
+      # proves the guard catches.
+      - name: PrometheusRule guard self-test
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
+        run: bash .github/scripts/check-prometheus-rules.test.sh
+      - name: promtool check rules (chart PromQL parses)
+        if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
+        run: bash .github/scripts/check-prometheus-rules.sh
 
       # values.schema.json negative cases (issue #75, §5.4): each invalid value
       # MUST be rejected by `helm template` (the schema is validated at render

@@ -57,6 +57,13 @@ packages:
   # kubectl tracks the controller's Kubernetes client minor (k8s.io/api v0.37 ->
   # 1.37), matching the kind node's Kubernetes minor (v1.37) — within skew policy.
   - name: kubernetes/kubernetes/kubectl@v1.37.0
+  # --- Chart PrometheusRule validation (.github/scripts/check-prometheus-rules.sh) ---
+  # promtool ships in the prometheus release archive and is the only thing that
+  # parses the PromQL the chart's PrometheusRule ships; helm-unittest asserts the
+  # rendered YAML's content, never the expressions. yq lifts the manifest's
+  # `.spec` out, which is exactly promtool's rule-file schema.
+  - name: prometheus/prometheus@v3.14.0
+  - name: mikefarah/yq@v4.53.6
   # --- Ephemeral EKS Auto Mode PoC tooling (test/e2e/eks-automode, issue #93) ---
   - name: hashicorp/terraform@v1.16.1
   # awscli authenticates to AWS, logs Docker in to ECR, and writes the cluster
