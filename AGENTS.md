@@ -9,7 +9,7 @@ The **source of truth for design** is [`docs/specification/`](docs/specification
 (Japanese translation: [`docs/ja/specification/`](docs/ja/specification/)).
 Read it before making design-affecting changes.
 
-The latest release is **v0.6.1** and the project remains **pre-1.0**; `main` may
+The latest release is **v0.7.0** and the project remains **pre-1.0**; `main` may
 be ahead of it, and [`CHANGELOG.md`](CHANGELOG.md) records what each release
 changed. The v1 surge MVP is implemented: the annotation-backed rotation state
 machine, per-NodePool `RotationPolicy` resolution and observational status,
@@ -18,9 +18,10 @@ surge reservation, throughput forecast, metrics and Warning Events, Helm chart,
 and browser policy simulator are in place. Unit, envtest, KWOK, and
 documentation tests run in CI. EKS Auto Mode
 PoC runs have validated the core surge and fallback paths, including the
-12-hour tight-race soak (Scenario P). A genuine same-AZ capacity shortage (ICE)
-driving rollback remains the documented real-cloud validation gap before v1.0;
-see the roadmap and validated assumptions in the specification (§6.2, §7.2).
+12-hour tight-race soak (Scenario P) and the opt-in whole-node surge reservation
+(2026-09-09). A genuine same-AZ capacity shortage (ICE) driving rollback remains
+the documented real-cloud validation gap before v1.0; see the roadmap and
+validated assumptions in the specification (§6.2, §7.2).
 The specification remains the source of truth — keep code and spec in sync.
 
 ## Development process

@@ -1,7 +1,7 @@
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.6.1_released_(pre--1.0)-blue.svg)](docs/specification/)
+[![Status](https://img.shields.io/badge/status-v0.7.0_released_(pre--1.0)-blue.svg)](docs/specification/)
 
 A Kubernetes controller that proactively rotates Karpenter-managed nodes within a defined maintenance window, using **make-before-break (surge)** semantics, before Karpenter's forceful `expireAfter` triggers.
 
@@ -9,7 +9,7 @@ Designed for EKS Auto Mode and any Karpenter v1+ environment where node expirati
 
 ## Status
 
-**v0.6.1 — latest release; the v1 surge MVP, pre-1.0.** This section describes `main`, which may be ahead of that release; what changed in each release, and what to do on upgrade, is in the [changelog](CHANGELOG.md).
+**v0.7.0 — latest release; the v1 surge MVP, pre-1.0.** This section describes `main`, which may be ahead of that release; what changed in each release, and what to do on upgrade, is in the [changelog](CHANGELOG.md).
 
 Implemented: the make-before-break rotation state machine (spec §5.2), per-NodePool `RotationPolicy` resolution (§5.4), the derived `ageThreshold` and candidate selection (§3.2), the surge placeholder (§3.3), the throughput forecast and its exported inputs (§3.2, §4.2), metrics, Warning Events and the state-machine log lines (§4.2, §4.3), the Helm chart, and the Karpenter v1 startup preflight (§5.1). Candidates are ordered by **earliest deadline**, and a node carrying an operator-owned `karpenter.sh/do-not-disrupt` annotation is excluded from selection. Unit, envtest, KWOK, and documentation tests run in CI.
 
