@@ -77,7 +77,7 @@ func TestStatusReconcilerEnvtest(t *testing.T) {
 
 	cl := mgr.GetClient()
 	pol := &noderotationv1alpha1.RotationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "api"},
+		Name: "api",
 		Spec: noderotationv1alpha1.RotationPolicySpec{
 			NodePoolSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"workload": "api"}},
 			MaintenanceWindows: []noderotationv1alpha1.MaintenanceWindow{{
@@ -89,11 +89,9 @@ func TestStatusReconcilerEnvtest(t *testing.T) {
 		t.Fatalf("create policy: %v", err)
 	}
 	np := &karpv1.NodePool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "np-api",
-			Labels:      map[string]string{"workload": "api"},
-			Annotations: map[string]string{annotations.ActiveRotation: "claim-x"},
-		},
+		Name:        "np-api",
+		Labels:      map[string]string{"workload": "api"},
+		Annotations: map[string]string{annotations.ActiveRotation: "claim-x"},
 		Spec: karpv1.NodePoolSpec{Template: karpv1.NodeClaimTemplate{Spec: karpv1.NodeClaimTemplateSpec{
 			NodeClassRef: &karpv1.NodeClassReference{Group: "eks.amazonaws.com", Kind: "NodeClass", Name: "default"},
 			Requirements: []karpv1.NodeSelectorRequirementWithMinValues{},

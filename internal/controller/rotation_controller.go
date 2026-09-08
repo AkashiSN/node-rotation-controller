@@ -259,7 +259,7 @@ func (r *RotationReconciler) allNodePools(ctx context.Context, _ client.Object) 
 	}
 	reqs := make([]reconcile.Request, 0, len(pools.Items))
 	for i := range pools.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: pools.Items[i].Name}})
+		reqs = append(reqs, reconcile.Request{Name: pools.Items[i].Name})
 	}
 	return reqs
 }
@@ -273,7 +273,7 @@ func nodePoolFromLabel(_ context.Context, obj client.Object) []reconcile.Request
 	if np == "" {
 		return nil
 	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: np}}}
+	return []reconcile.Request{{Name: np}}
 }
 
 // placeholderToNodePool maps a placeholder Pod to its owning NodePool, read from
@@ -292,7 +292,7 @@ func (r *RotationReconciler) placeholderToNodePool(_ context.Context, obj client
 	if np == "" {
 		return nil
 	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: np}}}
+	return []reconcile.Request{{Name: np}}
 }
 
 // placeholderRunning enqueues only when a placeholder Pod reaches Running — the

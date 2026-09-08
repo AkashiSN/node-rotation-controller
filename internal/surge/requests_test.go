@@ -112,9 +112,9 @@ func overhead(r corev1.ResourceList) podOpt {
 // Defaults make it a plain reschedulable workload Pod; opts override.
 func pod(name string, opts ...podOpt) corev1.Pod {
 	p := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       corev1.PodSpec{NodeName: candidateNode},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		Name:   name,
+		Spec:   corev1.PodSpec{NodeName: candidateNode},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	for _, o := range opts {
 		o(&p)

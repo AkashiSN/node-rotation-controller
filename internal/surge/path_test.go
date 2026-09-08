@@ -11,10 +11,9 @@ import (
 )
 
 func claimCreated(at time.Time) *karpv1.NodeClaim {
-	return &karpv1.NodeClaim{ObjectMeta: metav1.ObjectMeta{
+	return &karpv1.NodeClaim{
 		Name:              "nc-surge",
-		CreationTimestamp: metav1.NewTime(at),
-	}}
+		CreationTimestamp: metav1.NewTime(at)}
 }
 
 // The two surge paths (spec §3.3) are told apart by one question: did the host's

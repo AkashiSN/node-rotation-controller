@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -13,7 +12,7 @@ import (
 )
 
 func node(name string, labels map[string]string) *corev1.Node {
-	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+	return &corev1.Node{Name: name, Labels: labels}
 }
 
 func req(key string, op corev1.NodeSelectorOperator, values ...string) karpv1.NodeSelectorRequirementWithMinValues {
@@ -24,13 +23,13 @@ func req(key string, op corev1.NodeSelectorOperator, values ...string) karpv1.No
 const poolName = "api"
 
 func nodepool(reqs ...karpv1.NodeSelectorRequirementWithMinValues) *karpv1.NodePool {
-	p := &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: poolName}}
+	p := &karpv1.NodePool{Name: poolName}
 	p.Spec.Template.Spec.Requirements = reqs
 	return p
 }
 
 func claimNamed(name string) *karpv1.NodeClaim {
-	return &karpv1.NodeClaim{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	return &karpv1.NodeClaim{Name: name}
 }
 
 // baseInputs is a fully-populated, schedulable set of placeholder inputs.

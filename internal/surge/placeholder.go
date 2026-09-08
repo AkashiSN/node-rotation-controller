@@ -5,7 +5,6 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -76,21 +75,19 @@ func BuildPlaceholder(in PlaceholderInputs) *corev1.Pod {
 	// (issue #35, least privilege).
 	noAutomount := false
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      PlaceholderName(in.Candidate.Name),
-			Namespace: in.Namespace,
-			// surge-for pairs the placeholder to its rotation; the karpenter.sh/nodepool
-			// label lets the controller's Pod watch map the placeholder back to its
-			// owning NodePool without a client lookup (spec §3.3, issue #14).
-			Labels: map[string]string{
-				annotations.SurgeFor:    in.Candidate.Name,
-				karpv1.NodePoolLabelKey: in.Pool.Name,
-			},
-			// Pod-level do-not-disrupt: blocks voluntary disruption of whatever node
-			// the placeholder runs on, covering the surge target in the bind →
-			// surge_ready gap before the node-level freeze lands (spec §3.3, §5.3).
-			Annotations: map[string]string{karpv1.DoNotDisruptAnnotationKey: "true"},
+		Name:      PlaceholderName(in.Candidate.Name),
+		Namespace: in.Namespace,
+		// surge-for pairs the placeholder to its rotation; the karpenter.sh/nodepool
+		// label lets the controller's Pod watch map the placeholder back to its
+		// owning NodePool without a client lookup (spec §3.3, issue #14).
+		Labels: map[string]string{
+			annotations.SurgeFor:    in.Candidate.Name,
+			karpv1.NodePoolLabelKey: in.Pool.Name,
 		},
+		// Pod-level do-not-disrupt: blocks voluntary disruption of whatever node
+		// the placeholder runs on, covering the surge target in the bind →
+		// surge_ready gap before the node-level freeze lands (spec §3.3, §5.3).
+		Annotations: map[string]string{karpv1.DoNotDisruptAnnotationKey: "true"},
 		Spec: corev1.PodSpec{
 			PriorityClassName:            in.PriorityClassName,
 			PreemptionPolicy:             &preempt,

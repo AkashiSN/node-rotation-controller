@@ -24,7 +24,7 @@ import (
 // poolGov builds a NodePool with the given labels and (optionally) an
 // active-rotation anchor so the rotating count can be exercised.
 func poolGov(name string, labels map[string]string, anchored bool) karpv1.NodePool {
-	p := karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+	p := karpv1.NodePool{Name: name, Labels: labels}
 	if anchored {
 		p.Annotations = map[string]string{annotations.ActiveRotation: "claim-x"}
 	}
@@ -129,7 +129,7 @@ func newStatusReconciler(objs ...client.Object) (*RotationPolicyStatusReconciler
 
 func reconcilePolicy(t *testing.T, r *RotationPolicyStatusReconciler, name string) {
 	t.Helper()
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{Name: name}); err != nil {
 		t.Fatalf("Reconcile(%s): %v", name, err)
 	}
 }
@@ -205,7 +205,7 @@ func TestStatusReconciler_ConflictRequeuesWithoutError(t *testing.T) {
 	pool := poolGov("p1", map[string]string{"workload": "api"}, true)
 	r := newStatusReconcilerWithStatusUpdateErr(conflict, pol, &pool)
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	res, err := r.Reconcile(context.Background(), ctrl.Request{Name: "api"})
 	if err != nil {
 		t.Fatalf("conflict must not return an error, got %v", err)
 	}
@@ -222,7 +222,7 @@ func TestStatusReconciler_NonConflictErrorPropagates(t *testing.T) {
 	pool := poolGov("p1", map[string]string{"workload": "api"}, true)
 	r := newStatusReconcilerWithStatusUpdateErr(boom, pol, &pool)
 
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}}); !errors.Is(err, boom) {
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{Name: "api"}); !errors.Is(err, boom) {
 		t.Fatalf("non-conflict error must propagate, got %v", err)
 	}
 }
@@ -273,7 +273,7 @@ func TestStatusReconciler_StalePolicyGetConflictRetriesPromptly(t *testing.T) {
 	serveStale = true
 
 	r := &RotationPolicyStatusReconciler{Client: cl}
-	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	res, err := r.Reconcile(ctx, ctrl.Request{Name: "api"})
 	if err != nil {
 		t.Fatalf("stale-cache conflict must not error: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestStatusReconciler_StalePoolListWriteIsRechecked(t *testing.T) {
 		Build()
 
 	r := &RotationPolicyStatusReconciler{Client: cl}
-	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	res, err := r.Reconcile(ctx, ctrl.Request{Name: "api"})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestStatusReconciler_StalePoolListWriteIsRechecked(t *testing.T) {
 
 	// The requeued reconcile sees the caught-up pool cache and corrects the status.
 	poolsStale = false
-	res2, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	res2, err := r.Reconcile(ctx, ctrl.Request{Name: "api"})
 	if err != nil {
 		t.Fatalf("Reconcile (recheck): %v", err)
 	}
@@ -358,7 +358,7 @@ func TestStatusReconciler_StalePoolListWriteIsRechecked(t *testing.T) {
 	// guard suppresses the write and returns an empty Result — the chain ends and
 	// the requeue cannot hot-loop.
 	rv := got.ResourceVersion
-	res3, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "api"}})
+	res3, err := r.Reconcile(ctx, ctrl.Request{Name: "api"})
 	if err != nil {
 		t.Fatalf("Reconcile (stable): %v", err)
 	}
