@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
@@ -28,7 +27,7 @@ func drain(rec *events.FakeRecorder) []string {
 }
 
 func warnPool() *karpv1.NodePool {
-	return &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: "np"}}
+	return &karpv1.NodePool{Name: "np"}
 }
 
 func TestEmitFindingsWarnOnlyAndDedup(t *testing.T) {
@@ -246,7 +245,7 @@ func TestNilRecorderIsSafe(t *testing.T) {
 func shortLeadClaim(name string, expire time.Duration) karpv1.NodeClaim {
 	e := expire
 	return karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       karpv1.NodeClaimSpec{ExpireAfter: karpv1.NillableDuration{Duration: &e}},
+		Name: name,
+		Spec: karpv1.NodeClaimSpec{ExpireAfter: karpv1.NillableDuration{Duration: &e}},
 	}
 }

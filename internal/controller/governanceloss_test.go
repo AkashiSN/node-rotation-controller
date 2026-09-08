@@ -8,7 +8,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,11 +23,10 @@ import (
 // labels, with an in-flight rotation anchored on nc-old — the precondition for
 // the §5.4 governance-loss reap (issue #141).
 func anchoredPool(labels map[string]string) *karpv1.NodePool {
-	return &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{
+	return &karpv1.NodePool{
 		Name:        testPoolName,
 		Labels:      labels,
-		Annotations: map[string]string{annotations.ActiveRotation: "nc-old"},
-	}}
+		Annotations: map[string]string{annotations.ActiveRotation: "nc-old"}}
 }
 
 // assertReaped checks the controller drove the in-flight rotation to a clean

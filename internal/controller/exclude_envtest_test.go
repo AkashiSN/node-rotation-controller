@@ -6,7 +6,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
@@ -22,11 +21,10 @@ func bindNode(t *testing.T, cl client.Client, poolName, claimName string, anns m
 	t.Helper()
 	ctx := context.Background()
 	nodeName := "node-" + claimName
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+	node := &corev1.Node{
 		Name:        nodeName,
 		Labels:      map[string]string{karpv1.NodePoolLabelKey: poolName},
-		Annotations: anns,
-	}}
+		Annotations: anns}
 	if err := cl.Create(ctx, node); err != nil {
 		t.Fatalf("create node: %v", err)
 	}
@@ -47,13 +45,13 @@ func provisionSurgePrereqs(t *testing.T, cl client.Client, r *controller.Rotatio
 	t.Helper()
 	ctx := context.Background()
 	if err := cl.Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: r.Namespace},
+		Name: r.Namespace,
 	}); err != nil {
 		t.Fatalf("create controller namespace: %v", err)
 	}
 	preempt := corev1.PreemptNever
 	if err := cl.Create(ctx, &schedulingv1.PriorityClass{
-		ObjectMeta:       metav1.ObjectMeta{Name: r.PriorityClassName},
+		Name:             r.PriorityClassName,
 		Value:            -1,
 		PreemptionPolicy: &preempt,
 	}); err != nil {

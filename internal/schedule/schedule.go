@@ -186,8 +186,7 @@ func resolveProvisioningEstimate(readyTimeout time.Duration, cfg *time.Duration)
 // errors: feasibility problems are Findings (Fatal/Warn). The caller decides
 // what a Fatal means for a given NodePool.
 func Derive(in Inputs) Result {
-	r := Result{}
-	r.TRot = in.ReadyTimeout + in.TGP + Buffer
+	r := Result{TRot: in.ReadyTimeout + in.TGP + Buffer}
 
 	// The forecast side, resolved before the P guard so TRotEst/DrainEstimate/
 	// ProvisioningEstimate are always populated for logs and messages. Their only

@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	"github.com/AkashiSN/node-rotation-controller/internal/annotations"
@@ -12,21 +11,21 @@ import (
 
 func testNode(anns map[string]string, unschedulable bool) *corev1.Node {
 	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "node-1", Annotations: anns},
-		Spec:       corev1.NodeSpec{Unschedulable: unschedulable},
+		Name: "node-1", Annotations: anns,
+		Spec: corev1.NodeSpec{Unschedulable: unschedulable},
 	}
 }
 
 func testNodeNamed(name string, anns map[string]string) corev1.Node {
 	return corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Annotations: anns},
+		Name: name, Annotations: anns,
 	}
 }
 
 func nodeClaimOn(name, nodeName string) karpv1.NodeClaim {
 	return karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Status:     karpv1.NodeClaimStatus{NodeName: nodeName},
+		Name:   name,
+		Status: karpv1.NodeClaimStatus{NodeName: nodeName},
 	}
 }
 

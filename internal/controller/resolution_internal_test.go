@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -17,7 +15,7 @@ import (
 // poolWithLabels builds a NodePool carrying the given labels, for the resolution
 // tests that need a pool matched by more than one selector.
 func poolWithLabels(name string, labels map[string]string) *karpv1.NodePool {
-	return &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+	return &karpv1.NodePool{Name: name, Labels: labels}
 }
 
 // rotPolicy builds a RotationPolicy with the given name/selector and a well-formed
@@ -29,7 +27,7 @@ func rotPolicy(name string, sel map[string]string) *noderotationv1alpha1.Rotatio
 func reconcilePool(t *testing.T, r *RotationReconciler, name string) {
 	t.Helper()
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: name},
+		Name: name,
 	}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}

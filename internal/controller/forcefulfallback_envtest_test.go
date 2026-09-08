@@ -66,7 +66,7 @@ func ffStartEnv(t *testing.T) client.Client {
 // accept enabled:true (the #156 D2 reservation CEL rule is removed in D4).
 func ffPolicy(name, tier string, enabled bool) *noderotationv1alpha1.RotationPolicy {
 	return &noderotationv1alpha1.RotationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: noderotationv1alpha1.RotationPolicySpec{
 			NodePoolSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"tier": tier}},
 			MaintenanceWindows: []noderotationv1alpha1.MaintenanceWindow{{
@@ -84,7 +84,7 @@ func ffPolicy(name, tier string, enabled bool) *noderotationv1alpha1.RotationPol
 // the derived drainBound (tGP + buffer) is deterministic.
 func ffNodePool(name, tier string) *karpv1.NodePool {
 	return &karpv1.NodePool{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"tier": tier}},
+		Name: name, Labels: map[string]string{"tier": tier},
 		Spec: karpv1.NodePoolSpec{
 			Template: karpv1.NodeClaimTemplate{Spec: karpv1.NodeClaimTemplateSpec{
 				NodeClassRef:           &karpv1.NodeClassReference{Group: "eks.amazonaws.com", Kind: "NodeClass", Name: "default"},
@@ -104,11 +104,9 @@ func ffNodePool(name, tier string) *karpv1.NodePool {
 func ffNodeClaim(name, pool string) *karpv1.NodeClaim {
 	e := ffExpireAfter
 	return &karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       name,
-			Labels:     map[string]string{karpv1.NodePoolLabelKey: pool},
-			Finalizers: []string{"karpenter.sh/termination"},
-		},
+		Name:       name,
+		Labels:     map[string]string{karpv1.NodePoolLabelKey: pool},
+		Finalizers: []string{"karpenter.sh/termination"},
 		Spec: karpv1.NodeClaimSpec{
 			NodeClassRef: &karpv1.NodeClassReference{Group: "eks.amazonaws.com", Kind: "NodeClass", Name: "default"},
 			Requirements: []karpv1.NodeSelectorRequirementWithMinValues{},
@@ -173,7 +171,7 @@ func ffReconcile(t *testing.T, r *controller.RotationReconciler, poolName string
 	t.Helper()
 	ctx := context.Background()
 	for i := range 3 {
-		if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: poolName}}); err != nil {
+		if _, err := r.Reconcile(ctx, reconcile.Request{Name: poolName}); err != nil {
 			t.Fatalf("reconcile pass %d: %v", i, err)
 		}
 	}

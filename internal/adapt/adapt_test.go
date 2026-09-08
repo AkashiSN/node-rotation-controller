@@ -21,12 +21,10 @@ func TestClaimMapsEveryFieldSelectionReads(t *testing.T) {
 	g := 30 * time.Minute
 	del := metav1.NewTime(now)
 	in := karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "nc-1",
-			CreationTimestamp: metav1.NewTime(now.Add(-100 * time.Hour)),
-			DeletionTimestamp: &del,
-			Annotations:       map[string]string{"noderotation.io/state": "failed"},
-		},
+		Name:              "nc-1",
+		CreationTimestamp: metav1.NewTime(now.Add(-100 * time.Hour)),
+		DeletionTimestamp: &del,
+		Annotations:       map[string]string{"noderotation.io/state": "failed"},
 		Spec: karpv1.NodeClaimSpec{
 			ExpireAfter:            karpv1.NillableDuration{Duration: &e},
 			TerminationGracePeriod: &metav1.Duration{Duration: g},
@@ -85,8 +83,8 @@ func TestClaimNilsAreCarried(t *testing.T) {
 // point into the caller's slice so a pick can be patched without a re-Get.
 func TestClaimsIndexAliasesTheSameSlice(t *testing.T) {
 	claims := []karpv1.NodeClaim{
-		{ObjectMeta: metav1.ObjectMeta{Name: "a"}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "b"}},
+		{Name: "a"},
+		{Name: "b"},
 	}
 	views, byName := adapt.Claims(claims)
 

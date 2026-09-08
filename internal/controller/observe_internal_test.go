@@ -7,7 +7,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
@@ -301,7 +300,7 @@ func TestReconcileForgetsDeletedPool(t *testing.T) {
 	r := newReconciler(t, testNow, rec) // no objects → Get returns NotFound
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: testPoolName},
+		Name: testPoolName,
 	}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}

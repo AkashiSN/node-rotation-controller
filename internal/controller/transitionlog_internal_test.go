@@ -56,7 +56,7 @@ func pendingRotation(startedAt time.Time) (*corev1.Node, *karpv1.NodeClaim, *kar
 // workloadPod is a plain reschedulable Pod on nodeName — sized into the placeholder.
 func workloadPod(name, nodeName, cpu, mem string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Name: name, Namespace: "default",
 		Spec: corev1.PodSpec{NodeName: nodeName, Containers: []corev1.Container{{
 			Name: "c",
 			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{

@@ -27,7 +27,7 @@ import (
 // RotationPolicy), and reconciles.
 func smokeRotationPolicy() *noderotationv1alpha1.RotationPolicy {
 	return &noderotationv1alpha1.RotationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "smoke"},
+		Name: "smoke",
 		Spec: noderotationv1alpha1.RotationPolicySpec{
 			NodePoolSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"workload": "api"}},
 			MaintenanceWindows: []noderotationv1alpha1.MaintenanceWindow{{
@@ -129,10 +129,8 @@ func TestManagerReconcilesNodePool(t *testing.T) {
 	}
 
 	np := &karpv1.NodePool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   "np-smoke",
-			Labels: map[string]string{"workload": "api"},
-		},
+		Name:   "np-smoke",
+		Labels: map[string]string{"workload": "api"},
 		Spec: karpv1.NodePoolSpec{
 			Template: karpv1.NodeClaimTemplate{
 				Spec: karpv1.NodeClaimTemplateSpec{

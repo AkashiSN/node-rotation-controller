@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -18,24 +17,22 @@ import (
 // nothing for an unlabeled one (issue #14 — shared by the NodeClaim and Node
 // watches).
 func TestNodePoolFromLabel(t *testing.T) {
-	labeled := &karpv1.NodeClaim{ObjectMeta: metav1.ObjectMeta{
+	labeled := &karpv1.NodeClaim{
 		Name:   "nc-1",
-		Labels: map[string]string{karpv1.NodePoolLabelKey: testPoolName},
-	}}
+		Labels: map[string]string{karpv1.NodePoolLabelKey: testPoolName}}
 	reqs := nodePoolFromLabel(context.Background(), labeled)
 	if len(reqs) != 1 || reqs[0].Name != testPoolName {
 		t.Fatalf("labeled object: got %v, want one request for %q", reqs, testPoolName)
 	}
 
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+	node := &corev1.Node{
 		Name:   surgeNode,
-		Labels: map[string]string{karpv1.NodePoolLabelKey: testPoolName},
-	}}
+		Labels: map[string]string{karpv1.NodePoolLabelKey: testPoolName}}
 	if reqs := nodePoolFromLabel(context.Background(), node); len(reqs) != 1 || reqs[0].Name != testPoolName {
 		t.Fatalf("labeled node: got %v, want one request for %q", reqs, testPoolName)
 	}
 
-	unlabeled := &karpv1.NodeClaim{ObjectMeta: metav1.ObjectMeta{Name: "nc-manual"}}
+	unlabeled := &karpv1.NodeClaim{Name: "nc-manual"}
 	if reqs := nodePoolFromLabel(context.Background(), unlabeled); reqs != nil {
 		t.Fatalf("unlabeled object: got %v, want nil", reqs)
 	}
@@ -46,11 +43,10 @@ func TestNodePoolFromLabel(t *testing.T) {
 func TestPlaceholderToNodePool(t *testing.T) {
 	r := &RotationReconciler{Namespace: testNS}
 	ph := func(ns string, labels map[string]string) *corev1.Pod {
-		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		return &corev1.Pod{
 			Name:      surge.PlaceholderName("nc-old"),
 			Namespace: ns,
-			Labels:    labels,
-		}}
+			Labels:    labels}
 	}
 	full := map[string]string{
 		annotations.SurgeFor:    "nc-old",

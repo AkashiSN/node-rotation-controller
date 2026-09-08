@@ -2,7 +2,7 @@
 # go.mod, by digest for reproducibility. When bumping the go.mod Go version,
 # update this tag and re-resolve the digest:
 #   docker buildx imagetools inspect golang:<ver>-bookworm --format '{{.Manifest.Digest}}'
-FROM golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS builder
+FROM golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-$(go env GOOS)} GOARCH=${TARGETARCH:-$(go env
 # `static` alias tracks whatever the current distroless base is), pinned by
 # digest for reproducibility. Re-resolve when bumping:
 #   docker buildx imagetools inspect gcr.io/distroless/static-debian12:nonroot --format '{{.Manifest.Digest}}'
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532

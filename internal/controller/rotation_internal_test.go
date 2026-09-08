@@ -126,7 +126,7 @@ func mustSchedule(t *testing.T) *window.Schedule {
 // the resolution-path tests that drive the public Reconcile entry point.
 func testRotationPolicy(name string, sel map[string]string) *noderotationv1alpha1.RotationPolicy {
 	return &noderotationv1alpha1.RotationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: noderotationv1alpha1.RotationPolicySpec{
 			NodePoolSelector: &metav1.LabelSelector{MatchLabels: sel},
 			MaintenanceWindows: []noderotationv1alpha1.MaintenanceWindow{{
@@ -142,11 +142,10 @@ func testRotationPolicy(name string, sel map[string]string) *noderotationv1alpha
 // --- object builders -------------------------------------------------------
 
 func testNodePool(anns map[string]string) *karpv1.NodePool {
-	return &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{
+	return &karpv1.NodePool{
 		Name:        testPoolName,
 		Labels:      map[string]string{"workload": "api"},
-		Annotations: anns,
-	}}
+		Annotations: anns}
 }
 
 // withTGP stamps a fixed terminationGracePeriod so the derived t_rot/drain bound
@@ -184,11 +183,9 @@ func ncAnn(kv ...string) ncOpt {
 func testClaim(name string, age time.Duration, opts ...ncOpt) *karpv1.NodeClaim {
 	d := 14 * 24 * time.Hour
 	c := &karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              name,
-			Labels:            map[string]string{karpv1.NodePoolLabelKey: testPoolName},
-			CreationTimestamp: metav1.NewTime(testNow.Add(-age)),
-		},
+		Name:              name,
+		Labels:            map[string]string{karpv1.NodePoolLabelKey: testPoolName},
+		CreationTimestamp: metav1.NewTime(testNow.Add(-age)),
 	}
 	c.Spec.ExpireAfter = karpv1.NillableDuration{Duration: &d}
 	ncReady()(c)
@@ -204,19 +201,17 @@ func testK8sNode(name string, ready bool, anns map[string]string, unschedulable 
 		cond = corev1.ConditionTrue
 	}
 	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-			Labels: map[string]string{
-				karpv1.NodePoolLabelKey:      testPoolName,
-				corev1.LabelHostname:         name,
-				corev1.LabelTopologyZone:     "us-east-1a",
-				corev1.LabelArchStable:       "arm64",
-				"karpenter.sh/capacity-type": "spot",
-			},
-			Annotations: anns,
+		Name: name,
+		Labels: map[string]string{
+			karpv1.NodePoolLabelKey:      testPoolName,
+			corev1.LabelHostname:         name,
+			corev1.LabelTopologyZone:     "us-east-1a",
+			corev1.LabelArchStable:       "arm64",
+			"karpenter.sh/capacity-type": "spot",
 		},
-		Spec:   corev1.NodeSpec{Unschedulable: unschedulable},
-		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: cond}}},
+		Annotations: anns,
+		Spec:        corev1.NodeSpec{Unschedulable: unschedulable},
+		Status:      corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: cond}}},
 	}
 }
 
@@ -224,13 +219,11 @@ func testK8sNode(name string, ready bool, anns map[string]string, unschedulable 
 // single rotation under test throughout this file.
 func placeholderPod(nodeName string, phase corev1.PodPhase) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      surge.PlaceholderName("nc-old"),
-			Namespace: testNS,
-			Labels:    map[string]string{annotations.SurgeFor: "nc-old"},
-		},
-		Spec:   corev1.PodSpec{NodeName: nodeName},
-		Status: corev1.PodStatus{Phase: phase},
+		Name:      surge.PlaceholderName("nc-old"),
+		Namespace: testNS,
+		Labels:    map[string]string{annotations.SurgeFor: "nc-old"},
+		Spec:      corev1.PodSpec{NodeName: nodeName},
+		Status:    corev1.PodStatus{Phase: phase},
 	}
 }
 
@@ -357,7 +350,7 @@ func TestNoStartWhenHeadroomInsufficient(t *testing.T) {
 	pool := withTGP(testNodePool(nil))
 	pool.Spec.Limits = karpv1.Limits{corev1.ResourceCPU: resource.MustParse("1")}
 	bigPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Name: "app", Namespace: "default",
 		Spec: corev1.PodSpec{
 			NodeName: candNode,
 			Containers: []corev1.Container{{
@@ -1084,9 +1077,9 @@ func TestReadyTimeoutDoesNotReapAbsorbHost(t *testing.T) {
 	surgeHost := testK8sNode(surgeNode, true, nil, false)
 	// an unrelated, reschedulable Pod bin-packed onto the surge node.
 	realPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "tenant-app", Namespace: "default"},
-		Spec:       corev1.PodSpec{NodeName: surgeNode},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		Name: "tenant-app", Namespace: "default",
+		Spec:   corev1.PodSpec{NodeName: surgeNode},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	ph := placeholderPod(surgeNode, corev1.PodRunning)
 	r := newReconciler(t, testNow, nil, pool, cand, surgeClaim, oldNode, surgeHost, realPod, ph)
@@ -1119,9 +1112,9 @@ func TestReadyTimeoutDoesNotReapSameNamedPodInOtherNamespace(t *testing.T) {
 	// a real workload Pod whose name collides with the placeholder but lives in a
 	// different namespace than the controller's.
 	collidingPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: surge.PlaceholderName("nc-old"), Namespace: "default"},
-		Spec:       corev1.PodSpec{NodeName: surgeNode},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		Name: surge.PlaceholderName("nc-old"), Namespace: "default",
+		Spec:   corev1.PodSpec{NodeName: surgeNode},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	ph := placeholderPod(surgeNode, corev1.PodRunning)
 	r := newReconciler(t, testNow, nil, pool, cand, surgeClaim, oldNode, surgeHost, collidingPod, ph)
@@ -1173,9 +1166,9 @@ func TestReadyTimeoutInducedClaimFallbackReaps(t *testing.T) {
 	scaleupNode := "node-scaleup"
 	scaleup := testClaim("nc-scaleup", 0, ncCreated(startedAt.Add(2*time.Minute)), ncNode(scaleupNode))
 	realPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "tenant-app", Namespace: "default"},
-		Spec:       corev1.PodSpec{NodeName: scaleupNode},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		Name: "tenant-app", Namespace: "default",
+		Spec:   corev1.PodSpec{NodeName: scaleupNode},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	pool := withTGP(testNodePool(map[string]string{annotations.ActiveRotation: "nc-old"}))
 	oldNode := testK8sNode(candNode, true, map[string]string{karpv1.DoNotDisruptAnnotationKey: "true", annotations.DoNotDisruptOwned: "true", annotations.SurgeFor: "nc-old", annotations.Cordoned: "true"}, true)

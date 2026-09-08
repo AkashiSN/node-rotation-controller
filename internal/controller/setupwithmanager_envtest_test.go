@@ -227,11 +227,9 @@ func TestSetupWithManagerWatches(t *testing.T) {
 	// ── Positive: labeled NodeClaim mapped to its NodePool ──────────────────
 	t.Run("labeled NodeClaim enqueues its NodePool", func(t *testing.T) {
 		nc := &karpv1.NodeClaim{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:   "nc-watch",
-				Labels: map[string]string{karpv1.NodePoolLabelKey: watchPoolName},
-			},
-			Spec: nodeClaimSpec(),
+			Name:   "nc-watch",
+			Labels: map[string]string{karpv1.NodePoolLabelKey: watchPoolName},
+			Spec:   nodeClaimSpec(),
 		}
 		base := rec.waitQuiescent(t, watchPoolName)
 		mustCreate(t, ctx, api, nc)
@@ -314,8 +312,8 @@ func TestSetupWithManagerWatches(t *testing.T) {
 
 	t.Run("unlabeled NodeClaim enqueues nothing", func(t *testing.T) {
 		nc := &karpv1.NodeClaim{
-			ObjectMeta: metav1.ObjectMeta{Name: "nc-manual"},
-			Spec:       nodeClaimSpec(),
+			Name: "nc-manual",
+			Spec: nodeClaimSpec(),
 		}
 		base := rec.waitQuiescent(t, offPoolName)
 		mustCreate(t, ctx, api, nc)
@@ -371,7 +369,7 @@ func mustCreate(t *testing.T, ctx context.Context, c client.Client, obj client.O
 }
 
 func namespace(name string) *corev1.Namespace {
-	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	return &corev1.Namespace{Name: name}
 }
 
 func nodeClaimSpec() karpv1.NodeClaimSpec {
@@ -393,7 +391,7 @@ func inScopeNodePool(name string) *karpv1.NodePool {
 // all-week window, used to prove the RotationPolicy watch enqueues its pools.
 func watchRotationPolicy() *noderotationv1alpha1.RotationPolicy {
 	return &noderotationv1alpha1.RotationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "watch-policy"},
+		Name: "watch-policy",
 		Spec: noderotationv1alpha1.RotationPolicySpec{
 			NodePoolSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"workload": "api"}},
 			MaintenanceWindows: []noderotationv1alpha1.MaintenanceWindow{{
@@ -412,7 +410,7 @@ func offScopeNodePool(name string) *karpv1.NodePool {
 
 func nodePool(name string, labels map[string]string) *karpv1.NodePool {
 	return &karpv1.NodePool{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+		Name: name, Labels: labels,
 		Spec: karpv1.NodePoolSpec{
 			Template: karpv1.NodeClaimTemplate{
 				Spec: karpv1.NodeClaimTemplateSpec{
@@ -430,11 +428,9 @@ func nodePool(name string, labels map[string]string) *karpv1.NodePool {
 
 func placeholderPod(claim, ns string, labels map[string]string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      surge.PlaceholderName(claim),
-			Namespace: ns,
-			Labels:    labels,
-		},
+		Name:      surge.PlaceholderName(claim),
+		Namespace: ns,
+		Labels:    labels,
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{
 				Name:  "pause",
@@ -449,10 +445,8 @@ func placeholderPod(claim, ns string, labels map[string]string) *corev1.Pod {
 
 func labeledNode(name, pool string, ready corev1.ConditionStatus) *corev1.Node {
 	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: map[string]string{karpv1.NodePoolLabelKey: pool},
-		},
+		Name:   name,
+		Labels: map[string]string{karpv1.NodePoolLabelKey: pool},
 		Status: corev1.NodeStatus{
 			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: ready}},
 		},

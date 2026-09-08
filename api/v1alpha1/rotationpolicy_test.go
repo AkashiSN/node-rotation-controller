@@ -36,7 +36,7 @@ func TestRotationPolicyDeepCopyRoundTrip(t *testing.T) {
 	k := int32(2)
 	mu := int32(1)
 	orig := &RotationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "api"},
+		Name: "api",
 		Spec: RotationPolicySpec{
 			NodePoolSelector:   &metav1.LabelSelector{MatchLabels: map[string]string{"workload": "api"}},
 			AgeThreshold:       "auto",

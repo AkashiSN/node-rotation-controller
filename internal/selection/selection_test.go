@@ -87,10 +87,8 @@ func ann(kv ...string) claimOpt {
 // 14d, no state annotation — i.e. an eligible fresh candidate under baseInputs.
 func claim(name string, age time.Duration, opts ...claimOpt) karpv1.NodeClaim {
 	c := karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              name,
-			CreationTimestamp: metav1.NewTime(now.Add(-age)),
-		},
+		Name:              name,
+		CreationTimestamp: metav1.NewTime(now.Add(-age)),
 	}
 	expireAfter(14 * day)(&c)
 	ready(true)(&c)

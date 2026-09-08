@@ -10,14 +10,14 @@ import (
 )
 
 func pool(labels map[string]string) *karpv1.NodePool {
-	return &karpv1.NodePool{ObjectMeta: metav1.ObjectMeta{Name: "p", Labels: labels}}
+	return &karpv1.NodePool{Name: "p", Labels: labels}
 }
 
 // policyWith builds a minimal structurally-valid RotationPolicy with the given
 // name and selector. The window is well-formed so ToPolicy succeeds.
 func policyWith(name string, sel *metav1.LabelSelector) nrv1.RotationPolicy {
 	return nrv1.RotationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: nrv1.RotationPolicySpec{
 			NodePoolSelector: sel,
 			MaintenanceWindows: []nrv1.MaintenanceWindow{{
