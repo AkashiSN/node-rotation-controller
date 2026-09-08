@@ -9,18 +9,23 @@ import "time"
 //
 // The surface is split by emission shape:
 //   - Completion counters (Success/Expired/Failure) fire once at a decision
-//     point, after the annotation write that makes the decision durable.
-//     completeOrAbort additionally OWNS its emission: the write releasing the
-//     NodePool anchor is conditional on the same fresh read that decides the
+//     point, after the annotation write that makes the decision durable. The
+//     pass whose write LANDED is the one that announces, so nothing
+//     re-announces a transition it did not make (spec §5.2, claim-then-announce).
+//     completeOrAbort's Success/Expired ride the conditional write that releases
+//     the NodePool anchor, decided from the same fresh read that decides the
 //     outcome, so a later pass reading a stale cached NodePool re-runs the
-//     cleanup and counts nothing (issue #304). The claim-scoped emissions
-//     (failPending's Failure, abortPendingExpiry's and advanceFailed's Expired)
-//     have no such ownership yet: their NodeClaim writes ARE conflict-checked,
-//     but they rewrite the terminal state instead of vetoing when the durable
-//     state already names that transition, so a stale re-entry re-emits — and in
-//     failPending's case increments retry-count a second time. Emission is not
-//     transactional with the write either way — spec §5.2 documents the crash
-//     skew the alert rules (built on increase(...)) tolerate.
+//     cleanup and counts nothing (issue #304). Both entries into expired ride
+//     markExpired, which accepts only the dispatching handler's own pre-state
+//     and reports expiryAlready rather than rewriting a claim already terminal,
+//     so a stale re-entry announces nothing. failPending's Failure is gated on
+//     its own write landing; what keeps a stale re-entry from reaching it at all
+//     is advancePending's guarded entry, whose conditional pending re-assertion
+//     returns before the readyTimeout branch once the durable state has moved
+//     past pending — so neither the counter nor a second retry-count increment
+//     can repeat (issue #307). Emission is still not transactional with the
+//     write — spec §5.2 documents the crash skew the alert rules (built on
+//     increase(...)) tolerate.
 //   - ObservePool sets the per-NodePool gauges that reflect current state; they
 //     are recomputed and re-set on every reconcile so they reset correctly (a
 //     resolved drain stops alerting, a successful pool reports zero retries).
