@@ -132,11 +132,10 @@ reconcile_nodepool(np):
   #        states what happened to the window, not why the controller did not
   #        act. Reconcile's own governance gates (policy conflict, no governing
   #        policy) already returned before reconcile_nodepool was ever called.
-  #        Every write below is conditional: inside the write loop the verdict is
-  #        re-run against the AUTHORITATIVE annotations (same census, same now)
-  #        and must still yield the same action, and the stamp must still be the
-  #        one that was evaluated. A verdict the fresh object no longer justifies
-  #        is not written — in either direction.
+  #        Claim-then-announce (§5.2), with the verdict itself as the condition:
+  #        inside the write loop it is re-run against the AUTHORITATIVE
+  #        annotations (same census, same now) and must still yield the same
+  #        action on the same stamp, in either direction.
   match window_edge(np, census(np), in_window(now)):
     case stamp:    annotate(np, window-opened-at=now)        # only-if still `stamp`
     case defer:    pass                                      # a rotation may still succeed
@@ -184,11 +183,10 @@ advance(np, name):
       delete(placeholder(name))
       for node in nodes_with(surge-for=name):
           unfreeze(node)
-      # ONE conflict-checked write, only-if active-rotation == name. It reads the
-      # outcome from the same fresh copy it is validated against, stamps
-      # last-rotation-at when that copy says draining, clears the anchor, and
-      # reports whether THIS pass released it. A pass holding a stale cached np
-      # loses the race and emits nothing (§5.2).
+      # ONE conflict-checked write, only-if active-rotation == name (§5.2). It
+      # reads the outcome from the same fresh copy it is validated against,
+      # stamps last-rotation-at when that copy says draining, clears the anchor,
+      # and reports whether THIS pass released it.
       won, rotated := release_anchor(np, name)
       if not won:                            # an earlier pass already completed it
           return Requeue(1m)
@@ -202,24 +200,22 @@ advance(np, name):
   case (none) | pending:
       if cand.deletionTimestamp != nil:      # force-expiry caught
           # ONE conflict-checked write, only-if the claim still holds THIS
-          # handler's pre-state, reporting what it did. It runs BEFORE the
-          # cleanup: a pass that does not own the transition must not unfreeze
-          # the surge node a live drain still depends on (§5.2).
+          # handler's pre-state (§5.2). It runs BEFORE the cleanup: a pass that
+          # does not own the transition must not unfreeze the surge node a live
+          # drain still depends on.
           out := mark_expired(cand, from=[none, pending],
                               clear=[started-at, surge-claim])
           if out in {gone, raced}:           # nothing written; this pass owns nothing
               return Requeue(30s)            # gone ⇒ release_anchor counts the abort
-          # announce BEFORE the fallible cleanup: a cleanup error sends the next
-          # reconcile to the `expired` handler, which repairs cleanup and never
-          # emits, so an emission behind it would be lost, not deferred (§5.2)
+          # announce BEFORE the fallible cleanup (§5.2)
           if out == claimed: emit_metrics(expired); alert
           delete(placeholder(name))
           for node in nodes_with(surge-for=name): unfreeze(node)
           clear(np, anchor)
           return Requeue(1m)
-      # only from the states advance() dispatches here on: a `pending` view of a
-      # claim whose durable state has moved past it must not undo the rollback —
-      # re-stamping started-at would restart the readyTimeout deadline (§5.2)
+      # only from the states advance() dispatches here on (§5.2): a `pending`
+      # view of a claim whose durable state has moved past it must not undo the
+      # rollback — re-stamping started-at would restart the readyTimeout deadline
       wrote := annotate_if(cand, from=[none, pending],
                            state=pending, once(started-at=now))
       if not wrote: return Requeue(30s)   # this pass owns nothing
@@ -279,9 +275,9 @@ advance(np, name):
          and no fatal feasibility finding                          # step 1b, re-asserted: this path sits above it
          and elapsed(cand.failed-at) >= effective_backoff(cand)   # escalated, clamped to the occurrence (§3.2)
          and surge_headroom(np, cand):
-          # only from failed. The same guard bounds the re-entry below: advance()
-          # re-reads through the cache, and a read still lagging this write would
-          # dispatch straight back here with every gate open (§5.2)
+          # only from failed (§5.2). The same guard bounds the re-entry below:
+          # advance() re-reads through the cache, and a read still lagging this
+          # write would dispatch straight back here with every gate open
           wrote := annotate_if(cand, from=[failed], state=pending)
           if not wrote: return Requeue(30s)
           return advance(np, name)
@@ -298,24 +294,33 @@ advance(np, name):
 
 :::
 
+### Claim-then-announce
+
+Every write a cache-lagged pass can reach is **conditional**: it accepts only the pre-state its handler is dispatched on, and its outcome is produced by the write loop itself and reset per attempt — so a first attempt that conflicts and a retry that finds the object finalized away report *gone*, not success. The pass whose write lands **owns** the transition, and only it announces: the metric, the log line and the Event follow the write, never the attempt.
+
+Three properties follow, and hold at every site that uses this ordering:
+
+- **At-most-once.** A controller that dies between the write and the emission drops the signal rather than inventing one, and nothing re-announces a transition it did not make.
+- **The emission sits immediately after the write, ahead of the cleanup.** The cleanup is fallible, and an error there hands the next reconcile to a handler that repairs it and deliberately never emits — so an emission placed behind the cleanup would be dropped by an ordinary transient API error rather than retried.
+- **A pass that owns nothing does nothing.** It writes nothing at all, touches none of the rotation's runtime objects, and leaves the transition to the handler that owns it — beyond the idempotent cleanup, where that is its job.
+
+The §5.3 startup sweep and the §5.4 governance-loss reap use the same ordering, each conditioned on what selected the object rather than on a handler's pre-state.
+
 ### Idempotent recovery
 
 Each state handler **re-asserts** its phase's desired state rather than performing one-shot actions:
 - `pending` re-asserts freeze, cordon, placeholder existence on every pass
 - `draining` re-issues idempotent `delete` if `deletionTimestamp` is missing (crash between state write and delete)
-- completion re-runs its cleanup but **claims the rotation with a conditional write**: the anchor's release and the success/expired outcome are both decided from the fresh read that write is validated against, so a pass that arrives on a cached NodePool whose anchor was already released does the idempotent cleanup and emits nothing
-- **the four writes a cache-lagged dispatch can reach claim their transition**, accepting only the states their handler is dispatched on — the two entries into `expired`, `pending`'s entry assertion, and the `failed` → `pending` retry. A pass arriving on a cached claim already written terminal cleans up, releases the anchor and emits nothing; a pass whose claim has moved on to any other state writes nothing at all, touches none of the rotation's runtime objects, and leaves it to the handler that owns it
+- completion re-runs its cleanup but **claims the rotation with a conditional write**: the anchor's release and the success/expired outcome are both decided from the fresh read that write is validated against
+- **the four writes a cache-lagged dispatch can reach claim their transition** — the two entries into `expired`, `pending`'s entry assertion, and the `failed` → `pending` retry. A pass arriving on a cached claim already written terminal still cleans up and releases the anchor
 - the reconcile's remaining claim-state writes stay unconditional, and are safe structurally rather than by veto — though not all by the same structure. The two the `pending` handler makes (`pending` → `draining`, `pending` → `failed`) follow its own guarded entry. The forceful fallback is started directly from candidate selection, never through that handler, so what protects its `draining` write is the only-if-absent NodePool anchor it has just won. All three record work the owning pass performed, and all three move the claim forward. The §5.3 startup sweep's write sits outside this dispatch altogether; it is conditional too, but on the predicate that selected the claim rather than on a handler's pre-state
 - that guard is what stops a lagging `pending` view from undoing a rollback — restoring `pending`, re-stamping `started-at` and so restarting the `readyTimeout` deadline while `retry-count` keeps the value the escalation was based on — and what bounds the retry branch's re-entry into the dispatcher, whose own cached read can still lag the write it has just made
 
 ### Observability skews (accepted in v1)
 
 - **Mirror-to-delete gap:** a crash there followed by force-expiry records `success` (surge was reserved — practical outcome matches)
-- **Metric emission (completion):** emitted after the anchor-releasing write and only by the pass that performed it, so the counter, the histogram, the completion line and the Event fire once per released anchor. A crash between the write and the emission drops it (at-most-once)
-- **Metric emission (claim-scoped):** both transitions into `expired` — `abortPendingExpiry` and `advanceFailed`'s deletion branch — claim the transition with a conditional NodeClaim write that accepts only the dispatching handler's own pre-state, so `expired` is announced once by the pass that made it. That matches `advanceExpired`, which never re-announces a claim already terminal
-- **Announcement follows the write, never the attempt:** the outcome of a conditional claim write is produced by the write loop itself and reset per attempt, so a first attempt that conflicts and a retry that finds the claim finalized away report *gone*, not success. A claim that vanishes before a terminal write is left anchored and its outcome falls to completion (`expired`, no cooldown) — this covers the `failure` rollback too, which announces an attempt and stamps the failure pause only when the write that records it landed, and reports the retry count that write produced
-- **Metric emission (window close):** the lost-window counter and the `WindowMissed` Event follow the write that cleared the `window-opened-at` stamp, and only the pass whose write landed emits them — at most once per occurrence. A controller that stops between the clear and the emission drops that occurrence's report rather than inventing one; a stop between the counter and the Event can leave one without the other
-- **Emission sits immediately after the write, ahead of the cleanup:** the cleanup is fallible, and an error there hands the next reconcile to `advanceExpired`, which repairs it and deliberately never emits — so an emission placed behind the cleanup would be dropped by an ordinary transient API error rather than retried. The remaining loss window is the irreducible one the completion path already accepts: a controller that dies between the write and the emission (at-most-once)
+- **Where claim-then-announce applies.** Four emission sites, each with its own artifacts: **completion** (the anchor-releasing write — the counter, the histogram, the completion line and the Event fire once per released anchor); **both transitions into `expired`** (`abortPendingExpiry` and `advanceFailed`'s deletion branch, whose conditional write accepts only the dispatching handler's own pre-state — matching `advanceExpired`, which never re-announces a claim already terminal); the **`failure` rollback** (which announces an attempt and stamps the failure pause only when the write that records it landed, and reports the retry count that write produced); and the **window close** (the lost-window counter and the `WindowMissed` Event follow the write that cleared the `window-opened-at` stamp, at most once per occurrence — a stop between the counter and the Event can leave one without the other)
+- **A claim that vanishes before a terminal write** is left anchored, and its outcome falls to completion (`expired`, no cooldown)
 
 ## 5.3 State Model
 
@@ -428,8 +433,8 @@ Runs **once, gated before the first reconcile**. Cleans only markers that no anc
 Rules:
 - An anchored NodePool is **not stale** — step 1 resumes it normally
 - `failed`/`expired` claims keep their annotations (backoff re-entry / terminal marker)
-- A `pending`/`draining` claim with no anchor (impossible from any crash point) → **claim** `state=failed` from `pending`/`draining` (conditional) + alert, both only when that write lands. The sweep selects from a List — a cache read — and writes later; a claim finalized away in that window, or one whose durable state has already left those two, was repaired by nothing here, so nothing is written and nothing is announced. Unlike the reconcile paths there is no anchor to hand the outcome to: having none is what selected the claim
-- Every line the sweep logs names work it performed. The placeholder delete and the node reversal are no-ops when the object vanished in the same List-to-write window as above — at either end of it, the read or the write — or when its markers had already been reversed, and announce nothing then. The node leg re-applies its selection predicate to the read its write is validated against, exactly as the claim leg does, and against the anchor set captured when the sweep started: a node whose markers that read shows belong to an anchored rotation carries current markers, not orphaned ones, and is left to the rotation that owns them. What was reversed is decided from that same read, and the line names it — *unfroze* for a surge-frozen node, *uncordoned* for a cordon-only one, which was never frozen and belongs to no claim
+- A `pending`/`draining` claim with no anchor (impossible from any crash point) → **claim** `state=failed` from `pending`/`draining` (conditional) + alert. Claim-then-announce (§5.2) applies, conditioned on the predicate that selected the claim rather than on a handler's pre-state — unlike the reconcile paths there is no anchor to hand the outcome to: having none is what selected it. The sweep selects from a List and writes later, so a claim finalized away in that window, or one whose durable state has already left those two, is repaired by nothing here
+- The node leg re-applies its selection predicate the same way, to the read its write is validated against and to the anchor set captured when the sweep started: a node whose markers that read shows belong to an anchored rotation carries current markers, not orphaned ones, and is left to the rotation that owns them. What was reversed is decided from that same read, and the line names it — *unfroze* for a surge-frozen node, *uncordoned* for a cordon-only one, which was never frozen and belongs to no claim
 - An orphaned `active-rotation-state` without anchor → simply removed
 - Best-effort: per-item errors logged, never fatal
 
@@ -525,7 +530,7 @@ This prevents orphaned placeholders and stale `do-not-disrupt` markers from sile
 The order is normative, for two reasons:
 
 - **The rollback precedes the clear.** The anchor is the only thing that brings a later reconcile back to this cleanup — the reap returns immediately on a pool without one, and no policy governs the pool any longer. Clearing it ahead of a step that then fails would orphan the artifacts permanently.
-- **The conditional clear elects the announcer.** The reap is entered from the anchor its caller was handed, which is a cache read that still shows an anchor an earlier pass already cleared. The write that clears it is therefore what identifies the pass that reaped the rotation: at most one pass ever earns the announcement, and the pass that earns it describes work already done. This is the claim-then-announce ordering §5.2 uses for completion, and it inherits the same **at-most-once** semantics — one Event per reaped rotation in ordinary operation, and none at all when the controller dies between the write and the emission.
+- **The conditional clear elects the announcer.** The reap is entered from the anchor its caller was handed, which is a cache read that still shows an anchor an earlier pass already cleared. The write that clears it is therefore what identifies the pass that reaped the rotation — claim-then-announce (§5.2), with the same at-most-once semantics: one Event per reaped rotation, and none when the controller dies between the write and the emission.
 
 ### Policy change propagation
 

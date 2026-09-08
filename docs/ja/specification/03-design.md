@@ -116,7 +116,7 @@ ageThreshold (A) = E − (K·P + t_rot)
 | `E` | ノードごと: **`NodeClaim.spec.expireAfter`**（権威的）。テンプレートはバリデーション用の代表値のみ |
 | `tGP` | ノードごと: `NodeClaim.spec.terminationGracePeriod`; テンプレートは代表値 |
 | `P` | `maintenanceWindows` 和集合から導出（§3.1） |
-| `t_rot` | `readyTimeout + tGP + buffer`。`tGP` 未設定時 → 固定フォールバック（例: `1h`） |
+| `t_rot` | `readyTimeout + tGP + buffer`。`tGP` 未設定時 → 固定フォールバック `1h` |
 | `t_rot_est` | `provisioningEstimate + drainEstimate`。Layer-2 のみ、期限項なし |
 | `buffer` | 固定 `4·shortRequeue = 2m`。期限側のみ、`t_rot_est` には含まれない |
 
@@ -204,7 +204,7 @@ ageThreshold (A) = E − (K·P + t_rot)
 
 スタンドアロン `NodeClaim` は NodePool のアカウンティング、expiry、drift、disruption budgets の外にある **非所有** ノードを生成し、意図的な NodePool 分離を破壊する。
 
-### static capacity NodePool は対象外（issue #302）
+### static capacity NodePool は対象外
 
 `spec.replicas` を設定した NodePool（Karpenter の **static capacity**）はノード数を固定に保ち、Pod が pending になっても **provisioner の候補に入らない**。placeholder は構造的な不変条件として `karpenter.sh/nodepool` を候補自身のプールに固定するため、static プールでは他プールに吸収されることもプロビジョニングされることもなく、試行のたびに `readyTimeout` まで滞留してノードの保証チャンスを 1 回消費するだけになる。
 
@@ -212,7 +212,7 @@ ageThreshold (A) = E − (K·P + t_rot)
 
 Karpenter は既存 NodePool の static と dynamic の**相互移行を拒否する**（`spec.replicas` に対する CEL ルール）。したがって対処はフィールドをその場で編集することではなく、ワークロードを dynamic な NodePool へ移すか、この NodePool を RotationPolicy のセレクタから外すことである。
 
-replica 収束に置換を任せる surge-less なローテーション — surge のために `spec.replicas` を増やす案と、NodeClaim を削除して replica 収束に補充させる案 — は、先送りではなく**不採用**として決着した（issue #302）。Karpenter の static deprovisioning は空のノードを最初に選ぶため、`replicas` を増やして立てたノードは、続く scale-down で選ばれうる候補の 1 つではなく*最初の*候補になる。また、削除して補充させる案がドレイン全体の停止ではなく 1 ノード分の目減りで済むという並走性は、`limits.nodes` が `replicas` を上回っている間しか成立せず、これはモードの性質ではなくオペレーターの設定である。`surge.forcefulFallback` があることは、それでも出荷してよい前例にはならない。あれは締切をまるごと逃すプールのための opt-in かつウィンドウに限定された脱出路（ADR-0001）であって、プールの常態の機構ではない。どちらの制約も Karpenter の現在のノードアカウンティング（v1.14）に由来するので、それが変われば決定は再検討に値する — static プールのローテーションが望ましくないからではない。
+replica 収束に置換を任せる surge-less なローテーション — surge のために `spec.replicas` を増やす案と、NodeClaim を削除して replica 収束に補充させる案 — は、先送りではなく**不採用**として決着した。Karpenter の static deprovisioning は空のノードを最初に選ぶため、`replicas` を増やして立てたノードは、続く scale-down で選ばれうる候補の 1 つではなく*最初の*候補になる。また、削除して補充させる案がドレイン全体の停止ではなく 1 ノード分の目減りで済むという並走性は、`limits.nodes` が `replicas` を上回っている間しか成立せず、これはモードの性質ではなくオペレーターの設定である。`surge.forcefulFallback` があることは、それでも出荷してよい前例にはならない。あれは締切をまるごと逃すプールのための opt-in かつウィンドウに限定された脱出路（ADR-0001）であって、プールの常態の機構ではない。どちらの制約も Karpenter の現在のノードアカウンティング（v1.14）に由来するので、それが変われば決定は再検討に値する — static プールのローテーションが望ましくないからではない。
 
 ### placeholder Pod
 
@@ -239,7 +239,7 @@ Karpenter が再配置不要な Pod:
 
 - 候補の除外は **cordon** で強制（この preference ではない）
 - 期限近いノードの除外はベストエフォート
-- **required にしない理由（issue #96）:** Karpenter は required `kubernetes.io/hostname` affinity（制限付きラベル）を拒否
+- **required にしない理由:** Karpenter は required `kubernetes.io/hostname` affinity（制限付きラベル）を拒否
 - 除外リストは各（再）作成時に再計算; 陳腐化寿命 ≤ `readyTimeout`
 
 #### 2つのプロビジョニングパス
@@ -258,11 +258,11 @@ flowchart LR
 
 いずれの場合も、ホストが **surge ターゲット** になり、ローテーション中 freeze される。
 
-2 つのパスは所要時間も予約するものも大きく異なるため、コントローラーは**通ったパスを明示する**（issue #305）: `surge node ready` と `rotation complete` の各行、および `RotationCompleted` Event に `surgePath` ∈ {`provisioned`, `absorbed`} を出力し、両者の間は `surge-path` アンカーフィールドで引き継ぐ（§5.3）。
+2 つのパスは所要時間も予約するものも大きく異なるため、コントローラーは**通ったパスを明示する**: `surge node ready` と `rotation complete` の各行、および `RotationCompleted` Event に `surgePath` ∈ {`provisioned`, `absorbed`} を出力し、両者の間は `surge-path` アンカーフィールドで引き継ぐ（§5.3）。
 
 パスは 1 つの問い — surge ホストの `NodeClaim` はこの試行の中で生まれたか — で決まり、ロールバックの reap ガードと**同じ述語**で評価する。そのため両者が同じホストについて食い違うことはない。報告するのは観測できる事実であって因果ではない: この試行の期間中に Karpenter が別の pending Pod のために立てたノードが placeholder を吸収した場合も `provisioned` と読める。`NodeClaim` を解決できないホストは、**推測値ではなく値なし**とする。
 
-### placeholder のサイジングクランプ（issue #224）
+### placeholder のサイジングクランプ
 
 **問題:** Karpenter はインスタンスタイプごとに 1 つの `allocatable` 推定値をキャッシュするが、実際の allocatable は AZ ごとに高い可能性がある。キャッシュ推定値を超えて満たされたノードは、プロビジョニング不可能な placeholder を生成する。
 
@@ -284,7 +284,7 @@ requests = min(再スケジュール可能合計, limit)                    （�
 - **Band-exceeded**（shortfall > 計測バンド）: `SurgeClampBandExceeded` Warning Event; ローテーションは続行
 - **通常ケース**（limit 内に収まる）: サイレント
 
-### whole-node 予約（issue #326、ADR-0005）
+### whole-node 予約（ADR-0005）
 
 **問題:** placeholder はドレインの*合計*を 1 個の Pod として予約する。キャパシティ吸収パスでは、その集約的な穴は既に他の Pod が稼働しているホスト上に置かれ、そのホストが全員を受け入れられる場合にのみ個別の退避 Pod の配置と交換可能になる。穴の大きさは足りていても、個々の Pod 自身の `podAntiAffinity` や `hostPort` がそのホストを拒否することがあり、その場合 Karpenter はドレイン開始**後**にその Pod のためにプロビジョニングする — surge の前ではなく後ろで。
 
@@ -301,7 +301,7 @@ requests = max(requests, limit)   （limit は上記と同じ）
 
 ただし**ホストが空であることを証明はしない**。予約サイズは*候補ノード*の allocatable から決まるため、次の 3 つのごく普通の状況では占有されたホストでも吸収できる: **より大きいホスト**（placeholder が固定するのは NodePool と複製された requirements であってインスタンスタイプではないため、異種混在の NodePool では 8 CPU のホストが 2 CPU 使用中でも 4 CPU の候補 1 台分の空きがある — これは例外ではなく通常ケース）、**候補より DaemonSet オーバーヘッドが小さいホスト**、そして **cpu も memory も要求しない Pod**（アクセラレータや ephemeral storage だけを要求する Pod を含む。引き上げるのはこの 2 次元だけなので、それらの Pod は予約が測っている資源を一切占有せず、かつ退避 Pod の anti-affinity や `hostPort` に拒否される相手になりうる）。
 
-「他の Pod が居ないホスト」を表現する手段は無い: **required** な `kubernetes.io/hostname NotIn` term は Karpenter の provisioner にプロビジョニング自体を拒否させ（issue #96）、全 Pod にマッチする required な `podAntiAffinity` はどのノードにも居る DaemonSet まで排除してしまう。1 つ目の残余は `surge.matchNodeRequirements.required` に `node.kubernetes.io/instance-type` を追加して候補自身の型を固定すれば狭められるが、キャパシティが逼迫したときに Karpenter が型を代替する自由を失うという代償がある。
+「他の Pod が居ないホスト」を表現する手段は無い: **required** な `kubernetes.io/hostname NotIn` term は Karpenter の provisioner にプロビジョニング自体を拒否させ、全 Pod にマッチする required な `podAntiAffinity` はどのノードにも居る DaemonSet まで排除してしまう。1 つ目の残余は `surge.matchNodeRequirements.required` に `node.kubernetes.io/instance-type` を追加して候補自身の型を固定すれば狭められるが、キャパシティが逼迫したときに Karpenter が型を代替する自由を失うという代償がある。
 :::
 
 - **ドレインの宣言内容によらず bin-packing の 2 次元を引き上げる** — cpu のみのドレインが cpu だけを予約すると、memory だけを使う Pod で埋まったホストに吸収されうる。`pods` は決して要求しない（コンテナ要求ではない）。ephemeral storage とアクセラレータは、ドレインが要求している場合のみ引き上げる

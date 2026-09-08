@@ -132,11 +132,10 @@ reconcile_nodepool(np):
   #        ウィンドウに何が起きたかを述べるものであり、コントローラーが動かなかった
   #        理由ではない。Reconcile 自身のガバナンスゲート（ポリシー競合、ガバナンス
   #        ポリシーなし）は reconcile_nodepool が呼ばれる前にすでに return している。
-  #        以下の書き込みはすべて条件付き: 書き込みループの中で、権威的なアノテーション
-  #        に対して（同じ census・同じ now で）verdict を再計算し、同じ action が再び
-  #        得られること、かつ評価したスタンプが依然としてそのままであることを要求する。
-  #        新しく読んだオブジェクトがもはや正当化しない verdict は、どちら向きであっても
-  #        書き込まない。
+  #        claim-then-announce（§5.2）を verdict 自身を条件として適用する: 書き込み
+  #        ループの中で、権威的なアノテーションに対して（同じ census・同じ now で）
+  #        verdict を再計算し、同じスタンプに同じ action が再び得られることを、
+  #        どちら向きであっても要求する。
   match window_edge(np, census(np), in_window(now)):
     case stamp:    annotate(np, window-opened-at=now)        # only-if still `stamp`
     case defer:    pass                                      # ローテーションがまだ成功しうる
@@ -184,10 +183,10 @@ advance(np, name):
       delete(placeholder(name))
       for node in nodes_with(surge-for=name):
           unfreeze(node)
-      # active-rotation == name のときだけ書く、conflict チェック付きの単一書き込み。
-      # 検証対象と同じ最新コピーから結果を判定し、そのコピーが draining なら
+      # active-rotation == name のときだけ書く、conflict チェック付きの単一書き込み
+      # （§5.2）。検証対象と同じ最新コピーから結果を判定し、そのコピーが draining なら
       # last-rotation-at を刻み、anchor をクリアし、解放したのが「このパス」か
-      # どうかを返す。古いキャッシュの np を持つパスは競争に負け、何も発行しない（§5.2）
+      # どうかを返す。
       won, rotated := release_anchor(np, name)
       if not won:                            # 先行パスが既に完了させている
           return Requeue(1m)
@@ -201,24 +200,22 @@ advance(np, name):
   case (none) | pending:
       if cand.deletionTimestamp != nil:      # force-expiry 捕捉
           # claim が「このハンドラー自身の遷移前状態」を保持している場合のみ書き込む、
-          # conflict チェック済みの単一書き込み。何をしたかを返す。クリーンアップより
-          # 前に実行する: 遷移を所有しないパスが、進行中のドレインが依存している
-          # surge ノードを unfreeze してはならない（§5.2）。
+          # conflict チェック済みの単一書き込み（§5.2）。クリーンアップより前に
+          # 実行する: 遷移を所有しないパスが、進行中のドレインが依存している
+          # surge ノードを unfreeze してはならない。
           out := mark_expired(cand, from=[none, pending],
                               clear=[started-at, surge-claim])
           if out in {gone, raced}:           # 何も書いていない = 何も所有しない
               return Requeue(30s)            # gone なら release_anchor が abort を数える
-          # 失敗しうるクリーンアップより前に発行する: クリーンアップが失敗すると
-          # 次の reconcile は `expired` ハンドラーへ渡り、そこは修復するだけで
-          # 発行しないため、後ろに置いた発行は遅延ではなく消失する（§5.2）
+          # 失敗しうるクリーンアップより前に発行する（§5.2）
           if out == claimed: emit_metrics(expired); alert
           delete(placeholder(name))
           for node in nodes_with(surge-for=name): unfreeze(node)
           clear(np, anchor)
           return Requeue(1m)
-      # advance() がここへディスパッチする状態からのみ書く: 永続状態が先へ進んだ
-      # claim の `pending` ビューがロールバックを取り消してはならない —
-      # started-at の再スタンプは readyTimeout の期限をリセットする（§5.2）
+      # advance() がここへディスパッチする状態からのみ書く（§5.2）: 永続状態が
+      # 先へ進んだ claim の `pending` ビューがロールバックを取り消してはならない —
+      # started-at の再スタンプは readyTimeout の期限をリセットする
       wrote := annotate_if(cand, from=[none, pending],
                            state=pending, once(started-at=now))
       if not wrote: return Requeue(30s)   # このパスは何も所有しない
@@ -278,9 +275,9 @@ advance(np, name):
          and no fatal feasibility finding                          # step 1b の再主張: この経路はその上にいる
          and elapsed(cand.failed-at) >= effective_backoff(cand)   # エスカレート済み、発生（occurrence）にクランプ（§3.2）
          and surge_headroom(np, cand):
-          # failed からのみ。同じガードが下の再入も抑える: advance() はキャッシュ
-          # 経由で読み直すため、この書き込みにまだ遅れている読み取りは、すべての
-          # ゲートが開いたままここへ戻ってくる（§5.2）
+          # failed からのみ（§5.2）。同じガードが下の再入も抑える: advance() は
+          # キャッシュ経由で読み直すため、この書き込みにまだ遅れている読み取りは、
+          # すべてのゲートが開いたままここへ戻ってくる
           wrote := annotate_if(cand, from=[failed], state=pending)
           if not wrote: return Requeue(30s)
           return advance(np, name)
@@ -297,24 +294,33 @@ advance(np, name):
 
 :::
 
+### 主張してから発行する（claim-then-announce）
+
+キャッシュ遅延したパスが到達しうる書き込みはすべて **条件付き** である: 受け付けるのはそのハンドラーがディスパッチされる遷移前状態だけであり、その結果は書き込みループ自身が生成して試行ごとにリセットされる — したがって、最初の試行が conflict し、リトライでオブジェクトが finalize 済みだった場合の結果は成功ではなく *gone* になる。書き込みが成立したパスがその遷移を **所有** し、発行するのはそのパスだけである: メトリクス・ログ行・Event は「試行」ではなく「書き込み」に従う。
+
+ここから 3 つの性質が導かれ、この順序を使うすべての箇所で成り立つ:
+
+- **at-most-once。** 書き込みと発行の間で死んだコントローラーはシグナルを捏造せず落とし、自分が行っていない遷移を再発行するものは無い。
+- **発行は書き込みの直後・クリーンアップより前に置く。** クリーンアップは失敗しうる。そこでエラーになると次の reconcile は、修復するだけで意図的に発行しないハンドラーに渡るため、クリーンアップの後ろに置いた発行は通常の一時的な API エラーでリトライされずに失われる。
+- **何も所有しないパスは何もしない。** 一切書き込まず、ローテーションのランタイムオブジェクトにも触れず、その遷移を所有するハンドラーに委ねる — 冪等なクリーンアップがそのパスの役割である場合を除く。
+
+§5.3 の起動時 sweep と §5.4 のガバナンス喪失時の reap も同じ順序を使う。条件はいずれもハンドラーの遷移前状態ではなく、そのオブジェクトを選んだ述語である。
+
 ### 冪等リカバリ
 
 各状態ハンドラーはフェーズの望ましい状態を **再アサート** する（ワンショットアクションではない）:
 - `pending` は各パスで freeze、cordon、placeholder 存在を再アサート
 - `draining` は `deletionTimestamp` がない場合に冪等な `delete` を再発行（状態書き込みと delete 間のクラッシュ）
-- 完了はクリーンアップを再実行するが、ローテーションの完了は **条件付き書き込みで主張する**: anchor の解放と success/expired の判定はどちらもその書き込みが検証される最新の読み取りから決まる。したがって、すでに解放済みの anchor をキャッシュ経由で見たパスは冪等なクリーンアップだけを行い、何も発行しない
-- **キャッシュ遅延したディスパッチが到達しうる 4 つの書き込みが遷移を主張する**。受け付けるのはそのハンドラーがディスパッチされる状態からのみ — `expired` へ入る 2 つの書き込み、`pending` の入口アサート、`failed` → `pending` のリトライ。終端状態が既に書かれた claim をキャッシュ経由で見たパスはクリーンアップと anchor 解放だけを行い何も発行しない。claim が別の状態へ進んでいたパスは一切書き込まず、ローテーションのランタイムオブジェクトにも触れず、それを所有するハンドラーに委ねる
+- 完了はクリーンアップを再実行するが、ローテーションの完了は **条件付き書き込みで主張する**: anchor の解放と success/expired の判定はどちらもその書き込みが検証される最新の読み取りから決まる
+- **キャッシュ遅延したディスパッチが到達しうる書き込みは 4 つあり、いずれも遷移を主張する** — `expired` へ入る 2 つの書き込み、`pending` の入口アサート、`failed` → `pending` のリトライ。終端状態が既に書かれた claim をキャッシュ経由で見たパスも、クリーンアップと anchor 解放は行う
 - reconcile の残りの claim 状態書き込みは無条件のままだが、veto ではなく構造的に安全 — ただし同じ構造によるわけではない。`pending` ハンドラーが行う 2 つ（`pending` → `draining`、`pending` → `failed`）は、そのハンドラー自身のガードされた入口の後に続く。forceful fallback は候補選択から直接開始され、このハンドラーを通らないため、その `draining` 書き込みを守るのは直前に獲得した only-if-absent の NodePool anchor である。3 つとも、所有するパスが実際に行った作業を記録し、3 つとも claim を前へ進める。§5.3 の起動時 sweep の書き込みはこのディスパッチの外側にある。そちらも条件付きだが、条件はハンドラーの遷移前状態ではなく、その claim を選んだ述語である
 - このガードが、遅れた `pending` ビューによるロールバックの取り消し — `pending` へ戻し、`started-at` を再スタンプして `readyTimeout` の期限をリセットする一方、`retry-count` はエスカレーションの根拠となった値のまま残る — を止め、リトライ分岐からディスパッチャーへの再入も抑える（再入側のキャッシュ読み取りは、直前に行った書き込みにまだ遅れうる）
 
 ### オブザーバビリティのスキュー（v1 で許容）
 
 - **ミラーから delete 間のギャップ:** そこでのクラッシュ後に force-expiry が発生すると `success` と記録（surge は確保済み — 実質的結果は一致）
-- **メトリクス発行（完了）:** anchor 解放の書き込み後に、その書き込みを行ったパスだけが発行する。カウンター・ヒストグラム・完了ログ・Event は解放された anchor 1 つにつき 1 回発火する。書き込みと発行の間でクラッシュすると発行は失われる（at-most-once）
-- **メトリクス発行（claim スコープ）:** `expired` へ入る 2 つの遷移 — `abortPendingExpiry` と `advanceFailed` の削除分岐 — は、ディスパッチ元ハンドラー自身の遷移前状態だけを受け付ける条件付き NodeClaim 書き込みで遷移を主張するため、`expired` は遷移を行ったパスが 1 回だけ発行する。これは既に終端状態の claim を再発行しない `advanceExpired` と整合する
-- **発行は「試行」ではなく「書き込み」に従う:** 条件付き claim 書き込みの結果は書き込みループ自身が生成し、試行ごとにリセットされる。したがって、最初の試行が conflict し、リトライで claim が finalize 済みだった場合の結果は成功ではなく *gone* になる。終端書き込み前に消えた claim は anchor を残し、その結果は完了パス（`expired`、cooldown なし）が引き受ける。これは `failure` のロールバックにも適用され、試行の発行と failure pause のスタンプは、それを記録する書き込みが成立したときにのみ行い、報告する retry count はその書き込みが生成した値を使う
-- **メトリクス発行（ウィンドウクローズ）:** 喪失ウィンドウのカウンターと `WindowMissed` Event は `window-opened-at` スタンプをクリアした書き込みの後に続き、その書き込みが成立したパスだけが発行する — 発生ごとに最大 1 回。クリアと発行の間でコントローラーが停止するとその発生の報告は失われる（捏造はしない）。カウンターと Event の間で停止すれば、片方だけが残りうる
-- **発行は書き込みの直後・クリーンアップより前に置く:** クリーンアップは失敗しうる。そこでエラーになると次の reconcile は `advanceExpired` に渡るが、そのハンドラーは修復するだけで意図的に発行しない。したがってクリーンアップの後ろに置いた発行は、通常の一時的な API エラーでリトライされずに失われる。残る消失窓は完了パスが既に受け入れているものと同じ既約な窓 — 書き込みと発行の間でコントローラーが死ぬ場合（at-most-once）
+- **claim-then-announce が適用される箇所。** 発行点は 4 つあり、それぞれ発行物が異なる: **完了**（anchor 解放の書き込み — カウンター・ヒストグラム・完了ログ・Event が、解放された anchor 1 つにつき 1 回発火する）、**`expired` へ入る 2 つの遷移**（`abortPendingExpiry` と `advanceFailed` の削除分岐。条件付き書き込みが受け付けるのはディスパッチ元ハンドラー自身の遷移前状態だけであり、既に終端状態の claim を再発行しない `advanceExpired` と整合する）、**`failure` のロールバック**（試行の発行と failure pause のスタンプは、それを記録する書き込みが成立したときにのみ行い、報告する retry count はその書き込みが生成した値を使う）、そして **ウィンドウクローズ**（喪失ウィンドウのカウンターと `WindowMissed` Event は `window-opened-at` スタンプをクリアした書き込みに従い、発生ごとに最大 1 回 — カウンターと Event の間で停止すれば片方だけが残りうる）
+- **終端書き込み前に消えた claim** は anchor を残し、その結果は完了パス（`expired`、cooldown なし）が引き受ける
 
 ## 5.3 状態モデル
 
@@ -427,8 +433,8 @@ stateDiagram-v2
 ルール:
 - anchor がある NodePool は **陳腐化していない** — ステップ 1 が通常通り再開
 - `failed`/`expired` claim はアノテーションを保持（バックオフ再入 / 終端マーカー）
-- anchor なしの `pending`/`draining` claim（クラッシュポイントからは不可能）→ `pending`/`draining` から `state=failed` を**主張**（条件付き）+ アラート。どちらもその書き込みが成立したときにのみ行う。sweep は List（キャッシュ読み）から選択し、書き込みはその後になる。その窓で finalize された claim や、永続状態が既にその 2 状態を離れた claim は、ここでは何も修復していないので、何も書かず何も発行しない。reconcile の各経路と違い、結果を引き渡す anchor は存在しない — anchor を持たないことがこの claim を選んだ理由だからである
-- sweep が出すログ行は、いずれもその sweep が実際に行った作業を指す。placeholder の削除も node のマーカー解除も、上と同じ List から書き込みまでの窓で（読み側・書き側のどちらの端であっても）オブジェクトが消えていた場合や、マーカーが既に解除済みだった場合には no-op であり、そのときは何も発行しない。node 側も claim 側とまったく同じく、書き込みが検証される読みに対して、sweep 開始時に取得した anchor 集合を用いて選択述語を再適用する — その読みが「anchor されたローテーションのものだ」と示すマーカーは孤立ではなく現役であり、それを所有するローテーションに委ねる。何を解除したかも同じ読みから決まり、行はそれを名指す — surge で凍結されたノードなら *unfroze*、cordon のみのノード（凍結されたことがなく、どの claim にも属さない）なら *uncordoned*
+- anchor なしの `pending`/`draining` claim（クラッシュポイントからは不可能）→ `pending`/`draining` から `state=failed` を**主張**（条件付き）+ アラート。claim-then-announce（§5.2）が適用され、条件はハンドラーの遷移前状態ではなくその claim を選んだ述語である — reconcile の各経路と違い、結果を引き渡す anchor は存在しない。anchor を持たないことがこの claim を選んだ理由だからである。sweep は List から選択して書き込みはその後になるため、その窓で finalize された claim や、永続状態が既にその 2 状態を離れた claim は、ここでは何も修復されない
+- node 側も同じやり方で選択述語を再適用する — 書き込みが検証される読みに対して、sweep 開始時に取得した anchor 集合を用いる。その読みが「anchor されたローテーションのものだ」と示すマーカーは孤立ではなく現役であり、それを所有するローテーションに委ねる。何を解除したかも同じ読みから決まり、行はそれを名指す — surge で凍結されたノードなら *unfroze*、cordon のみのノード（凍結されたことがなく、どの claim にも属さない）なら *uncordoned*
 - anchor なしの孤立 `active-rotation-state` → 単純に削除
 - ベストエフォート: アイテムごとのエラーはログ、fatal にしない
 
@@ -524,7 +530,7 @@ status:
 この順序は規範的であり、理由は 2 つ:
 
 - **ロールバックはクリアに先行する。** anchor は後続の reconcile をこのクリーンアップへ戻す唯一の手段である — anchor を持たないプールでは reap は即座に return し、そのプールを governing するポリシーはもはや存在しない。後続ステップが失敗しうる状態で先に anchor をクリアすると、成果物は恒久的に孤立する。
-- **条件付きクリアが発行者を確定する。** reap は呼び出し元が受け取った anchor から entry するが、それはキャッシュ読み取りであり、先行パスが既にクリアした anchor をなお指していることがある。したがって anchor をクリアする書き込みこそが、そのローテーションを reap したパスを識別する: 発行権を得るパスは高々 1 つであり、それを得たパスは既に完了した作業を記述する。これは §5.2 の完了パスが用いる claim-then-announce の順序であり、同じ **at-most-once** セマンティクスを継承する — 通常運転では reap されたローテーション 1 件につき Event 1 件、書き込みと発行の間でコントローラーが停止した場合は 0 件。
+- **条件付きクリアが発行者を確定する。** reap は呼び出し元が受け取った anchor から entry するが、それはキャッシュ読み取りであり、先行パスが既にクリアした anchor をなお指していることがある。したがって anchor をクリアする書き込みこそが、そのローテーションを reap したパスを識別する — claim-then-announce（§5.2）であり、同じ at-most-once セマンティクスを持つ: reap されたローテーション 1 件につき Event 1 件、書き込みと発行の間でコントローラーが停止した場合は 0 件。
 
 ### ポリシー変更の伝播
 

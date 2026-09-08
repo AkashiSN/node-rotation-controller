@@ -146,8 +146,7 @@ change. Do not update only `Chart.yaml` or only the README badge.
 | `README.ja.md` | Same changes in Japanese |
 | `AGENTS.md` | Latest-release wording and implemented status |
 | `CONTRIBUTING.md` | Latest-release wording |
-| `docs/runbook.md` | New CRD-change row, including `None` |
-| `docs/ja/runbook.md` | Matching Japanese CRD-change row |
+| `CHANGELOG.md` | New `## vX.Y.Z — YYYY-MM-DD` entry stating the upgrade action, including `none` |
 
 Before merging the release-preparation PR, run:
 

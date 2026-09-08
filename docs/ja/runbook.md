@@ -83,7 +83,7 @@ C = ceil(D / (provisioningEstimate + drainEstimate + cooldownAfter))
 
 ## 3. メトリクスリファレンス
 
-`/metrics` で公開。完全なセマンティクスは[仕様 §4.2](specification/04-operations.md#42-観測性)を参照。
+`/metrics` で公開。完全なセマンティクスは[仕様 §4.2](specification/04-operations.md#42-オブザーバビリティ)を参照。
 
 NodePool 単位の系列は NodePool 削除時、または統治 `RotationPolicy` を失った時にクリアされる。
 
@@ -227,10 +227,7 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 
 **何を意味するか:** メンテナンスウィンドウの発生が、年齢と状態から見て未処理の候補（eligible、または `retryBackoff` 中）を残したまま閉じ、その発生に帰属するローテーションが 1 件も完了しなかった。その発生に対する保証ローテーション機会は消費されたまま失われた — `minRotationChances: 1`（下限）の場合、それらのノードに保証された graceful な機会はもう残っておらず、置き換えのないまま `expireAfter` に到達することもありうる。
 
-この文中の 2 つの語は、見た目より狭い意味を持つ:
-
-- **「帰属する」であって「中で」ではない。** ウィンドウがゲートするのはローテーションの*開始*だけで、in-window で始まった試行は境界を越えて走り続ける。それが境界の後 — ウィンドウが閉じた後 — に成功したなら、その発生は失われていないので黙って settle する。そうした試行が背後に 1 件もない発生だけが報告される。
-- **「年齢と状態から見て未処理」であって「コントローラーがローテーションできたはず」ではない。** この評価は意図的にプールレベルのゲートより前段で走り、コントローラーが動かなかった理由ではなくウィンドウに何が起きたかを述べる。したがって static な NodePool や、スケジュールが致命的に実行不能なプールは、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびに報告する — それらのゲートがどのみち止めていたはずの claim も含まれる。これは報告された事実であって、シグナルの故障ではない。
+この文中の 2 つの語は、見た目より狭い意味を持つ: **「帰属する」であって「中で」ではない** — in-window で始まり境界の後に成功した試行はその発生を settle する — と、**「年齢と状態から見て未処理」であって「コントローラーがローテーションできたはず」ではない** — static なプールやスケジュールが致命的に実行不能なプールは、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびに報告する。どちらも [spec §4.2](specification/04-operations.md#42-オブザーバビリティ) が定義する。
 
 **何を確認するか:**
 
@@ -238,17 +235,13 @@ helm upgrade --install node-rotation-controller charts/node-rotation-controller 
 - 直前の `rotation attempt failed` ログ行とその `reason` — ウィンドウ喪失は通常、コールドスタートではなく 1 件以上の失敗した試行の末尾である。
 - `noderotation_retry_count` — エスカレートするバックオフの上限に向かって増加している場合、試行が時間切れではなく繰り返し失敗している。
 - 1つのメンテナンスウィンドウ内での試行のペースを決めるのは `retryBackoff` ではなく `readyTimeout + failurePause` である: ウィンドウを意識したクランプ（spec §3.2）が失敗した claim のリトライをそれが失敗した発生の内側に保持するのは、`retryBackoff` まで下げたステップがなお収まる間だけであり、`retryBackoff` すら収まらなくなった時点でエスカレートした待ち時間はそのまま確定し、その claim はこの発生でリトライする代わりに次の発生へ持ち越される。期間 `D` のウィンドウでは、タイムアウト駆動の試行数のオーダー上限は `1 + D / (readyTimeout + failurePause)` になる。プール全体を直接ペーシングするのは `failurePause` である——複数の claim が互いに独立して backoff とリトライを交互に行いうるため、`retryBackoff` はプール全体のレートの信頼できる制限にはならない。`retryBackoff` を引き上げても、それがこのクランプの下限であり大きな下限ほど窓の中で「何も収まらない」地点により早く到達するぶん、1 claim あたりの試行回数は減らせる。ただしこれはその claim の窓の残りを切り捨てうる鈍い、claim ごとの手段であって、プール全体のチャーンを直接制御するものではない。
-- プールが static かどうか（`StaticNodePool` Warning Event、[spec §3.3](specification/03-design.md)）— static な NodePool は surge ローテーションを一切試みないため、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびにウィンドウを逃す。issue #302 を参照。
+- プールが static かどうか（`StaticNodePool` Warning Event、[spec §3.3](specification/03-design.md)）— static な NodePool は surge ローテーションを一切試みないため、年齢と状態から見て未処理の claim を残したまま閉じた発生のたびにウィンドウを逃す。
 
 **何をするか:** `rotation attempt failed` 行が示す根本原因に対処する（[§1](#1-az-ごとの-surge-ヘッドルームゾーン-pv) と [§5](#5-drain-が詰まったときの対処) を参照）。試行自体は健全だが、バッチがスケジュールに対して大きすぎて本当に収まらない場合は、メンテナンスウィンドウを拡張して 1 回の発生あたりの完了数を増やすか、`minRotationChances`（`K`）を引き上げて、1 回のウィンドウ喪失があっても `expireAfter` バックストップ前に保証された機会を残すようにする。
 
-**このシグナルの既知の限界。** 発生は NodePool 上の `noderotation.io/window-opened-at` アノテーションの*存在*で識別され、reconcile が観測したものだけが存在する。設計上受け入れている帰結が 3 つある:
+**このシグナルの既知の限界。** 発生は NodePool 上の `noderotation.io/window-opened-at` アノテーションの*存在*で識別され、reconcile が観測したものだけが存在する。設計上受け入れている帰結が 3 つあり、[spec §5.3](specification/05-implementation.md#53-状態モデル) が列挙している: **2 つの発生が 1 件として報告されうる**、**スケジュールの編集がウィンドウを即座に閉じうる**、**報告は最大 1 回で、それ以上にはならない**。運用上、書き方が変わるのは最後の 1 つだけである: 正確な回数ではなく `increase(...) > 0` でアラートすること。
 
-- **2 つの発生が 1 件として報告されうる。** これは 2 通りの経路のいずれかで起きる: 発生と発生の間の window 外のギャップを reconcile が 1 度も観測しない場合 — ギャップが短い、その区間だけコントローラーが停止していた、API エラーがその区間を通じて続いた — か、あるいはそのギャップを毎回観測してはいるものの、観測したすべてのパスでローテーションが in-flight のため defer し続けた場合（ギャップをまたいで次の発生にまで及ぶ stuck な drain は、まさにこの経路で 2 つを 1 件にまとめる）。どちらの経路でも先の発生のスタンプは次の発生まで残り、2 つはまとめて 1 回だけ判定・報告される（載るのは先の `windowOpenedAt`）。その後の成功はこの先のスタンプに対して settle する — つまり、本来その成功が属していた発生ではなく、まとめられた期間全体に対して settle する。（より狭いケース: コントローラーの 1 分 self-requeue より短いウィンドウはそもそも観測されないことがあり、その場合スタンプも報告も行われない。）
-- **スケジュールの編集がウィンドウを即座に閉じうる。** スタンプ保持中にポリシーの `maintenanceWindows` を編集して現在時刻が window 外になると、その時点で発生が閉じたものとして扱われ、その時点の census に対して判定される。
-- **報告は最大 1 回で、それ以上にはならない。** スタンプのクリアはカウンターと Event より先に行われるため、その間に停止したコントローラーはその発生の報告を捏造せず落とし、カウンターと Event の間で停止すれば片方だけが残りうる。正確な回数ではなく `increase(...) > 0` でアラートすること。
-
-**注記:** `NodeRotationStalledInWindow` は同じ失敗に対する in-window の早期警告だが、その予測子ではない。issue #321 以降、両者は同じ*未処理作業*の判定 — `noderotation_candidates + noderotation_in_backoff > 0`、どちらも freeze 中のプールを除外 — を適用するので、カウンタが決して数えない claim でアラートが発火することはなくなった。ただし設計上、次の 3 点は依然として異なる。アラートはウィンドウが開いている間に繰り返しライブに評価し、カウンタは閉鎖時に一度だけ評価するので、プールが境界前に持ち直せばアラートは発火してから解決する。アラートの抑止アームは `completionRange` のローリング参照だが、カウンタは `last-rotation-at ≥ window-opened-at` で成功を帰属させるので、occurrence の直前の成功がその occurrence を settle しないままアラートを抑止することがあり、`completionRange` より長いウィンドウでは帰属する成功が参照範囲から抜け落ち、occurrence は settle されるのにアラートが発火しうる — `completionRange` は 1 ウィンドウ分程度に保つこと。そして backoff が明けて再選択された claim は in-flight であり、どちらのアームにも数えられないため、再選択から `readyTimeout` のロールバックまでアラートは沈黙する。
+**注記:** `NodeRotationStalledInWindow` は同じ失敗に対する in-window の早期警告だが、その予測子では**ない**。両者は同じ未処理作業の判定（`noderotation_candidates + noderotation_in_backoff > 0`、どちらも freeze 中のプールを除外）を適用し、なお異なる 3 点 — 評価のタイミング、成功がどちらをどう抑止するか、どちらも数えない in-flight のリトライ — は [spec §4.2](specification/04-operations.md#42-オブザーバビリティ) が示す。調整が要るのは 1 点: `completionRange` は 1 ウィンドウ分程度に保つこと。
 
 ---
 
@@ -292,21 +285,9 @@ kubectl apply -f charts/node-rotation-controller/crds/
 helm upgrade --install node-rotation-controller charts/node-rotation-controller ...
 ```
 
-| リリース | スキーマ変更 | 対処 |
-|---------|-------------|------|
-| v0.6.1 | なし | なし |
-| v0.6.0 | `surge.failurePause`, `surge.drainEstimate`, `surge.provisioningEstimate` 追加 | `crds/` を先に適用 |
-| v0.5.0 | `surge.forcefulFallback` 追加 | `crds/` を先に適用 |
-| v0.4.0 | なし | なし |
-| v0.3.0 | `RotationPolicy` CRD 導入 | 初回インストール |
+変更したスキーマがどのリリースか、そしてアップグレード時に対処が要る動作変更・values 変更は、リリースごとに [changelog](https://github.com/AkashiSN/node-rotation-controller/blob/main/CHANGELOG.md)（英語）に記録している。アップグレード前に、導入済みバージョンから対象バージョンまでのエントリを読むこと。
 
-### v0.6.0 の動作変更
-
-`cooldownAfter` は失敗後の休止を兼ねなくなった。それは `surge.failurePause`（既定 `max(10m, cooldownAfter)`）になった。`cooldownAfter` を 10m 未満に下げていた場合、アップグレードで失敗後休止が 10m に戻る。旧値を維持するには `failurePause` を明示的に設定する。
-
-### v0.6.0 の values スキーマ変更
-
-chart が `rotationPolicies[].spec` サブツリーを封印した — 以前は黙って捨てられたタイポがアップグレード時にハードエラーになる。**事前にドライラン:**
+chart は `rotationPolicies[].spec` サブツリーを封印しているため、以前のバージョンが黙って捨てていたタイポはアップグレード時にハードエラーになる。事前にドライランすること:
 
 ```sh
 helm template node-rotation-controller charts/node-rotation-controller -f your-values.yaml >/dev/null

@@ -116,7 +116,7 @@ Read `leadTime = K·P + t_rot` left to right:
 | `E` | Per-node: **`NodeClaim.spec.expireAfter`** (authoritative). Template used only as representative for validation |
 | `tGP` | Per-node: `NodeClaim.spec.terminationGracePeriod`; template as representative |
 | `P` | Derived from `maintenanceWindows` union (§3.1) |
-| `t_rot` | `readyTimeout + tGP + buffer`. When `tGP` unset → fixed fallback (e.g. `1h`) |
+| `t_rot` | `readyTimeout + tGP + buffer`. When `tGP` unset → fixed `1h` fallback |
 | `t_rot_est` | `provisioningEstimate + drainEstimate`. Layer-2 only, no deadline terms |
 | `buffer` | Fixed `4·shortRequeue = 2m`. Deadline-side only, not in `t_rot_est` |
 
@@ -204,7 +204,7 @@ A single reconcile cycle handles **one** node: serial per NodePool (`maxUnavaila
 
 A standalone `NodeClaim` produces an **unowned** node outside NodePool accounting, expiry, drift, and disruption budgets — breaking intentional NodePool separation.
 
-### Static capacity NodePools are out of scope (issue #302)
+### Static capacity NodePools are out of scope
 
 A NodePool with `spec.replicas` set (Karpenter **static capacity**) maintains a fixed node count and is **never considered by the provisioner** when a Pod is pending. The placeholder pins `karpenter.sh/nodepool` to the candidate's own pool as a structural invariant, so on a static pool it can be neither absorbed by another pool nor provisioned for — every attempt would stall until `readyTimeout` and consume one of the node's guaranteed chances.
 
@@ -212,7 +212,7 @@ The controller therefore **refuses to start a rotation** on a static NodePool an
 
 Karpenter **rejects a transition between static and dynamic** on an existing NodePool (a CEL rule on `spec.replicas`), so the remedy is to migrate the workload to a dynamic NodePool or to exclude this one from the RotationPolicy selector — not to edit the field in place.
 
-Surge-less replacement driven by replica reconciliation — raising `spec.replicas` to surge, or deleting the NodeClaim and letting replica reconciliation refill it — was evaluated and **rejected**, not deferred (issue #302). Karpenter's static deprovisioning selects empty nodes first, so a node provisioned by raising `replicas` is the *first* candidate for the scale-down that follows rather than merely a possible one; and the concurrency that would make delete-and-refill a one-node dip instead of a stall for the whole drain holds only while `limits.nodes` exceeds `replicas`, which is the operator's configuration rather than a property of the mode. `surge.forcefulFallback` is not a precedent for shipping it anyway: that is an opt-in, window-bounded escape for a pool that would otherwise miss its deadline entirely (ADR-0001), not a pool's steady-state mechanism. Both constraints are properties of Karpenter's current node accounting (v1.14), so the decision is worth revisiting if that changes — not because rotating static pools is undesirable.
+Surge-less replacement driven by replica reconciliation — raising `spec.replicas` to surge, or deleting the NodeClaim and letting replica reconciliation refill it — was evaluated and **rejected**, not deferred. Karpenter's static deprovisioning selects empty nodes first, so a node provisioned by raising `replicas` is the *first* candidate for the scale-down that follows rather than merely a possible one; and the concurrency that would make delete-and-refill a one-node dip instead of a stall for the whole drain holds only while `limits.nodes` exceeds `replicas`, which is the operator's configuration rather than a property of the mode. `surge.forcefulFallback` is not a precedent for shipping it anyway: that is an opt-in, window-bounded escape for a pool that would otherwise miss its deadline entirely (ADR-0001), not a pool's steady-state mechanism. Both constraints are properties of Karpenter's current node accounting (v1.14), so the decision is worth revisiting if that changes — not because rotating static pools is undesirable.
 
 ### The placeholder Pod
 
@@ -239,7 +239,7 @@ Pods that Karpenter does not need to re-fit:
 
 - Candidate exclusion enforced by the **cordon**, not this preference
 - Near-deadline exclusion is best-effort
-- **Why not required (issue #96):** Karpenter rejects required `kubernetes.io/hostname` affinity (restricted label)
+- **Why not required:** Karpenter rejects required `kubernetes.io/hostname` affinity (restricted label)
 - Exclusion lists recomputed on each (re)creation; stale lifetime ≤ `readyTimeout`
 
 #### Two provisioning paths
@@ -258,11 +258,11 @@ flowchart LR
 
 Either way, the host becomes the **surge target**, frozen for the rotation's duration.
 
-The two paths cost very different amounts of time and reserve very different things, so the controller **names the one it took** (issue #305): `surgePath` ∈ {`provisioned`, `absorbed`} on the `surge node ready` and `rotation complete` lines and on the `RotationCompleted` Event, carried between them on the `surge-path` anchor field (§5.3).
+The two paths cost very different amounts of time and reserve very different things, so the controller **names the one it took**: `surgePath` ∈ {`provisioned`, `absorbed`} on the `surge node ready` and `rotation complete` lines and on the `RotationCompleted` Event, carried between them on the `surge-path` anchor field (§5.3).
 
 The path is decided by one question — did the surge host's `NodeClaim` come into existence during this attempt? — evaluated with the **same predicate** the rollback's reap guard uses, so the two can never disagree about the same host. It reports what is observable, not causality: a node Karpenter provisioned for some other pending Pod inside this attempt's window, which then absorbed the placeholder, reads as `provisioned`. A host whose `NodeClaim` cannot be resolved yields **no value rather than a guessed one**.
 
-### Placeholder sizing clamp (issue #224)
+### Placeholder sizing clamp
 
 **Problem:** Karpenter caches one `allocatable` per instance type, but actual allocatable can be higher per-AZ. A node filled past the cached estimate produces an unprovisionable placeholder.
 
@@ -284,7 +284,7 @@ requests = min(reschedulable sum, limit)                        (per resource)
 - **Band-exceeded** (shortfall > measured band): `SurgeClampBandExceeded` Warning Event; rotation proceeds
 - **Common case** (fits under limit): silent
 
-### Whole-node reservation (issue #326, ADR-0005)
+### Whole-node reservation (ADR-0005)
 
 **Problem:** the placeholder reserves the *sum* of the drain as a single Pod. On the capacity-absorb path that aggregate hole sits on a host already running other Pods, and it is fungible with the individual evicted Pods' placement only if that host can accept all of them. A host can offer a big enough hole while a Pod's own `podAntiAffinity` or `hostPort` still refuses it — and Karpenter then provisions for that Pod **after** the drain has started, behind the surge rather than in front of it.
 
@@ -301,7 +301,7 @@ Every host whose free cpu or memory is short of the candidate-sized footprint is
 
 It does **not** prove a host is empty. The reservation is sized from the *candidate's* allocatable, so three ordinary situations let an occupied host take it: **a larger host** (the placeholder pins the NodePool and the replicated requirements, not the instance type, so on a heterogeneous NodePool an 8-CPU host running 2 CPU has a 4-CPU candidate's worth free — the common case, not a corner one); **a host with less DaemonSet overhead** than the candidate; and **Pods that request no cpu or memory** — including Pods requesting only an accelerator or ephemeral storage, since only those two dimensions are raised — which occupy nothing the reservation measures and can still be the ones whose anti-affinity or `hostPort` refuses an evicted Pod.
 
-There is no way to express "a host with no other Pods": a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision at all (issue #96), and a required `podAntiAffinity` matching every Pod would exclude the DaemonSets every node carries. Adding `node.kubernetes.io/instance-type` to `surge.matchNodeRequirements.required` narrows the first residual by pinning the candidate's own type, at the cost of Karpenter's freedom to substitute types when capacity is short.
+There is no way to express "a host with no other Pods": a **required** `kubernetes.io/hostname NotIn` term makes Karpenter's provisioner refuse to provision at all, and a required `podAntiAffinity` matching every Pod would exclude the DaemonSets every node carries. Adding `node.kubernetes.io/instance-type` to `surge.matchNodeRequirements.required` narrows the first residual by pinning the candidate's own type, at the cost of Karpenter's freedom to substitute types when capacity is short.
 :::
 
 - **Both bin-packing dimensions, whatever the drain declares** — a cpu-only drain that reserved only cpu could still be absorbed by a host filled with memory-only Pods. `pods` is never requested (it is not a container request); ephemeral storage and accelerators are raised only when the drain asks for them

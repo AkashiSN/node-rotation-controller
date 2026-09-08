@@ -53,7 +53,7 @@ surge がローテーション中の Pod 可用性にどう影響するか、お
 ::: details メトリクス詳細 — クリックで展開
 
 - **`noderotation_candidates`:** プールあたりの適格 NodeClaim 数
-- **`noderotation_in_backoff`:** **年齢トリガーを越えている**うえで、失敗した試行によってエスカレートした `retryBackoff` 中にある*という理由だけで*候補カウントから外れている NodeClaim 数。年齢の限定はロードベアリングである: 期限が来ていたときに失敗し、その後に年齢が期限外になった claim（`ageThresholdOverride` の引き上げ、リードタイムの*短縮* — トリガーは `age > expireAfter − leadTime` なので、リードタイムを広げると期限は早く来る — 、`expireAfter` の延長）は、いま backoff に阻まれてはいるが何も負われておらず、このゲージも `window_missed_total` もそれを数えない。`candidates + in_backoff` は `window_missed_total` が閉じた occurrence を判定する「年齢と状態による未処理」カウントそのものであり、in-window のアラートは同じ判定をライブに適用できる（§5.2）
+- **`noderotation_in_backoff`:** **年齢トリガーを越えている**うえで、失敗した試行によってエスカレートした `retryBackoff` 中にある*という理由だけで*候補カウントから外れている NodeClaim 数。年齢の限定はロードベアリングである: 期限が来ていたときに失敗し、その後に年齢が期限外になった claim（明示指定した `ageThreshold` の引き上げ、リードタイムの*短縮* — トリガーは `age > expireAfter − leadTime` なので、リードタイムを広げると期限は早く来る — 、`expireAfter` の延長）は、いま backoff に阻まれてはいるが何も負われておらず、このゲージも `window_missed_total` もそれを数えない。`candidates + in_backoff` は `window_missed_total` が閉じた occurrence を判定する「年齢と状態による未処理」カウントそのものであり、in-window のアラートは同じ判定をライブに適用できる（§5.2）
 - ウィンドウを意識したバックオフクランプ（§3.2）は、発生の境界で claim を `noderotation_candidates` と `noderotation_in_backoff` の間で移動させるが、固定された claim のスナップショットについて見れば、その合計——`window_missed_total` が判定に使う未処理作業カウント——は変化しない。しかしクランプはそれ以上のところでは observability に対して中立**ではない**。より多くの試行を生み出すことこそがクランプの目的だからである: `noderotation_completed_total{outcome="failure"}` はより頻繁に増加し、`noderotation_retry_count` はより速く上昇し、`NodeRotationRetryCountHigh` はより早く発火しうるようになり、失敗ログと Event は増え、追加された試行がクローズ時点で成功しているか、あるいはまだ進行中であるかによって、`noderotation_window_missed_total` がその発生で発火するかどうかも変わりうる。
 - 増えた試行はメトリクスだけの影響ではない：1回ごとに追加の surge NodeClaim が作成され、失敗すれば reap され、placeholder Pod が入れ替わり、対象の本番ノードの cordon/uncordon も繰り返される。クランプ前なら4回で済んでいた試行がクランプ後に6回になるプール——§3.2 のクランプを動機づけたインシデントの形——では、同じ発生でこのクラスタ側のチャーンがおよそ50%増える。
 - **`noderotation_in_progress`:** プールあたりのアクティブローテーション数
@@ -152,7 +152,11 @@ in-window 条件の `in_backoff` 側はロードベアリングである: エス
 
 このアームが `retry_count` ではなく `in_backoff` であるのは、条件のこの半分をウィンドウ閉鎖時の評価と*同一の判定*にするためである。`candidates + in_backoff` はその未処理カウントそのものだが、`retry_count` はバケットに関係なくプールの*すべての* NodeClaim にわたる最大リトライ回数であり、カウンタが意図的に除外する claim — Node に運用者が `karpenter.sh/do-not-disrupt` を付与したもの、削除中のもの、既に期限切れのもの — でも高いまま残る。freeze の除外はその一致を広げる: freeze は運用者がプールにローテーション停止を指示するものなので、freeze 下で閉じたウィンドウは喪失ではなく辞退であり、カウンタはそれを記録しない（§5.2）。in-window 条件も同じ根拠でそれを辞退する。
 
-ただし 2 つのシグナルはこのアームを超えては等価**ではなく**、アラートはカウンタの予測子ではない。完了側のアームは `completionRange` のローリング参照だが、カウンタは `last-rotation-at ≥ window-opened-at` で成功を帰属させるため、両方向にずれる: occurrence の直*前*の成功はその occurrence を settle できないのにアラートを抑止し、`completionRange` より長いウィンドウでは帰属する成功が参照範囲から抜け落ち、occurrence は settle されるのにアラートが発火しうる。どちらも小さく保つには `completionRange` をおよそ 1 ウィンドウ分に設定する。
+ただし 2 つのシグナルはこのアームを超えては等価**ではなく**、アラートはカウンタの予測子ではない。設計上、両者は 3 点で異なる。
+
+アラートはウィンドウが開いている間に繰り返しライブに評価し、カウンタは閉鎖時に一度だけ評価する — したがってプールが境界前に持ち直せば、アラートは発火してから解決する。
+
+完了側のアームは `completionRange` のローリング参照だが、カウンタは `last-rotation-at ≥ window-opened-at` で成功を帰属させるため、両方向にずれる: occurrence の直*前*の成功はその occurrence を settle できないのにアラートを抑止し、`completionRange` より長いウィンドウでは帰属する成功が参照範囲から抜け落ち、occurrence は settle されるのにアラートが発火しうる。どちらも小さく保つには `completionRange` をおよそ 1 ウィンドウ分に設定する。
 
 意図的にアラートしないケースが 1 つある: backoff が明けて再選択された claim は `InFlight` であり、どちらのアームにも数えられないため、再選択から `readyTimeout` が試行をロールバックして `retryBackoff` に戻すまでこの条件は沈黙する。以前の `retry_count` アームはその間ずっと発火していた。この縮小は受け入れる — 実際に走っているローテーションは詰まったウィンドウではない — うえで、最終的なシグナルは失敗アラートと、occurrence がその claim を未処理のまま閉じた場合の `window_missed_total` である。
 

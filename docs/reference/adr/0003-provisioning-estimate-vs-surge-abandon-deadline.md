@@ -27,7 +27,7 @@ Drop `buffer` and `readyTimeout` from the forecast and model provisioning with i
 t_rot_est = provisioningEstimate + drainEstimate
 ```
 
-- `t_rot = readyTimeout + tGP + buffer` stays the **deadline bound**, unchanged. `buffer` and the `readyTimeout`/`tGP` deadline terms remain here, where slack and deadlines belong; they feed `leadTime`, `A`, `G`, the [§3.3](../../specification/03-design.md#33-surge-sequence-v1) forceful-fallback deadline race and the [§5.2](../../specification/05-implementation.md#52-reconcile-loop) `drain_stuck` bound.
+- `t_rot = readyTimeout + tGP + buffer` stays the **deadline bound**, unchanged. `buffer` and the `readyTimeout`/`tGP` deadline terms remain here, where slack and deadlines belong; they feed `leadTime`, `A`, `G`, the [§3.3](../../specification/03-design.md#33-surge-sequence) forceful-fallback deadline race and the [§5.2](../../specification/05-implementation.md#52-reconcile-loop) `drain_stuck` bound.
 - `surge.provisioningEstimate` is a new optional `RotationPolicy` field. Unset, the forecast falls back to `min(readyTimeout, 5m)`, silently. The default is bounded above by the timeout it estimates, so it can never claim a provision takes longer than the attempt is allowed to run. An explicit value above `readyTimeout` is unreachable (the surge is abandoned at `readyTimeout`), so it emits a `ProvisioningEstimateAboveReadyTimeout` `Warn` and is clamped. `readyTimeout` is always resolved to a positive value upstream, so — unlike `drainEstimate`'s `tGP` — there is no unset-deadline fork.
 
 `ProvisioningEstimateDefault = 5m` errs high against the observed `1–3m` while staying well under the `15m` `readyTimeout` default, per the direction-of-error argument above.

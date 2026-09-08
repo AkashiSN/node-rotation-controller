@@ -108,7 +108,7 @@ prometheusRule:
   # -- Extra labels for the PrometheusRule (e.g. a Prometheus release selector).
   labels: {}
   # noderotation_completed_total{outcome=~"failure|expired"} increased in the
-  # last hour — a rotation failed or a node was force-expired (spec §3.5).
+  # last hour — a rotation failed or a node was force-expired (spec §4.2).
   completedFailure:
     for: 0m
     severity: warning
@@ -144,7 +144,7 @@ prometheusRule:
   retryCountHigh:
     for: 0m
     severity: warning
-  # A window-bounded forceful fallback fired (spec §3.3, ADR-0001). Per ADR-0001
+  # A window-bounded forceful fallback fired (spec §3.6, ADR-0001). Per ADR-0001
   # a single fallback is the designed outcome for a synchronized batch too large
   # to rotate gracefully, so this ships as an info-level visibility signal, not a
   # page. Tighten it for your environment (e.g. a sustained rate at `warning`).
@@ -297,7 +297,7 @@ rotationPolicies:
             - kubernetes.io/arch
             - karpenter.sh/capacity-type
           preferred: []
-        # Opt-in, default off (spec §3.3, ADR-0001). When a candidate cannot
+        # Opt-in, default off (spec §3.6, ADR-0001). When a candidate cannot
         # finish a graceful surge before its own expireAfter deadline, rotate it
         # surge-less inside the window — deleting the NodeClaim via the same
         # voluntary, PDB-respecting path — instead of letting Karpenter force-

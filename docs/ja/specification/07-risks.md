@@ -19,46 +19,48 @@
 **検証済み（20+ シナリオ）:** コア surge、同一 AZ ゾーン PV リバインド、ロールバック、limits ゲーティング、マルチプールの閉じ込め、PDB ドレイン、do-not-disrupt マーカー、force-expiry 検出、キャパシティ吸収、placeholder プリエンプション、ウィンドウ境界、リーダー変更再開、forceful fallback、earliest-deadline ソート、オペレーターオプトアウト、12 時間 tight-race soak。
 
 **未決:** 真の同一 AZ キャパシティ不足（ICE）によるリアルクラウドでのロールバック（issue #109）。
+
+このうち 2 件は完全な報告として公開している: [Forceful fallback（シナリオ O）](../validation/forceful-fallback)と[Tight-race soak（シナリオ P）](../validation/tight-race-soak)。以下の evidence はその要約であり、手法と生の記録は各報告にある。
 :::
 
 ### コアメカニズム
 
-| 前提 | ステータス | 日付 |
-|------------|--------|------|
-| スタンドアロン `NodeClaim` が Auto Mode でプロビジョニング可能 | 検証済み | 2026-05-29 |
-| placeholder Pod surge が make-before-break を完了 | 検証済み | 2026-06-22 |
-| 同一 AZ surge で EBS 再アタッチ（ゾーン PV リバインド） | 検証済み | 2026-06-22 |
-| `readyTimeout` ミスがクリーンにロールバック | 検証済み | 2026-06-22 |
-| NodePool `limits` 消費が surge をゲート | 検証済み | 2026-06-22 |
-| required `karpenter.sh/nodepool` が surge をプールに閉じ込め | 検証済み | 2026-06-22 |
-| 明示的 `NodeClaim` 削除が voluntary パスでドレイン（PDB） | 検証済み | 2026-06-22 |
-| `do-not-disrupt` を両ノードに適用、完了時に削除 | 検証済み | 2026-06-22 |
-| pending 中の force-expiry が `expired` を記録（success/failure ではない） | 検証済み | 2026-06-22 |
+| 前提 | ステータス |
+|------------|--------|
+| スタンドアロン `NodeClaim` が Auto Mode でプロビジョニング可能 | 検証済み |
+| placeholder Pod surge が make-before-break を完了 | 検証済み |
+| 同一 AZ surge で EBS 再アタッチ（ゾーン PV リバインド） | 検証済み |
+| `readyTimeout` ミスがクリーンにロールバック | 検証済み |
+| NodePool `limits` 消費が surge をゲート | 検証済み |
+| required `karpenter.sh/nodepool` が surge をプールに閉じ込め | 検証済み |
+| 明示的 `NodeClaim` 削除が voluntary パスでドレイン（PDB） | 検証済み |
+| `do-not-disrupt` を両ノードに適用、完了時に削除 | 検証済み |
+| pending 中の force-expiry が `expired` を記録（success/failure ではない） | 検証済み |
 
 ### 応用シナリオ
 
-| 前提 | ステータス | 日付 |
-|------------|--------|------|
-| キャパシティ吸収パス（空きにビンパック、新ノードなし） | 検証済み | 2026-06-23 |
-| リーダー変更がアノテーションのみから再開 | 検証済み | 2026-06-23 |
-| 進行中のローテーションがウィンドウ境界を超えて完了 | 検証済み | 2026-06-23 |
-| placeholder がプリエンプション犠牲者; 敵対的プリエンプション → ロールバック | 検証済み | 2026-06-23 |
-| `do-not-disrupt` が Drift に対して有効 | 検証済み | 2026-06-23 |
+| 前提 | ステータス |
+|------------|--------|
+| キャパシティ吸収パス（空きにビンパック、新ノードなし） | 検証済み |
+| リーダー変更がアノテーションのみから再開 | 検証済み |
+| 進行中のローテーションがウィンドウ境界を超えて完了 | 検証済み |
+| placeholder がプリエンプション犠牲者; 敵対的プリエンプション → ロールバック | 検証済み |
+| `do-not-disrupt` が Drift に対して有効 | 検証済み |
 
-### v0.4 以降の追加
+### Forceful fallback と選定
 
-| 前提 | ステータス | 日付 |
-|------------|--------|------|
-| Forceful fallback（12 ノードバッチ、graceful + surge なしミックス） | 検証済み | 2026-07-04 |
-| earliest-deadline 候補ソート | 検証済み | 2026-07-04 |
-| オペレーター `do-not-disrupt` が選定から除外 | 検証済み | 2026-07-04 |
+| 前提 | ステータス |
+|------------|--------|
+| Forceful fallback（12 ノードバッチ、graceful + surge なしミックス） | 検証済み |
+| earliest-deadline 候補ソート | 検証済み |
+| オペレーター `do-not-disrupt` が選定から除外 | 検証済み |
 
 ### soak テスト
 
-| 前提 | ステータス | 日付 |
-|------------|--------|------|
-| 12h tight-race soak: 71/71 graceful、0 expired、0 failure | 検証済み | 2026-07-15 |
-| Forceful fallback が制限された claim に対して決定的に発動 | 検証済み | 2026-07-15 |
+| 前提 | ステータス |
+|------------|--------|
+| 12h tight-race soak: 71/71 graceful、0 expired、0 failure | 検証済み |
+| Forceful fallback が制限された claim に対して決定的に発動 | 検証済み |
 
 ::: details 完全な検証エビデンス — クリックで展開
 
@@ -156,5 +158,5 @@ Drifted ノードに `do-not-disrupt=true` → 3 分以上置換されず; ア�
 3. **マルチクラウド検証** — EKS Auto Mode を超えた互換性を主張する前に AKS NAP、GKE をテスト。
 
 ::: tip 解決済み
-*CRD ベースのポリシー移行* と *NodePool ごとのメンテナンスウィンドウ* — `RotationPolicy` CRD で提供（issue #119、§5.4）。
+*CRD ベースのポリシー移行* と *NodePool ごとのメンテナンスウィンドウ* — `RotationPolicy` CRD で提供（§5.4）。
 :::

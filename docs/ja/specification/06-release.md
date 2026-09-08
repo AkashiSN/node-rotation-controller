@@ -29,18 +29,12 @@
 
 ## 6.2 ロードマップ
 
-| マイルストーン | 内容 |
-|-----------|---------|
-| v0.1（spec） | 本ドキュメント |
-| v0.2（skeleton） | プロジェクトレイアウト、controller-runtime ブートストラップ、リーダー選出、CI |
-| v0.3（MVP） | Reconcile + surge + drain + メトリクス + Helm chart; `RotationPolicy` CRD（§5.4） |
-| v0.4 | chart が各エントリに 1 `RotationPolicy` をレンダー — NodePool ごとのポリシー |
-| v0.5 | Forceful fallback（§3.6）; earliest-deadline ソート; オペレーター `do-not-disrupt` オプトアウト; `ThroughputBurstShortfall`; ドキュメントサイト |
-| v0.6 | Layer-2 予測に `provisioningEstimate + drainEstimate`（ADR-0003）; `failurePause`（ADR-0004）; ブラウザーポリシーシミュレーター（wasm） |
-| v1.0 | 安定 CRD（`v1`）、プロダクション Runbook、EKS Auto Mode で soak テスト済み |
+§3–§5 で規定した v1 surge MVP は実装済みで、pre-1.0 としてリリースされている。リリース済みバージョンごとの変更点は [changelog](https://github.com/AkashiSN/node-rotation-controller/blob/main/CHANGELOG.md)（英語）に記録しており、本節はこれから先の内容のみを述べる。
 
-- **v1.0 の未決事項:** 真の同一 AZ キャパシティ不足（ICE）によるロールバック（§7.2）
-- **v1.0 検証済み:** マルチ時間 tight-race `expireAfter` soak（§7.2、issue #118）
+**v1.0** には、安定 CRD（`v1`）、プロダクション Runbook、EKS Auto Mode での soak テストが必要である。
+
+- **未決:** 真の同一 AZ キャパシティ不足（ICE）によるロールバック（§7.2）
+- **決着済み:** マルチ時間 tight-race `expireAfter` soak（§7.2）
 
 ### スケジュール未定
 
