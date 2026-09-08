@@ -15,7 +15,7 @@
 # checksum lock is later enabled) — never reintroduce a free-floating install.
 registries:
   - type: standard
-    ref: v4.539.0 # renovate: depName=aquaproj/aqua-registry
+    ref: v4.558.1 # renovate: depName=aquaproj/aqua-registry
   # Local registry for tools the standard registry does not carry (controller-gen).
   # Trusted via aqua-policy.yaml (allowed by the Makefile aqua-tools target).
   - name: local
@@ -53,12 +53,12 @@ packages:
   # helm is pinned to the v4 line — the version CI already used de-facto
   # (azure/setup-helm installed latest). The chart, values.schema.json, and the
   # helm-unittest v1.1.1 plugin all render/pass under it.
-  - name: helm/helm@v4.2.3
+  - name: helm/helm@v4.2.4
   # kubectl tracks the controller's Kubernetes client minor (k8s.io/api v0.37 ->
   # 1.37), matching the kind node's Kubernetes minor (v1.37) — within skew policy.
   - name: kubernetes/kubernetes/kubectl@v1.37.0
   # --- Ephemeral EKS Auto Mode PoC tooling (test/e2e/eks-automode, issue #93) ---
-  - name: hashicorp/terraform@v1.15.8
+  - name: hashicorp/terraform@v1.16.1
   # awscli authenticates to AWS, logs Docker in to ECR, and writes the cluster
   # kubeconfig for the PoC (issue #106). v2 line.
-  - name: aws/aws-cli@2.36.4
+  - name: aws/aws-cli@2.36.40
