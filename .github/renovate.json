@@ -7,6 +7,16 @@
   "postUpdateOptions": [
     "gomodTidy"
   ],
+  "description": "config:recommended's ignorePaths hides **/test/** from every manager. That silently disabled the KWOK custom manager below — added in #279 to keep the fourth Go pin in lockstep, it never matched a file, so the go-toolchain group has always shipped an incomplete bump that check-go-toolchain-sync.sh then failed. The list below is config:recommended's, minus **/test/**; a packageRule re-disables everything under test/ except that one pin.",
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/examples/**",
+    "**/__tests__/**",
+    "**/tests/**",
+    "**/__fixtures__/**"
+  ],
   "customManagers": [
     {
       "customType": "regex",
@@ -23,20 +33,90 @@
   ],
   "packageRules": [
     {
-      "description": "Bump the Go toolchain in one PR across go.mod, Dockerfile, aqua.yaml, and the KWOK builder. A CI guard (check-go-toolchain-sync.sh) still fails the build if any pin drifts out of sync.",
-      "groupName": "go-toolchain",
+      "description": "test/ is scanned only for the KWOK Go pin (re-enabled below). The EKS PoC Terraform and the scenario manifests under it are throwaway validation fixtures, not shipped artifacts — keep them out of Renovate's way.",
+      "matchFileNames": [
+        "test/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The fourth Go toolchain pin, in the KWOK provider builder's generated go.mod.",
+      "matchFileNames": [
+        "test/e2e/kwok/build-kwok-image.sh"
+      ],
+      "enabled": true,
+      "groupName": "go stack"
+    },
+    {
+      "description": "Every Go module update ships with the toolchain. `go mod tidy` raises go.mod's `go` directive whenever a dependency demands a newer language version (k8s v0.37 raises it to 1.26.6), and that alone desynchronizes the four pins check-go-toolchain-sync.sh compares — so a module bump that travels without the toolchain cannot pass CI.",
+      "groupName": "go stack",
+      "matchManagers": [
+        "gomod"
+      ]
+    },
+    {
+      "description": "go.mod's `go` directive is a MINIMUM, so under the default `replace` strategy every newer Go still satisfies it and Renovate offers no update at all — which is why #299 moved aqua.yaml and the Dockerfile to 1.27.1 and left go.mod on 1.26.5. `bump` is what makes the directive move with them.",
+      "groupName": "go stack",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "golang"
+      ],
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "Both Dockerfile base images: the golang builder stage (a Go toolchain pin) and the distroless runtime, re-resolved by digest together.",
+      "groupName": "go stack",
+      "matchManagers": [
+        "dockerfile"
+      ]
+    },
+    {
+      "description": "The Go toolchain as aqua pins it (aqua.yaml and the KWOK builder both report golang/go).",
+      "groupName": "go stack",
       "matchDepNames": [
-        "go",
-        "golang",
         "golang/go"
       ]
     },
     {
-      "description": "Kubernetes libraries are released in lockstep; update them together.",
-      "groupName": "kubernetes packages",
-      "matchPackageNames": [
-        "k8s.io/**",
-        "sigs.k8s.io/**"
+      "description": "Tools that cannot cross a version skew with the Go/Kubernetes stack, so they travel in its PR. golangci-lint refuses to run at all against a module targeting a newer Go than the one it was built with. setup-envtest ships with controller-runtime, and kubectl and kind track the Kubernetes minor in go.mod.",
+      "groupName": "go stack",
+      "matchDepNames": [
+        "golangci/golangci-lint",
+        "kubernetes-sigs/controller-runtime/setup-envtest",
+        "kubernetes/kubernetes/kubectl",
+        "kubernetes-sigs/kind"
+      ]
+    },
+    {
+      "description": "The remaining CLIs aqua pins, plus aqua itself. None of them is coupled to the Go or Kubernetes version, so they batch into one PR instead of one each.",
+      "groupName": "dev tooling",
+      "matchDepNames": [
+        "aquaproj/aqua",
+        "aquaproj/aqua-registry",
+        "aquaproj/aqua-renovate-config",
+        "helm/helm",
+        "hashicorp/terraform",
+        "aws/aws-cli",
+        "ko-build/ko",
+        "kubernetes-sigs/kustomize",
+        "golang.org/x/tools/gopls",
+        "sigs.k8s.io/controller-tools/cmd/controller-gen"
+      ]
+    },
+    {
+      "description": "The docs site's npm dependencies. Every one of them is exercised by the same `npm run docs:build && npm run test:docs` pair, so splitting them buys nothing but CI minutes.",
+      "groupName": "docs site",
+      "matchManagers": [
+        "npm"
+      ]
+    },
+    {
+      "description": "Workflow actions batch together; they share one validation — CI running at all.",
+      "groupName": "github actions",
+      "matchManagers": [
+        "github-actions"
       ]
     }
   ]
