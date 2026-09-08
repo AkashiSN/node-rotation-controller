@@ -20,7 +20,7 @@
 The compatibility contract is the **stable `karpenter.sh/v1` CRD surface — not a specific Karpenter controller minor.** This matters for **EKS Auto Mode**, which does not expose the exact managed Karpenter minor to users.
 
 - **Runtime target:** any cluster serving a compatible `karpenter.sh/v1` `NodePool`/`NodeClaim` API
-- **Build/test baseline:** the bundled `sigs.k8s.io/karpenter` Go module version in [`go.mod`](../../go.mod) (currently `v1.14.0`). This pins the typed Go API, **not** a runtime requirement
+- **Build/test baseline:** the bundled `sigs.k8s.io/karpenter` Go module version in [`go.mod`](../../go.mod). This pins the typed Go API, **not** a runtime requirement
 - **Interaction boundary:** solely through Kubernetes API objects (`NodeClaim`/`NodePool` CRDs, plus core `Node`/`Pod`). No Karpenter internals, no cloud-provider API
 - **Runtime enforcement:** a startup preflight (§5.1) fails fast when the cluster does not serve `karpenter.sh/v1` or RBAC cannot read it
 

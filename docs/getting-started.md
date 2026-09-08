@@ -6,7 +6,7 @@ editLink: false
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/AkashiSN/node-rotation-controller/blob/main/LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.6_(pre--1.0)-blue.svg)](/specification/06-release)
+[![Status](https://img.shields.io/badge/status-pre--1.0-blue.svg)](/specification/06-release)
 
 A Kubernetes controller that gracefully rotates Karpenter-managed nodes inside a maintenance window, before Karpenter's forceful `expireAfter` fires.
 
@@ -169,7 +169,7 @@ See the [compatibility policy](/specification/02-scope) for the full required-fi
 
 ## Project status
 
-**Pre-1.0** — the CRD schema (`v1alpha1`) and configuration surface may change between minor releases.
+**Pre-1.0** — the CRD schema (`v1alpha1`) and configuration surface may change between minor releases. What each release changed, and what to do on upgrade, is in the [changelog](https://github.com/AkashiSN/node-rotation-controller/blob/main/CHANGELOG.md).
 
 The core surge path, forceful fallback, earliest-deadline ordering, and all runtime safety properties are validated end-to-end on real EKS Auto Mode clusters, including a 12-hour tight-race soak. One open item remains before v1.0: a genuine same-AZ capacity shortage (ICE) driving rollback. See the [roadmap](/specification/06-release) and [validated assumptions](/specification/07-risks#72-validated-assumptions).
 

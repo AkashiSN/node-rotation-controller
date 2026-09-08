@@ -19,46 +19,48 @@
 **Validated (20+ scenarios):** core surge, same-AZ zonal-PV rebind, rollback, limits gating, multi-pool confinement, PDB drain, do-not-disrupt markers, force-expiry detection, capacity-absorb, placeholder preemption, window-boundary, leader-change resume, forceful fallback, earliest-deadline ordering, operator opt-out, and a 12-hour tight-race soak.
 
 **Open:** genuine same-AZ capacity shortage (ICE) driving rollback on real cloud (issue #109).
+
+Two of these are published as full reports: [Forceful fallback (Scenario O)](../validation/forceful-fallback) and [Tight-race soak (Scenario P)](../validation/tight-race-soak). The evidence below summarizes them; the reports carry the method and the raw record.
 :::
 
 ### Core mechanism
 
-| Assumption | Status | Date |
-|------------|--------|------|
-| Standalone `NodeClaim` is provisionable on Auto Mode | Validated | 2026-05-29 |
-| Placeholder-Pod surge completes make-before-break | Validated | 2026-06-22 |
-| Same-AZ surge lets EBS re-attach (zonal-PV rebind) | Validated | 2026-06-22 |
-| `readyTimeout` miss rolls back cleanly | Validated | 2026-06-22 |
-| NodePool `limits` exhaustion gates surge | Validated | 2026-06-22 |
-| Required `karpenter.sh/nodepool` confines surge to pool | Validated | 2026-06-22 |
-| Explicit `NodeClaim` deletion drains via voluntary path (PDBs) | Validated | 2026-06-22 |
-| `do-not-disrupt` applied to both nodes, removed on completion | Validated | 2026-06-22 |
-| Force-expiry mid-pending records `expired` (not success/failure) | Validated | 2026-06-22 |
+| Assumption | Status |
+|------------|--------|
+| Standalone `NodeClaim` is provisionable on Auto Mode | Validated |
+| Placeholder-Pod surge completes make-before-break | Validated |
+| Same-AZ surge lets EBS re-attach (zonal-PV rebind) | Validated |
+| `readyTimeout` miss rolls back cleanly | Validated |
+| NodePool `limits` exhaustion gates surge | Validated |
+| Required `karpenter.sh/nodepool` confines surge to pool | Validated |
+| Explicit `NodeClaim` deletion drains via voluntary path (PDBs) | Validated |
+| `do-not-disrupt` applied to both nodes, removed on completion | Validated |
+| Force-expiry mid-pending records `expired` (not success/failure) | Validated |
 
 ### Advanced scenarios
 
-| Assumption | Status | Date |
-|------------|--------|------|
-| Capacity-absorb path (bin-pack onto spare, no new node) | Validated | 2026-06-23 |
-| Leader-change resumes purely from annotations | Validated | 2026-06-23 |
-| In-flight rotation completes past window boundary | Validated | 2026-06-23 |
-| Placeholder is preemption victim; hostile preemption → rollback | Validated | 2026-06-23 |
-| `do-not-disrupt` honored against Drift | Validated | 2026-06-23 |
+| Assumption | Status |
+|------------|--------|
+| Capacity-absorb path (bin-pack onto spare, no new node) | Validated |
+| Leader-change resumes purely from annotations | Validated |
+| In-flight rotation completes past window boundary | Validated |
+| Placeholder is preemption victim; hostile preemption → rollback | Validated |
+| `do-not-disrupt` honored against Drift | Validated |
 
-### Post-v0.4 additions
+### Forceful fallback and selection
 
-| Assumption | Status | Date |
-|------------|--------|------|
-| Forceful fallback (12-node batch, graceful + surge-less mix) | Validated | 2026-07-04 |
-| Earliest-deadline candidate ordering | Validated | 2026-07-04 |
-| Operator `do-not-disrupt` excludes from selection | Validated | 2026-07-04 |
+| Assumption | Status |
+|------------|--------|
+| Forceful fallback (12-node batch, graceful + surge-less mix) | Validated |
+| Earliest-deadline candidate ordering | Validated |
+| Operator `do-not-disrupt` excludes from selection | Validated |
 
 ### Soak tests
 
-| Assumption | Status | Date |
-|------------|--------|------|
-| 12h tight-race soak: 71/71 graceful, 0 expired, 0 failure | Validated | 2026-07-15 |
-| Forceful fallback fires deterministically for bounded claim | Validated | 2026-07-15 |
+| Assumption | Status |
+|------------|--------|
+| 12h tight-race soak: 71/71 graceful, 0 expired, 0 failure | Validated |
+| Forceful fallback fires deterministically for bounded claim | Validated |
 
 ::: details Full validation evidence — click to expand
 
@@ -156,5 +158,5 @@ A genuine same-AZ **capacity shortage (ICE)** driving rollback — stood in for 
 3. **Multi-cloud verification** — AKS NAP, GKE testing before claiming compatibility beyond EKS Auto Mode.
 
 ::: tip Resolved
-*CRD-based policy migration* and *per-NodePool maintenance window* — both delivered by the `RotationPolicy` CRD (issue #119, §5.4).
+*CRD-based policy migration* and *per-NodePool maintenance window* — both delivered by the `RotationPolicy` CRD (§5.4).
 :::

@@ -60,12 +60,9 @@ require_literal "AGENTS.md" \
 require_literal "CONTRIBUTING.md" \
   "The latest release is **${release}**" \
   "contributor-facing current release is not synchronized"
-require_literal "docs/runbook.md" \
-  "| ${release} |" \
-  "CRD-change table has no release row"
-require_literal "docs/ja/runbook.md" \
-  "| ${release} |" \
-  "Japanese CRD-change table has no release row"
+require_literal "CHANGELOG.md" \
+  "## ${release} —" \
+  "changelog has no entry for this release"
 
 if [[ "$fail" -ne 0 ]]; then
   echo "Update every item in CONTRIBUTING.md's release version synchronization checklist." >&2

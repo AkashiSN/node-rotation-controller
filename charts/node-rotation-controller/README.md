@@ -139,11 +139,19 @@ spec:
         - kubernetes.io/arch
         - karpenter.sh/capacity-type
       preferred: []
-    # Opt-in, default off (spec §3.3, ADR-0001). A candidate that cannot finish a
+    # Opt-in, default off (spec §3.6, ADR-0001). A candidate that cannot finish a
     # graceful surge before its own expireAfter deadline is rotated surge-less
     # inside the window — still via the voluntary, PDB-respecting path — rather
     # than left to Karpenter's forceful expiration at an uncontrolled time.
     forcefulFallback:
+      enabled: false
+    # Opt-in, default off (spec §3.3, ADR-0005). Size the placeholder to a whole
+    # node's worth of cpu and memory instead of to the reschedulable request sum,
+    # so a host whose free capacity in those dimensions is short of a node's
+    # cannot absorb it. Raises the bar against an aggregate reservation that is
+    # big enough while an individual evicted Pod's anti-affinity or hostPort
+    # still refuses the host; it does not prove the host is empty.
+    wholeNodeReservation:
       enabled: false
 
   prePull:
@@ -156,6 +164,12 @@ spec:
 > keeps losing the race to node deadlines, which the
 > [runbook](https://github.com/AkashiSN/node-rotation-controller/blob/main/docs/runbook.md)
 > tells you how to remediate.
+
+> Enabling `surge.wholeNodeReservation` costs an extra instance on every rotation
+> whose reservation is not absorbed, and the headroom gate then tests a whole
+> node's footprint against the NodePool's `spec.limits` — a pool with too little
+> room stops starting rotations and says so with an `InsufficientHeadroom` Event.
+> Check that headroom before enabling it.
 
 ### Multiple policies (per-NodePool)
 

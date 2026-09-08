@@ -29,18 +29,12 @@
 
 ## 6.2 Roadmap
 
-| Milestone | Content |
-|-----------|---------|
-| v0.1 (spec) | This document |
-| v0.2 (skeleton) | Project layout, controller-runtime bootstrap, leader election, CI |
-| v0.3 (MVP) | Reconcile + surge + drain + metrics + Helm chart; `RotationPolicy` CRD (§5.4) |
-| v0.4 | Chart renders one `RotationPolicy` per entry — per-NodePool policy |
-| v0.5 | Forceful fallback (§3.6); earliest-deadline ordering; operator `do-not-disrupt` opt-out; `ThroughputBurstShortfall`; documentation site |
-| v0.6 | Layer-2 forecast with `provisioningEstimate + drainEstimate` (ADR-0003); `failurePause` (ADR-0004); browser policy simulator (wasm) |
-| v1.0 | Stable CRD (`v1`), production runbook, soak-tested on EKS Auto Mode |
+The v1 surge MVP specified in §3–§5 is implemented and released pre-1.0. What each released version changed is recorded in the [changelog](https://github.com/AkashiSN/node-rotation-controller/blob/main/CHANGELOG.md); this section states only what is still ahead.
 
-- **v1.0 open item:** a genuine same-AZ capacity shortage (ICE) driving rollback (§7.2)
-- **v1.0 validated:** the full multi-hour tight-race `expireAfter` soak (§7.2, issue #118)
+**v1.0** requires a stable `RotationPolicy` CRD (`v1`), the production runbook, and a soak-tested EKS Auto Mode deployment.
+
+- **Open:** a genuine same-AZ capacity shortage (ICE) driving rollback (§7.2)
+- **Settled:** the multi-hour tight-race `expireAfter` soak (§7.2)
 
 ### Not scheduled
 

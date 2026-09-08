@@ -227,10 +227,7 @@ See [`values.yaml`](https://github.com/AkashiSN/node-rotation-controller/blob/ma
 
 **What it means:** a maintenance window occurrence closed with candidates still outstanding by age and state (eligible, or inside `retryBackoff`) and no rotation attributable to that occurrence ever completed. The guaranteed rotation chance for that occurrence was consumed and lost — with `minRotationChances: 1` (the floor), no guaranteed graceful chance remains for those nodes, and they may now reach `expireAfter` without one.
 
-Two words in that sentence are narrower than they look:
-
-- **Attributable, not "inside".** A window gates only rotation *starts*: an attempt that began in-window keeps running past the boundary. If it succeeds there — after the window closed — the occurrence was not lost, and it settles silently. Only an occurrence with no such attempt behind it is reported.
-- **Outstanding by age and state, not "the controller could have rotated".** The evaluation runs above the pool-level gates on purpose, so it says what happened to the window rather than why the controller did not act. A static NodePool, or one whose schedule is fatally infeasible, therefore reports every occurrence that closes with age/state-outstanding claims — including claims those gates would have stopped anyway. That is the reported fact, not a broken signal.
+Two words in that sentence are narrower than they look: **attributable, not "inside"** — an attempt that began in-window and succeeded after the boundary settles the occurrence — and **outstanding by age and state, not "the controller could have rotated"** — a static or fatally infeasible pool reports every occurrence that closes with age/state-outstanding claims. [Spec §4.2](specification/04-operations.md#42-observability) defines both.
 
 **What to check:**
 
@@ -238,17 +235,13 @@ Two words in that sentence are narrower than they look:
 - The preceding `rotation attempt failed` log lines and their `reason` — a lost window is usually the tail of one or more failed attempts, not a cold start.
 - `noderotation_retry_count` — climbing toward the escalated backoff cap means attempts are repeatedly failing, not merely running out of time.
 - Attempts inside one maintenance window are paced by `readyTimeout + failurePause`, not by `retryBackoff`: the window-aware clamp (spec §3.2) keeps a failed claim's retry inside the occurrence it failed in only while a step down to `retryBackoff` still fits — once not even `retryBackoff` fits, the escalated wait stands and the claim carries over to the next occurrence instead of retrying again in this one. For a window of duration `D` the order-of-magnitude ceiling on timeout-driven attempts is `1 + D / (readyTimeout + failurePause)`. `failurePause` is the direct, pool-wide pacing control — several claims can be in backoff and retrying independently at once, so `retryBackoff` is not a reliable bound on the pool-wide rate. Raising `retryBackoff` can still reduce one claim's attempts, since it is the clamp's floor and a larger floor reaches "nothing fits" sooner in the window; it is just a blunt, per-claim lever that can discard the rest of that claim's window, not the direct control on pool-wide churn.
-- Whether the pool is static (`StaticNodePool` Warning Event, [spec §3.3](specification/03-design.md)) — a static NodePool never attempts a surge rotation, so it misses every occurrence that closes with age/state-outstanding claims; see issue #302.
+- Whether the pool is static (`StaticNodePool` Warning Event, [spec §3.3](specification/03-design.md)) — a static NodePool never attempts a surge rotation, so it misses every occurrence that closes with age/state-outstanding claims.
 
 **What to do:** address the underlying failure surfaced by the `rotation attempt failed` lines (see [§1](#1-per-az-surge-headroom-zonal-pv) and [§5](#5-handling-a-stuck-drain)). If attempts are healthy but genuinely cannot fit the window — the batch is too large for the schedule — widen the maintenance window so more attempts complete per occurrence, or raise `minRotationChances` (`K`) so a single missed window still leaves guaranteed chances in reserve before the `expireAfter` backstop.
 
-**Known limits of this signal.** The occurrence is identified by the *presence* of the `noderotation.io/window-opened-at` annotation on the NodePool, and only what a reconcile observes exists at all. Three consequences, accepted by design:
+**Known limits of this signal.** The occurrence is identified by the *presence* of the `noderotation.io/window-opened-at` annotation on the NodePool, and only what a reconcile observes exists at all. Three consequences, accepted by design and enumerated in [spec §5.3](specification/05-implementation.md#53-state-model): **two occurrences can be reported as one**; **a schedule edit can close a window immediately**; and **the report is at-most-once, never more**. Operationally, only the last one changes what you write: alert on `increase(...) > 0`, not on an exact count.
 
-- **Two occurrences can be reported as one.** This happens either of two ways: no reconcile ever observes the out-of-window gap between them — the gap is short, the controller is down only across it, or API errors persist through it — or the gap *is* observed on every pass, but every one of those passes deferred because a rotation was still in flight (a drain stuck across the gap and into the next occurrence collapses the pair this way too). Either path leaves the first occurrence's stamp in place through the second, and the pair is judged and reported once, under the earlier `windowOpenedAt`. A later success then settles against that earlier stamp — against the merged span, not the occurrence it actually belonged to. (The narrower case: a window shorter than the controller's 1-minute self-requeue may never be observed at all, and is then neither stamped nor reported.)
-- **A schedule edit can close a window immediately.** Editing a policy's `maintenanceWindows` while a stamp is held, such that the current time is no longer in-window, is treated as the occurrence closing right then — it is judged against the census as it stands at the edit.
-- **The report is at-most-once, never more.** The stamp is cleared before the counter and the Event, so a controller that stops in between drops that occurrence's report rather than inventing one, and a stop between the counter and the Event can leave one without the other. Alert on `increase(...) > 0`, not on an exact count.
-
-**Note:** `NodeRotationStalledInWindow` is the in-window early warning for this same failure, but it is not a predictor of it. Since issue #321 the two apply the same *outstanding-work* test — `noderotation_candidates + noderotation_in_backoff > 0`, both excluding a frozen pool — so the alert no longer fires for claims the counter never counts. Three things still separate them, all by design. The alert evaluates live and repeatedly while the window is open and the counter once at its close, so the alert can fire and then resolve when the pool recovers before the boundary. The alert's suppression arm is a rolling `completionRange` lookback while the counter attributes a success by `last-rotation-at ≥ window-opened-at`, so a success just before an occurrence can suppress the alert without settling that occurrence, and in a window longer than `completionRange` an attributable success can age out and let the alert fire although the occurrence will settle — keep `completionRange` near one window's duration. And a claim whose backoff has elapsed and has been re-selected is in flight, counted by neither arm, so the alert is silent from re-selection until `readyTimeout` rolls the attempt back.
+**Note:** `NodeRotationStalledInWindow` is the in-window early warning for this same failure, but it is **not** a predictor of it. Both apply the same outstanding-work test (`noderotation_candidates + noderotation_in_backoff > 0`, both excluding a frozen pool), and [spec §4.2](specification/04-operations.md#42-observability) sets out the three ways they still diverge: when they evaluate, how a success suppresses each, and an in-flight retry that neither counts. The one that needs tuning: keep `completionRange` near one window's duration.
 
 ---
 
@@ -292,21 +285,9 @@ kubectl apply -f charts/node-rotation-controller/crds/
 helm upgrade --install node-rotation-controller charts/node-rotation-controller ...
 ```
 
-| Release | Schema change | Action |
-|---------|---------------|--------|
-| v0.6.1 | None | None |
-| v0.6.0 | `surge.failurePause`, `surge.drainEstimate`, `surge.provisioningEstimate` added | Apply `crds/` first |
-| v0.5.0 | `surge.forcefulFallback` added | Apply `crds/` first |
-| v0.4.0 | None | None |
-| v0.3.0 | `RotationPolicy` CRD introduced | First install |
+Which releases changed the schema, and every behavioral and values change that needs an action on upgrade, is recorded per release in the [changelog](https://github.com/AkashiSN/node-rotation-controller/blob/main/CHANGELOG.md). Read the entries between your installed version and the target before upgrading.
 
-### Behavioral change in v0.6.0
-
-`cooldownAfter` no longer doubles as the post-failure pause. That is now `surge.failurePause` (defaults to `max(10m, cooldownAfter)`). If you had lowered `cooldownAfter` below 10m, the failure pause goes back up on upgrade. Set `failurePause` explicitly to keep your old value.
-
-### Values schema change in v0.6.0
-
-The chart seals the `rotationPolicies[].spec` subtree — a typo that was silently dropped before now fails the upgrade. **Dry-run first:**
+The chart seals the `rotationPolicies[].spec` subtree, so a typo that older versions silently dropped now fails the upgrade. Dry-run first:
 
 ```sh
 helm template node-rotation-controller charts/node-rotation-controller -f your-values.yaml >/dev/null

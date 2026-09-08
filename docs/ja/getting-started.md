@@ -6,7 +6,7 @@ editLink: false
 # node-rotation-controller
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/AkashiSN/node-rotation-controller/blob/main/LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.6_(pre--1.0)-blue.svg)](/ja/specification/06-release)
+[![Status](https://img.shields.io/badge/status-pre--1.0-blue.svg)](/ja/specification/06-release)
 
 Karpenter 管理ノードを、メンテナンスウィンドウ内で graceful に先回りローテーションする Kubernetes コントローラー。Karpenter の forceful な `expireAfter` が発火する前に、make-before-break で置換する。
 
@@ -169,7 +169,7 @@ rotationPolicies:
 
 ## プロジェクト状況
 
-**Pre-1.0** — CRD スキーマ（`v1alpha1`）と設定サーフェスは minor リリース間で変わりうる。
+**Pre-1.0** — CRD スキーマ（`v1alpha1`）と設定サーフェスは minor リリース間で変わりうる。リリースごとの変更点とアップグレード時の対処は [changelog](https://github.com/AkashiSN/node-rotation-controller/blob/main/CHANGELOG.md)（英語）にある。
 
 コアの surge パス、forceful fallback、earliest-deadline 順序付け、全ランタイム安全性は実 EKS Auto Mode クラスタで E2E 検証済み（12 時間 tight-race soak 含む）。v1.0 に向けて残る項目は、同一 AZ の実容量枯渇（ICE）によるロールバックのみ。[ロードマップ](/ja/specification/06-release)と[検証済み前提](/ja/specification/07-risks#72-検証済み前提)を参照。
 
