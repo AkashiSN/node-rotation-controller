@@ -9,7 +9,7 @@ The **source of truth for design** is [`docs/specification/`](docs/specification
 (Japanese translation: [`docs/ja/specification/`](docs/ja/specification/)).
 Read it before making design-affecting changes.
 
-The latest release is **v0.7.0** and the project remains **pre-1.0**; `main` may
+The latest release is **v0.7.0-rc.1** and the project remains **pre-1.0**; `main` may
 be ahead of it, and [`CHANGELOG.md`](CHANGELOG.md) records what each release
 changed. The v1 surge MVP is implemented: the annotation-backed rotation state
 machine, per-NodePool `RotationPolicy` resolution and observational status,

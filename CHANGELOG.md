@@ -11,6 +11,13 @@ upgrade CRDs, so a release that changes the `RotationPolicy` schema needs
 The [runbook](docs/runbook.md#8-upgrading-and-rolling-back) has the full upgrade
 and rollback procedure.
 
+## v0.7.0-rc.1 — 2026-09-09
+
+Release candidate for v0.7.0, cut to publish a pre-release image and chart for
+testing. Same content as the v0.7.0 entry below; this commit exists only to
+carry the `-rc.1` version markers the release guard requires and is not merged
+to `main`.
+
 ## v0.7.0 — 2026-09-08
 
 - **Upgrade action:** apply `crds/` first — `surge.wholeNodeReservation` was

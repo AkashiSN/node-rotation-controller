@@ -1,6 +1,6 @@
 # Contributing to node-rotation-controller
 
-Thanks for your interest! The latest release is **v0.7.0**. The v1 surge MVP,
+Thanks for your interest! The latest release is **v0.7.0-rc.1**. The v1 surge MVP,
 per-NodePool `RotationPolicy`, opt-in forceful fallback, opt-in whole-node surge
 reservation, throughput forecast, observability, Helm chart, and browser policy
 simulator are implemented. The project remains pre-1.0 while the CRD and
