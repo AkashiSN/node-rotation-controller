@@ -113,22 +113,23 @@ in the same PR.
 - Pre-1.0 (`v0.x.y`) while the configuration schema and CRD shape stabilize.
 - The compatibility surface is: the `RotationPolicy` CRD schema, Prometheus
   metric names, and annotation keys.
-- **The GitHub Release page is the changelog.** There is intentionally no
-  `CHANGELOG.md`: each release's auto-generated notes (grouped into Features /
-  Fixes / Documentation / Maintenance via `.github/release.yml`) are the
-  release history; an additional hand-maintained changelog would duplicate it.
+- **[`CHANGELOG.md`](CHANGELOG.md) is the per-release record; the GitHub Release
+  notes are generated.** Both are kept, because they answer different questions.
+  The changelog is written by hand in the release-preparation PR and is keyed by
+  the **upgrade action** an operator must take — `none` is a valid answer, and
+  the entry is what tells someone crossing several versions whether they must
+  `kubectl apply` the CRDs before `helm upgrade`. The Release page's notes are
+  generated from the merged PRs and grouped into Features / Fixes / Documentation
+  / Maintenance via `.github/release.yml`; they say what landed, not what to do
+  about it. The runbook's
+  [upgrade section](docs/runbook.md#8-upgrading-and-rolling-back) carries the
+  procedure and points at the changelog rather than repeating it.
 - **Chart and app versions move together before 1.0.** A release-preparation PR
   updates `Chart.yaml` `version` and `appVersion`; the current-release wording in
-  `README.md`, `README.ja.md`, `AGENTS.md`, and this file; and the other
-  release-facing records. The release workflow rejects a tag that does not match
-  the chart and app versions.
-- **Every release adds a row to the runbook's CRD-change table.** There is no
-  changelog file, so the per-release record of `RotationPolicy` schema changes
-  lives in [`docs/runbook.md` §8](docs/runbook.md#8-upgrading-and-rolling-back-the-controller)
-  and its JA mirror. Append the row in the release-preparation PR — "None" is a
-  valid answer, and the row is what tells an operator crossing several versions
-  whether they must `kubectl apply` the CRDs before `helm upgrade`. The release
-  notes link to the table rather than restating it.
+  `README.md`, `README.ja.md`, `AGENTS.md`, and this file; and the changelog
+  entry. The release workflow rejects a tag that does not match the chart and app
+  versions, and `check-release-version-sync.sh` rejects one whose changelog entry
+  is missing — so a release cannot be tagged without recording what it changed.
 - **The release-note category is derived automatically from your PR title.** A
   workflow reads the Conventional Commit type (`feat`, `fix`, `docs`, `chore`,
   `refactor`, `test`, `perf`) and applies the matching label, so you do not need
@@ -159,6 +160,47 @@ The second command also runs on every PR in CI and again before a tagged release
 publishes artifacts. A version must not be tagged until both guards pass. When a
 new current-release marker is introduced, add it to this checklist and the sync
 guard in the same PR.
+
+### Release candidates (`-rc.N`)
+
+`release.yaml` runs only on a pushed `v*` tag, so the publishing path is not
+exercisable from a pull request. To get a pre-release image and chart — for
+testing before the real tag, or to validate a change to the workflow itself —
+push a `vX.Y.Z-rc.N` tag. Hyphenated tags are already published as GitHub
+pre-releases and skip the `latest` image tag, so a failed candidate harms
+nothing.
+
+Its `guard` job runs **both** scripts above against the tag name, so the commit
+the tag points at must carry **every** marker in the table at `X.Y.Z-rc.N`, not
+just `Chart.yaml`. Bumping the chart alone fails the guard and publishes
+nothing.
+
+That commit is a throwaway and is **not** merged: build it on top of the
+release-preparation commit, then push only the tag, so no branch ref reaches the
+remote (confirm with `git ls-remote --heads origin`) and `main` keeps its
+`X.Y.Z` markers.
+
+```sh
+git switch -c rc/vX.Y.Z-rc.N          # local only, never pushed
+# bump every marker in the table above to X.Y.Z-rc.N, then:
+.github/scripts/check-chart-version.sh vX.Y.Z-rc.N
+.github/scripts/check-release-version-sync.sh vX.Y.Z-rc.N
+git commit -am 'chore(release): vX.Y.Z-rc.N markers for the pre-release tag'
+git tag vX.Y.Z-rc.N && git push origin vX.Y.Z-rc.N
+```
+
+One thing cannot be satisfied: the README status badges. The guard wants the
+literal `status-vX.Y.Z-rc.N_released_`, while shields.io reads an unescaped `-`
+as a field separator and needs it doubled to render. The badge in the throwaway
+commit is therefore broken. That is accepted rather than worked around — the
+commit never reaches `main`.
+
+Tear a candidate down with `gh release delete <tag> --yes --cleanup-tag`,
+followed by the `ghcr.io` package versions it published. Two shapes, and both
+have to go: the version tags — `X.Y.Z-rc.N` itself, and the
+`sha256-<index digest>` tag cosign attaches the signature bundles under — and
+the untagged children the index references, which are the per-architecture
+manifests and the SBOM/provenance attestations.
 
 ## Scope reminder
 
