@@ -16,7 +16,7 @@
 ## 7.2 検証済み前提
 
 ::: tip 検証サマリー
-**検証済み（20+ シナリオ）:** コア surge、同一 AZ ゾーン PV リバインド、ロールバック、limits ゲーティング、マルチプールの閉じ込め、PDB ドレイン、do-not-disrupt マーカー、force-expiry 検出、キャパシティ吸収、placeholder プリエンプション、ウィンドウ境界、リーダー変更再開、forceful fallback、earliest-deadline ソート、オペレーターオプトアウト、12 時間 tight-race soak。
+**検証済み（20+ シナリオ）:** コア surge、同一 AZ ゾーン PV リバインド、ロールバック、limits ゲーティング、マルチプールの閉じ込め、PDB ドレイン、do-not-disrupt マーカー、force-expiry 検出、キャパシティ吸収、whole-node surge 予約、placeholder プリエンプション、ウィンドウ境界、リーダー変更再開、forceful fallback、earliest-deadline ソート、オペレーターオプトアウト、12 時間 tight-race soak。
 
 **未決:** 真の同一 AZ キャパシティ不足（ICE）によるリアルクラウドでのロールバック（issue #109）。
 
@@ -42,6 +42,7 @@
 | 前提 | ステータス |
 |------------|--------|
 | キャパシティ吸収パス（空きにビンパック、新ノードなし） | 検証済み |
+| ホスト単位の anti-affinity 下で `surge.wholeNodeReservation` が吸収を provisioned に変える | 検証済み |
 | リーダー変更がアノテーションのみから再開 | 検証済み |
 | 進行中のローテーションがウィンドウ境界を超えて完了 | 検証済み |
 | placeholder がプリエンプション犠牲者; 敵対的プリエンプション → ロールバック | 検証済み |
@@ -139,6 +140,12 @@ Drifted ノードに `do-not-disrupt=true` → 3 分以上置換されず; ア�
 #### Forceful fallback 境界（2026-07-15）
 
 別の単一ノードミニプール、候補状態になるまで freeze。解放後 graceful surge が期限内に収まらない → surge なしブランチ: `forceful_fallback_total` 0→1; claim が解放 56 秒後に削除（期限の 10m04s 前）; 当該 claim で placeholder は一切なし; `expired` は 0 のまま。
+
+#### whole-node surge 予約（2026-09-09）
+
+上のキャパシティ吸収を生んだのと同じ 4 ノード `m5.xlarge` Auto Mode プールで 2 つのウィンドウを実施。このプールは CPU 負荷の高い 2 サービスを `kubernetes.io/hostname` の `podAntiAffinity` で別ノードに分けている。既定のサイジングでは 8/8 が `absorbed`（`surge_wait` 平均 2.31s）で、8 件すべてでドレイン開始の **16–17 秒後に** Karpenter がノードをプロビジョニングした。`wholeNodeReservation.enabled: true` では 8/8 が `provisioned`（`surge_wait` 平均 31.35s）、surge ノードはドレインの **6–20 秒前に** Ready となり、後追いのノードは発生しなかった。placeholder の予約は `cpu=3420m,memory=13811392Ki`、`drain` の実測は `cpu=1400m,memory=1792Mi` — 予約値は候補の **NodeClaim** allocatable（`3770m/15092824Ki`）から DaemonSet Pod 4 つ分を引いた値である。インスタンス数はどちらも同じ（4 → 5 → 4）で、このモードが変えたのは追加ノードを買う**タイミング**であって台数ではない。実測されたコストは `surge_wait` のおよそ +29 秒/ローテーションで、ドレイン時間は変わらなかった（96.5s → 103.1s、レンジは重なる）。`InsufficientHeadroom` Event は発生せず、3 時間を通じてログにも headroom ブロックは出ていない — このプールでは `surge_headroom` ゲートが律速になることはなかった。
+
+`absorbed` がゼロになったのはこのプールの性質（単一インスタンスタイプ、全ノードが同じワークロード構成、真に空のホストが存在しない）であって、§3.3 がしていない主張の裏付けではない。対照は時間軸で取っている: 同じプールで同じ日に 2 ウィンドウを回し、その間にトグルを稼働中のポリシーへ patch した。ドリフトが原因でないことを排除するのはスケジューラ側の機構である — 2 番目のウィンドウでは placeholder が既存ノードすべてに拒否され（`Insufficient cpu`／`Insufficient memory`、`preemptionPolicy=Never` によりプリエンプションも不可）、そのうえで新しい NodeClaim へ nominate された。
 
 :::
 
