@@ -65,7 +65,7 @@ packages:
   - name: prometheus/prometheus@v3.14.0
   - name: mikefarah/yq@v4.53.6
   # --- Ephemeral EKS Auto Mode PoC tooling (test/e2e/eks-automode, issue #93) ---
-  - name: hashicorp/terraform@v1.16.1
+  - name: hashicorp/terraform@v1.16.2
   # awscli authenticates to AWS, logs Docker in to ECR, and writes the cluster
   # kubeconfig for the PoC (issue #106). v2 line.
-  - name: aws/aws-cli@2.36.40
+  - name: aws/aws-cli@2.36.42
