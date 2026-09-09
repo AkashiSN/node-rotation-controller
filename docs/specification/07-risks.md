@@ -16,7 +16,7 @@
 ## 7.2 Validated Assumptions
 
 ::: tip Validation summary
-**Validated (20+ scenarios):** core surge, same-AZ zonal-PV rebind, rollback, limits gating, multi-pool confinement, PDB drain, do-not-disrupt markers, force-expiry detection, capacity-absorb, placeholder preemption, window-boundary, leader-change resume, forceful fallback, earliest-deadline ordering, operator opt-out, and a 12-hour tight-race soak.
+**Validated (20+ scenarios):** core surge, same-AZ zonal-PV rebind, rollback, limits gating, multi-pool confinement, PDB drain, do-not-disrupt markers, force-expiry detection, capacity-absorb, whole-node surge reservation, placeholder preemption, window-boundary, leader-change resume, forceful fallback, earliest-deadline ordering, operator opt-out, and a 12-hour tight-race soak.
 
 **Open:** genuine same-AZ capacity shortage (ICE) driving rollback on real cloud (issue #109).
 
@@ -42,6 +42,7 @@ Two of these are published as full reports: [Forceful fallback (Scenario O)](../
 | Assumption | Status |
 |------------|--------|
 | Capacity-absorb path (bin-pack onto spare, no new node) | Validated |
+| `surge.wholeNodeReservation` turns absorb into provisioned under host-level anti-affinity | Validated |
 | Leader-change resumes purely from annotations | Validated |
 | In-flight rotation completes past window boundary | Validated |
 | Placeholder is preemption victim; hostile preemption → rollback | Validated |
@@ -139,6 +140,12 @@ Annotating a candidate's Node `do-not-disrupt=true` (no owned marker) dropped `c
 #### Forceful fallback boundary (2026-07-15)
 
 Separate single-node pool, released after aging past candidacy. Graceful surge no longer fit → surge-less branch: `forceful_fallback_total` 0→1; claim deleted 56s after release (10m04s ahead of deadline); no placeholder at any point; `expired` stayed 0.
+
+#### Whole-node surge reservation (2026-09-09)
+
+Two windows on the 4-node `m5.xlarge` Auto Mode pool that produced the capacity-absorb result above, whose two CPU-heavy services are separated by `podAntiAffinity` on `kubernetes.io/hostname`. Default sizing: 8/8 `absorbed` (`surge_wait` mean 2.31s), and every one of the 8 made Karpenter provision a node 16–17s **after** the drain began. `wholeNodeReservation.enabled: true`: 8/8 `provisioned` (`surge_wait` mean 31.35s), surge node Ready 6–20s **before** the drain, no follow-up node. The placeholder reserved `cpu=3420m,memory=13811392Ki` against a `drain` footprint of `cpu=1400m,memory=1792Mi` — the candidate's **NodeClaim** allocatable (`3770m/15092824Ki`) less its four DaemonSet Pods. Instance count was identical either way (4 → 5 → 4): the mode changed *when* the extra node is bought, not how many. The measured cost is the `surge_wait`, ~+29s per rotation; drain was unchanged (96.5s → 103.1s, overlapping ranges). No `InsufficientHeadroom` Events and no headroom block in the log across the 3h — the `surge_headroom` gate never bound on this pool.
+
+`absorbed` reaching zero is a property of this pool — one instance type, the same workload mix on every node, no genuinely empty hosts — not evidence for a claim §3.3 does not make. The control is on the time axis: the same pool ran both windows the same day, with the toggle patched onto the live policy between them. What rules out drift is the scheduler-side mechanism — in the second window the placeholder was rejected by every existing node (`Insufficient cpu`/`Insufficient memory`, with `preemptionPolicy=Never` barring preemption) before being nominated onto the new NodeClaim.
 
 :::
 
