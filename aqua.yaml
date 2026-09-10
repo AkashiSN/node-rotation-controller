@@ -53,7 +53,7 @@ packages:
   # helm is pinned to the v4 line — the version CI already used de-facto
   # (azure/setup-helm installed latest). The chart, values.schema.json, and the
   # helm-unittest v1.1.1 plugin all render/pass under it.
-  - name: helm/helm@v4.2.4
+  - name: helm/helm@v4.3.0
   # kubectl tracks the controller's Kubernetes client minor (k8s.io/api v0.37 ->
   # 1.37), matching the kind node's Kubernetes minor (v1.37) — within skew policy.
   - name: kubernetes/kubernetes/kubectl@v1.37.0
