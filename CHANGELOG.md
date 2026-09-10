@@ -11,6 +11,79 @@ upgrade CRDs, so a release that changes the `RotationPolicy` schema needs
 The [runbook](docs/runbook.md#8-upgrading-and-rolling-back) has the full upgrade
 and rollback procedure.
 
+## v0.7.0 — 2026-09-10
+
+- **Upgrade action:** apply `crds/` first — `surge.wholeNodeReservation` was
+  added. Without it the old structural schema prunes the field silently, and a
+  policy that asks for the mode runs with it off.
+- **Behavioral change:** a NodePool with `spec.replicas` set (a static NodePool)
+  no longer starts rotations. Karpenter's provisioner does not consider such a
+  pool for a pending Pod, so the surge placeholder could neither induce a
+  NodeClaim nor be absorbed: every attempt stalled to `readyTimeout` and spent
+  one of that node's guaranteed rotation chances. The controller now refuses at
+  the start gate and says so once per pool (spec §3.3, §5.2). A rotation already
+  in flight is unaffected and runs to completion. Rotating static pools is
+  **rejected, not deferred** — the reasoning is in §3.3.
+- **Behavioral change:** the re-selection backoff after a failed attempt is
+  clamped to the maintenance-window occurrence the failure happened in (spec
+  §3.2). Past the window's remaining time every escalation step means the same
+  thing — "skip the rest of this occurrence" — so a pool that failed twice early
+  could spend the rest of its window with no eligible candidate. Retries are now
+  more frequent within a window: expect `noderotation_completed_total{outcome="failure"}`
+  and `noderotation_retry_count` to rise faster, and `NodeRotationRetryCountHigh`
+  to fire sooner, for the same underlying fault.
+- **Alerting change:** `NodeRotationStalledInWindow` fires in strictly more
+  situations. Its suppression arm is now restricted to `outcome="success"`, so a
+  `readyTimeout` rollback no longer counts as progress — previously a window
+  spent entirely on failed attempts silenced the alert. It also gains an
+  `in_backoff` arm (a pool whose every candidate is inside its backoff reports
+  zero candidates) and a freeze exclusion. Review the alert's `for` and severity
+  against your own noise budget before upgrading.
+- **Values schema addition:** `prometheusRule.windowMissed.{range,for,severity}`
+  for the new `NodeRotationWindowMissed` alert. Defaults ship; no action needed.
+- **New NodePool annotation:** `noderotation.io/window-opened-at`, stamped when
+  the controller first observes a window open and cleared when it closes. It is
+  written on **every** governed NodePool, including pools with nothing to
+  rotate — so a pool that was previously never written to now sees two
+  annotation writes per window occurrence. GitOps drift detection on NodePool
+  objects will see them.
+- A maintenance window that closes with candidates outstanding and no rotation
+  attributable to the occurrence is now reported: the
+  `noderotation_window_missed_total` counter, a `WindowMissed` Warning Event,
+  and the `NodeRotationWindowMissed` alert (spec §4.2). `noderotation_in_backoff`
+  exports the other half of that verdict live, so an in-window alert can test the
+  same outstanding-work count the counter judges by.
+- **Opt-in whole-node surge reservation** (`surge.wholeNodeReservation`; spec
+  §3.3, ADR-0005, default off) sizes the placeholder to a whole node's worth of
+  cpu and memory, so a host whose free capacity in those dimensions is short of a
+  node's cannot absorb it. It raises the bar; it does not guarantee an empty
+  host. Measured on EKS Auto Mode (spec §7.2): on a pool whose CPU-heavy services
+  are separated by host-level `podAntiAffinity`, it moved 8/8 rotations off the
+  absorb path and removed the follow-up node Karpenter had been provisioning
+  16–17s *after* each drain began — the instance count was unchanged, because
+  that path was already buying the node, just too late to serve
+  make-before-break. The cost there was the surge wait, about +29s per rotation.
+  On a pool where the absorb path needs no follow-up node the mode does add an
+  instance per unabsorbed rotation, and the `surge_headroom` gate then tests a
+  whole-node footprint, so a NodePool near its `spec.limits` can stop starting
+  rotations the drain-sized placeholder would have fitted.
+- The "surge node ready" and "rotation complete" lines, and the completion Event,
+  name which of the two §3.3 paths reserved the capacity, carried on the anchor
+  as `noderotation.io/surge-path`. On the absorb path the reservation is
+  aggregate capacity on a host already running other Pods, so a short
+  `surge_wait` does not bound the time until the evicted Pods are running.
+- A blocked `surge_headroom` gate now names the resource, the request, the
+  remaining budget and the configured limit, instead of reporting only that the
+  surge could not proceed (spec §5.2 step 3).
+- Completion counters and the startup sweep's announcements are emitted only by
+  the pass whose write actually landed (spec §5.2, claim-then-announce), so a
+  reconcile working from a cache-lagged read can no longer double-count a
+  completion or announce work it did not do.
+- Dependencies: Go 1.27.1, the Kubernetes 1.37 client libraries,
+  controller-runtime 0.25 and Karpenter 1.14.1. The compatibility contract is
+  unchanged — the stable `karpenter.sh/v1` CRD surface, not a Karpenter
+  controller minor.
+
 ## v0.6.1 — 2026-07-15
 
 - **Upgrade action:** none.
