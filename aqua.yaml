@@ -32,7 +32,7 @@ packages:
   # --- Go test / lint / language-server tooling (was `go install` in Makefile) ---
   # setup-envtest only fetches the envtest control-plane binaries; `make test`
   # still downloads the matching Kubernetes assets on first run (ENVTEST_K8S_VERSION).
-  - name: kubernetes-sigs/controller-runtime/setup-envtest@v0.25.0
+  - name: kubernetes-sigs/controller-runtime/setup-envtest@v0.25.1
   # gopls is a go_install package: aqua builds it from source with the pinned
   # Go toolchain above.
   - name: golang.org/x/tools/gopls@v0.23.0
