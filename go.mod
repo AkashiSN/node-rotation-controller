@@ -3,7 +3,7 @@ module github.com/AkashiSN/node-rotation-controller
 go 1.27.1
 
 require (
-	github.com/awslabs/operatorpkg v0.0.0-20260903001236-7040d0c02b82
+	github.com/awslabs/operatorpkg v0.0.0-20260917215433-d57ef9a9ef51
 	github.com/go-logr/logr v1.4.4
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.3
@@ -11,7 +11,7 @@ require (
 	k8s.io/apimachinery v0.37.0
 	k8s.io/client-go v0.37.0
 	k8s.io/component-helpers v0.37.0
-	sigs.k8s.io/controller-runtime v0.25.0
+	sigs.k8s.io/controller-runtime v0.25.1
 	sigs.k8s.io/karpenter v1.14.1
 	sigs.k8s.io/yaml v1.6.0
 )
