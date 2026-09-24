@@ -32,11 +32,11 @@ packages:
   # --- Go test / lint / language-server tooling (was `go install` in Makefile) ---
   # setup-envtest only fetches the envtest control-plane binaries; `make test`
   # still downloads the matching Kubernetes assets on first run (ENVTEST_K8S_VERSION).
-  - name: kubernetes-sigs/controller-runtime/setup-envtest@v0.25.0
+  - name: kubernetes-sigs/controller-runtime/setup-envtest@v0.25.1
   # gopls is a go_install package: aqua builds it from source with the pinned
   # Go toolchain above.
   - name: golang.org/x/tools/gopls@v0.23.0
-  - name: golangci/golangci-lint@v2.13.2
+  - name: golangci/golangci-lint@v2.14.0
   # controller-gen generates the RotationPolicy CRD manifests and zz_generated
   # deepcopy from the api/ kubebuilder markers (`make manifests` / `make generate`,
   # issue #122). Not in the standard registry, so it comes from the local registry
@@ -56,7 +56,7 @@ packages:
   - name: helm/helm@v4.3.0
   # kubectl tracks the controller's Kubernetes client minor (k8s.io/api v0.37 ->
   # 1.37), matching the kind node's Kubernetes minor (v1.37) — within skew policy.
-  - name: kubernetes/kubernetes/kubectl@v1.37.0
+  - name: kubernetes/kubernetes/kubectl@v1.37.1
   # --- Chart PrometheusRule validation (.github/scripts/check-prometheus-rules.sh) ---
   # promtool ships in the prometheus release archive and is the only thing that
   # parses the PromQL the chart's PrometheusRule ships; helm-unittest asserts the
