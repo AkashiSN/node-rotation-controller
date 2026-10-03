@@ -15,7 +15,7 @@
 # checksum lock is later enabled) — never reintroduce a free-floating install.
 registries:
   - type: standard
-    ref: v4.558.1 # renovate: depName=aquaproj/aqua-registry
+    ref: v4.571.0 # renovate: depName=aquaproj/aqua-registry
   # Local registry for tools the standard registry does not carry (controller-gen).
   # Trusted via aqua-policy.yaml (allowed by the Makefile aqua-tools target).
   - name: local
@@ -49,7 +49,7 @@ packages:
   - name: ko-build/ko@v0.19.1
   # kustomize releases carry a `kustomize/` tag prefix; pin the full tag (aqua
   # only auto-applies version_prefix when resolving "latest", not an exact pin).
-  - name: kubernetes-sigs/kustomize@kustomize/v5.8.1
+  - name: kubernetes-sigs/kustomize@kustomize/v5.8.2
   # helm is pinned to the v4 line — the version CI already used de-facto
   # (azure/setup-helm installed latest). The chart, values.schema.json, and the
   # helm-unittest v1.1.1 plugin all render/pass under it.
@@ -62,10 +62,10 @@ packages:
   # parses the PromQL the chart's PrometheusRule ships; helm-unittest asserts the
   # rendered YAML's content, never the expressions. yq lifts the manifest's
   # `.spec` out, which is exactly promtool's rule-file schema.
-  - name: prometheus/prometheus@v3.14.0
-  - name: mikefarah/yq@v4.53.6
+  - name: prometheus/prometheus@v3.15.0
+  - name: mikefarah/yq@v4.54.1
   # --- Ephemeral EKS Auto Mode PoC tooling (test/e2e/eks-automode, issue #93) ---
-  - name: hashicorp/terraform@v1.16.2
+  - name: hashicorp/terraform@v1.16.5
   # awscli authenticates to AWS, logs Docker in to ECR, and writes the cluster
   # kubeconfig for the PoC (issue #106). v2 line.
-  - name: aws/aws-cli@2.36.42
+  - name: aws/aws-cli@2.37.9
