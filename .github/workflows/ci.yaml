@@ -68,10 +68,10 @@ jobs:
     needs: changes
     steps:
       - uses: actions/checkout@v7
-      - uses: aquaproj/aqua-installer@v4.0.5
+      - uses: aquaproj/aqua-installer@v4.1.0
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         with:
-          aqua_version: v2.62.3
+          aqua_version: v2.64.0
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
@@ -105,10 +105,10 @@ jobs:
     needs: changes
     steps:
       - uses: actions/checkout@v7
-      - uses: aquaproj/aqua-installer@v4.0.5
+      - uses: aquaproj/aqua-installer@v4.1.0
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true'
         with:
-          aqua_version: v2.62.3
+          aqua_version: v2.64.0
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
@@ -130,10 +130,10 @@ jobs:
     needs: changes
     steps:
       - uses: actions/checkout@v7
-      - uses: aquaproj/aqua-installer@v4.0.5
+      - uses: aquaproj/aqua-installer@v4.1.0
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.infra == 'true'
         with:
-          aqua_version: v2.62.3
+          aqua_version: v2.64.0
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"
@@ -177,10 +177,10 @@ jobs:
     needs: changes
     steps:
       - uses: actions/checkout@v7
-      - uses: aquaproj/aqua-installer@v4.0.5
+      - uses: aquaproj/aqua-installer@v4.1.0
         if: needs.changes.outputs.docs == 'true'
         with:
-          aqua_version: v2.62.3
+          aqua_version: v2.64.0
           policy_allow: "true"
       - name: Cache Go + aqua tools
         if: needs.changes.outputs.docs == 'true'
@@ -212,10 +212,10 @@ jobs:
       - uses: actions/checkout@v7
       # helm is pinned in aqua.yaml (v4 line) and resolved from $PATH; the
       # helm-unittest plugin is installed into it below.
-      - uses: aquaproj/aqua-installer@v4.0.5
+      - uses: aquaproj/aqua-installer@v4.1.0
         if: needs.changes.outputs.chart == 'true' || needs.changes.outputs.infra == 'true'
         with:
-          aqua_version: v2.62.3
+          aqua_version: v2.64.0
           # Trust the committed aqua-policy.yaml so the local registry providing
           # controller-gen (aqua/registry.yaml) is allowed without interactive prompts.
           policy_allow: "true"

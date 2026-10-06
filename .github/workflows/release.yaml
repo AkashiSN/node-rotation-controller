@@ -132,9 +132,9 @@ jobs:
       attestations: write  # actions/attest-build-provenance
     steps:
       - uses: actions/checkout@v7
-      - uses: aquaproj/aqua-installer@v4.0.5
+      - uses: aquaproj/aqua-installer@v4.1.0
         with:
-          aqua_version: v2.62.3
+          aqua_version: v2.64.0
           policy_allow: "true"
       - name: Package chart
         run: helm package "${CHART_DIR}" --destination dist
