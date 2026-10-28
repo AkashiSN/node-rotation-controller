@@ -195,7 +195,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: needs.changes.outputs.docs == 'true'
         with:
-          node-version: 24
+          node-version: 26
       - if: needs.changes.outputs.docs == 'true'
         run: npm ci
       # test:docs loads the real wasm module and calls it with the page's own defaults,
