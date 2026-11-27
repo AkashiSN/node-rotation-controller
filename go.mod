@@ -9,7 +9,7 @@ require (
 	github.com/prometheus/client_model v0.6.3
 	k8s.io/api v0.37.0
 	k8s.io/apimachinery v0.37.0
-	k8s.io/client-go v0.37.0
+	k8s.io/client-go v11.0.0+incompatible
 	k8s.io/component-helpers v0.37.0
 	sigs.k8s.io/controller-runtime v0.25.0
 	sigs.k8s.io/karpenter v1.14.1
